@@ -9,7 +9,14 @@ from typing import Any
 
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-VENV_PYTHON = os.path.join(REPO_ROOT, ".venv", "bin", "python")
+
+def _venv_python_path(repo_root: str) -> str:
+    if os.name == "nt":
+        return os.path.join(repo_root, ".venv", "Scripts", "python.exe")
+    return os.path.join(repo_root, ".venv", "bin", "python")
+
+
+VENV_PYTHON = _venv_python_path(REPO_ROOT)
 
 DEFAULT_LOCAL_MODEL_DIR = os.path.join(REPO_ROOT, "models", "Qwen3-ASR-0.6B")
 

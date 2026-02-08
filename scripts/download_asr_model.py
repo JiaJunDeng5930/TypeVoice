@@ -5,7 +5,10 @@ import sys
 
 def main() -> int:
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    venv_python = os.path.join(repo_root, ".venv", "bin", "python")
+    if os.name == "nt":
+        venv_python = os.path.join(repo_root, ".venv", "Scripts", "python.exe")
+    else:
+        venv_python = os.path.join(repo_root, ".venv", "bin", "python")
     if not os.path.exists(venv_python):
         print("FAIL: .venv missing")
         return 2
@@ -42,4 +45,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
