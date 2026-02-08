@@ -124,7 +124,9 @@ impl TaskManager {
         let this = self.clone();
         let record_msg = record_msg.to_string();
 
-        tokio::spawn(async move {
+        // Tauri invoke handlers are not guaranteed to run inside a Tokio runtime.
+        // Use Tauri's runtime handle to spawn background tasks safely.
+        tauri::async_runtime::spawn(async move {
             let _ = this
                 .run_pipeline(app, task_id.clone(), input, opts, &record_msg)
                 .await;
