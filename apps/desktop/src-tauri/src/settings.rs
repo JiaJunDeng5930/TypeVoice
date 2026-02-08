@@ -14,6 +14,10 @@ pub struct Settings {
     pub llm_base_url: Option<String>, // e.g. https://api.openai.com/v1
     pub llm_model: Option<String>,    // e.g. gpt-4o-mini
     pub llm_reasoning_effort: Option<String>, // e.g. none|minimal|low|medium|high|xhigh
+
+    // UX settings
+    pub rewrite_enabled: Option<bool>,
+    pub rewrite_template_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -25,6 +29,9 @@ pub struct SettingsPatch {
     pub llm_base_url: Option<Option<String>>,
     pub llm_model: Option<Option<String>>,
     pub llm_reasoning_effort: Option<Option<String>>,
+
+    pub rewrite_enabled: Option<Option<bool>>,
+    pub rewrite_template_id: Option<Option<String>>,
 }
 
 pub fn apply_patch(mut s: Settings, p: SettingsPatch) -> Settings {
@@ -39,6 +46,12 @@ pub fn apply_patch(mut s: Settings, p: SettingsPatch) -> Settings {
     }
     if let Some(v) = p.llm_reasoning_effort {
         s.llm_reasoning_effort = v;
+    }
+    if let Some(v) = p.rewrite_enabled {
+        s.rewrite_enabled = v;
+    }
+    if let Some(v) = p.rewrite_template_id {
+        s.rewrite_template_id = v;
     }
     s
 }
@@ -76,11 +89,15 @@ mod tests {
             llm_base_url: Some("https://x/v1".to_string()),
             llm_model: Some("m1".to_string()),
             llm_reasoning_effort: Some("low".to_string()),
+            rewrite_enabled: Some(false),
+            rewrite_template_id: Some("t1".to_string()),
         };
 
         let p = SettingsPatch {
             llm_model: Some(Some("m2".to_string())),
             llm_reasoning_effort: Some(None),
+            rewrite_enabled: Some(Some(true)),
+            rewrite_template_id: Some(None),
             ..Default::default()
         };
 
@@ -89,5 +106,7 @@ mod tests {
         assert_eq!(next.llm_base_url.as_deref(), Some("https://x/v1"));
         assert_eq!(next.llm_model.as_deref(), Some("m2"));
         assert_eq!(next.llm_reasoning_effort, None);
+        assert_eq!(next.rewrite_enabled, Some(true));
+        assert_eq!(next.rewrite_template_id, None);
     }
 }

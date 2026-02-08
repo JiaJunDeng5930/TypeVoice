@@ -144,9 +144,9 @@ fn history_append(item: HistoryItem) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn history_list(limit: i64) -> Result<Vec<HistoryItem>, String> {
+fn history_list(limit: i64, before_ms: Option<i64>) -> Result<Vec<HistoryItem>, String> {
     let db = history_db_path()?;
-    history::list(&db, limit).map_err(|e| e.to_string())
+    history::list(&db, limit, before_ms).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

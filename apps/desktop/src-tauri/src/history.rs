@@ -63,36 +63,71 @@ pub fn append(db_path: &Path, item: &HistoryItem) -> Result<()> {
     Ok(())
 }
 
-pub fn list(db_path: &Path, limit: i64) -> Result<Vec<HistoryItem>> {
+pub fn list(db_path: &Path, limit: i64, before_ms: Option<i64>) -> Result<Vec<HistoryItem>> {
     let c = conn(db_path)?;
-    let mut stmt = c
-        .prepare(
-            r#"
-            SELECT task_id, created_at_ms, asr_text, final_text, template_id, rtf, device_used, preprocess_ms, asr_ms
-            FROM history
-            ORDER BY created_at_ms DESC
-            LIMIT ?1
-            "#,
-        )
-        .context("prepare history list failed")?;
-    let rows = stmt
-        .query_map(params![limit], |row| {
-            Ok(HistoryItem {
-                task_id: row.get(0)?,
-                created_at_ms: row.get(1)?,
-                asr_text: row.get(2)?,
-                final_text: row.get(3)?,
-                template_id: row.get(4)?,
-                rtf: row.get(5)?,
-                device_used: row.get(6)?,
-                preprocess_ms: row.get(7)?,
-                asr_ms: row.get(8)?,
-            })
-        })
-        .context("query history list failed")?;
     let mut out = Vec::new();
-    for r in rows {
-        out.push(r?);
+    match before_ms {
+        Some(ms) => {
+            let mut stmt = c
+                .prepare(
+                    r#"
+                    SELECT task_id, created_at_ms, asr_text, final_text, template_id, rtf, device_used, preprocess_ms, asr_ms
+                    FROM history
+                    WHERE created_at_ms < ?1
+                    ORDER BY created_at_ms DESC
+                    LIMIT ?2
+                    "#,
+                )
+                .context("prepare history list failed")?;
+            let rows = stmt
+                .query_map(params![ms, limit], |row| {
+                    Ok(HistoryItem {
+                        task_id: row.get(0)?,
+                        created_at_ms: row.get(1)?,
+                        asr_text: row.get(2)?,
+                        final_text: row.get(3)?,
+                        template_id: row.get(4)?,
+                        rtf: row.get(5)?,
+                        device_used: row.get(6)?,
+                        preprocess_ms: row.get(7)?,
+                        asr_ms: row.get(8)?,
+                    })
+                })
+                .context("query history list failed")?;
+            for r in rows {
+                out.push(r?);
+            }
+        }
+        None => {
+            let mut stmt = c
+                .prepare(
+                    r#"
+                    SELECT task_id, created_at_ms, asr_text, final_text, template_id, rtf, device_used, preprocess_ms, asr_ms
+                    FROM history
+                    ORDER BY created_at_ms DESC
+                    LIMIT ?1
+                    "#,
+                )
+                .context("prepare history list failed")?;
+            let rows = stmt
+                .query_map(params![limit], |row| {
+                    Ok(HistoryItem {
+                        task_id: row.get(0)?,
+                        created_at_ms: row.get(1)?,
+                        asr_text: row.get(2)?,
+                        final_text: row.get(3)?,
+                        template_id: row.get(4)?,
+                        rtf: row.get(5)?,
+                        device_used: row.get(6)?,
+                        preprocess_ms: row.get(7)?,
+                        asr_ms: row.get(8)?,
+                    })
+                })
+                .context("query history list failed")?;
+            for r in rows {
+                out.push(r?);
+            }
+        }
     }
     Ok(out)
 }
