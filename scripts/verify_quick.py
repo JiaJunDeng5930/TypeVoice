@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import sys
+import subprocess
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, REPO_ROOT)
@@ -34,6 +35,16 @@ def main() -> int:
     ensure_dirs()
     jsonl = os.path.join(REPO_ROOT, "metrics", "verify.jsonl")
     started_ms = now_ms()
+
+    # Unit tests (fast subset)
+    try:
+        subprocess.check_call(
+            [VENV_PYTHON, "-m", "pytest", "-q", "tests", "-m", "quick"],
+            cwd=REPO_ROOT,
+        )
+    except Exception:
+        print("FAIL: unit tests (quick) failed")
+        return 1
 
     # ASR smoke
     audio_seconds = ffprobe_duration_seconds(FIXTURE_10S)

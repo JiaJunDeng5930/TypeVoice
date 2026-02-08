@@ -2,6 +2,7 @@
 import os
 import sys
 import time
+import subprocess
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, REPO_ROOT)
@@ -62,6 +63,14 @@ def main() -> int:
     ensure_dirs()
     jsonl = os.path.join(REPO_ROOT, "metrics", "verify.jsonl")
     started_ms = now_ms()
+
+    # Unit tests (full)
+    try:
+        subprocess.check_call([VENV_PYTHON, "-m", "pytest", "-q", "tests"], cwd=REPO_ROOT)
+    except Exception:
+        print("FAIL: unit tests failed")
+        append_jsonl(jsonl, {"ts_ms": now_ms(), "level": "full", "status": "FAIL", "fail_reasons": ["unit_tests_failed"]})
+        return 1
 
     # Preprocess fixtures -> wav (M2)
     tmp_dir = os.path.join(REPO_ROOT, "tmp", "preprocessed")

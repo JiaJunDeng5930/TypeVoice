@@ -184,23 +184,30 @@ def main() -> int:
         default=60.0,
         help="Split audio longer than this into smaller chunks (seconds) to improve throughput.",
     )
+    parser.add_argument(
+        "--protocol-only",
+        action="store_true",
+        help="Do not load model; only validate request/response protocol for unit tests.",
+    )
     args = parser.parse_args()
 
     _install_signal_handlers()
 
-    # Load once, then handle multiple requests (JSONL).
-    try:
-        model = _load_model(
-            model_id=args.model,
-            dtype=args.dtype,
-            device_map=args.device_map,
-            max_inference_batch_size=args.max_inference_batch_size,
-        )
-    except Exception as e:
-        resp = AsrResponse(ok=False, error=AsrError(code="E_MODEL_LOAD_FAILED", message=str(e)))
-        sys.stdout.write(json.dumps(asdict(resp), ensure_ascii=False) + "\n")
-        sys.stdout.flush()
-        return 2
+    model = None
+    if not args.protocol_only:
+        # Load once, then handle multiple requests (JSONL).
+        try:
+            model = _load_model(
+                model_id=args.model,
+                dtype=args.dtype,
+                device_map=args.device_map,
+                max_inference_batch_size=args.max_inference_batch_size,
+            )
+        except Exception as e:
+            resp = AsrResponse(ok=False, error=AsrError(code="E_MODEL_LOAD_FAILED", message=str(e)))
+            sys.stdout.write(json.dumps(asdict(resp), ensure_ascii=False) + "\n")
+            sys.stdout.flush()
+            return 2
 
     while True:
         try:
@@ -221,7 +228,22 @@ def main() -> int:
                 continue
 
             try:
-                resp = _handle_request(model, model_id=args.model, chunk_sec=args.chunk_sec, req=req)
+                if args.protocol_only:
+                    # Validate input shape and return a deterministic stub.
+                    device = req.get("device", "cuda")
+                    audio_path = req.get("audio_path")
+                    if device != "cuda":
+                        resp = AsrResponse(
+                            ok=False,
+                            error=AsrError(code="E_DEVICE_NOT_ALLOWED", message="CPU/device fallback is not allowed."),
+                        )
+                    elif not isinstance(audio_path, str) or not audio_path:
+                        resp = AsrResponse(ok=False, error=AsrError(code="E_BAD_REQUEST", message="audio_path is required."))
+                    else:
+                        resp = AsrResponse(ok=False, error=AsrError(code="E_PROTOCOL_ONLY", message="protocol-only mode"))
+                else:
+                    assert model is not None
+                    resp = _handle_request(model, model_id=args.model, chunk_sec=args.chunk_sec, req=req)
             except Exception as e:
                 resp = AsrResponse(ok=False, error=AsrError(code="E_TRANSCRIBE_FAILED", message=str(e)))
 
