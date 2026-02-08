@@ -2,7 +2,10 @@
 import os
 import sys
 
-from scripts._verify_util import (
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, REPO_ROOT)
+
+from scripts._verify_util import (  # noqa: E402
     REPO_ROOT,
     VENV_PYTHON,
     append_jsonl,
@@ -80,4 +83,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
