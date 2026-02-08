@@ -69,3 +69,61 @@
 
 （M4-M6 任务拆解将在 M3 结束后补充，以避免过早设计录音与 LLM 模板的 UI 细节。）
 
+---
+
+- [ ] 4. M7：验证体系补齐（单元测试落地）
+- [ ] 4.1 引入轻量单元测试框架并建立测试目录
+  - Python 单测：覆盖协议与纯逻辑（不加载模型、不触发 GPU）
+  - 快速子集（marker=quick）确保总耗时 << 60s
+  - _Requirements: `docs/verification-v0.1.md`#4,#5, `docs/roadmap-v0.1.md` M7_
+  - Completion: `quick/full` 都能先跑单测再跑原有验证
+- [ ] 4.2 将单元测试接入 `verify_quick/verify_full`
+  - quick 只跑 marker=quick
+  - full 跑全部单测
+  - _Requirements: `docs/verification-v0.1.md`_
+  - Completion: quick/full 失败时能明确指出是“单测失败”还是“ASR/取消/性能失败”
+
+- [ ] 5. M8：阶段状态机 + 结构化 metrics/events（可观测性）
+- [ ] 5.1 Rust 侧实现 PipelineOrchestrator（最小阶段状态机）
+  - 阶段：Record/Preprocess/Transcribe/Rewrite/Persist/Export
+  - 输出事件：task_id/stage/status/elapsed_ms/error_code/message
+  - _Requirements: `docs/base-spec-v0.1.md`#4.4, `docs/architecture-v0.1.md`#2.1_
+  - Completion: UI 能实时看到阶段流转与每阶段耗时
+- [ ] 5.2 指标落盘（JSONL）
+  - 记录到本地 `metrics.jsonl`（机器可读即可）
+  - _Requirements: `docs/verification-v0.1.md`#2_
+  - Completion: 每次任务至少写入阶段开始/结束事件与最终结果摘要
+
+- [ ] 6. M9：取消能力对齐（UI 任意阶段可取消 <=300ms）
+- [ ] 6.1 后端支持 cancel_task(task_id)
+  - 取消应能终止 FFmpeg/ASR/LLM 执行
+  - _Requirements: `docs/base-spec-v0.1.md`#5.1, `docs/verification-v0.1.md`_
+  - Completion: 手工 Gate：预处理/转录/改写分别取消一次均达标
+- [ ] 6.2 UI 增加取消按钮与状态展示
+  - running 状态下可取消
+  - _Requirements: `docs/base-spec-v0.1.md`_
+  - Completion: 取消后 UI 状态正确、后台计算停止
+
+- [ ] 7. M10：模板导入/导出（JSON）
+- [ ] 7.1 后端提供 templates_export/templates_import
+  - import 支持 merge/replace（默认 merge）
+  - _Requirements: `docs/base-spec-v0.1.md`#3.2_
+  - Completion: 导出->导入可复现模板
+- [ ] 7.2 UI 支持导入/导出（不改源码）
+  - _Requirements: 同上_
+  - Completion: 手工 Gate 通过
+
+- [ ] 8. M11：模型管理器（应用内下载 + 校验 + 选择路径）
+- [ ] 8.1 后端提供模型下载/校验/状态查询命令
+  - 允许选择模型目录
+  - 基本校验：关键文件存在 + 下载记录（revision/hash）
+  - _Requirements: `docs/base-spec-v0.1.md`#3.2, `docs/tech-spec-v0.1.md`#8_
+  - Completion: 模型下载后能用本地路径运行 ASR
+- [ ] 8.2 验证脚本 Fail-fast（不隐式下载）
+  - _Requirements: `docs/verification-v0.1.md`_
+  - Completion: 未安装模型时 quick/full 明确 FAIL
+
+- [ ] 9. M12：Windows 原生验收 Gate
+- [ ] 9.1 Windows 环境跑通 quick/full
+  - _Requirements: `docs/roadmap-v0.1.md` M12_
+  - Completion: Windows 上 quick/full PASS

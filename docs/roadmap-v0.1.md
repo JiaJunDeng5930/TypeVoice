@@ -107,7 +107,87 @@ Gate：
 
 - `full`：增加“日志/配置检索”检查不含 API Key 明文
 
+## M7：验证体系补齐（单元测试落地）
+
+目标：
+
+- `quick/full` 都包含“单元测试”步骤（纯逻辑、无 GPU/无网络）。
+- 单元测试必须足够轻量，能满足 `quick<=60s` 的时间预算。
+
+Gate：
+
+- `quick`：
+  - 单测子集 PASS
+  - 现有 quick ASR smoke 仍 PASS
+- `full`：
+  - 全部单测 PASS
+  - 现有 full 仍 PASS
+
+## M8：阶段状态机 + 结构化 metrics/events（可观测性对齐）
+
+目标：
+
+- Core Pipeline 在 Rust 侧具备阶段状态机：Record/Preprocess/Transcribe/Rewrite/Persist/Export
+- 每阶段输出结构化事件（task_id/stage/status/elapsed_ms/error_code），可用于 UI 展示与本地 JSONL 记录
+
+Gate：
+
+- 手工 Gate：
+  - 运行一次任务，UI 能看到阶段流转与每阶段耗时
+  - 失败时能看到 error_code 与摘要
+
+## M9：取消能力对齐（UI 任意阶段可取消 <=300ms）
+
+目标：
+
+- UI 提供取消按钮
+- 任意阶段取消都在 <=300ms 生效，并停止后端计算（FFmpeg/ASR/LLM）
+
+Gate：
+
+- 手工 Gate：
+  - 在预处理/转录/改写阶段分别取消一次，<=300ms 且后台计算停止
+- `quick/full`：现有取消 smoke 仍 PASS
+
+## M10：模板导入/导出（JSON）
+
+目标：
+
+- 模板支持导入/导出 JSON（不改源码即可迁移/备份）
+
+Gate：
+
+- 手工 Gate：
+  - 导出 -> 清空/修改 -> 导入 -> 模板恢复且立即生效
+
+## M11：模型管理器（应用内下载 + 校验 + 选择路径）
+
+目标：
+
+- 应用内下载 ASR 模型到本地目录，并做基本校验（完整性/关键文件存在）
+- 支持选择/配置模型路径（本地目录）
+- 验证脚本不在验证阶段隐式下载（未就绪则 FAIL-fast）
+
+Gate：
+
+- `quick/full`：
+  - 模型已就绪时正常 PASS
+  - 模型未就绪时明确 FAIL（提示缺模型/校验失败）
+- 手工 Gate：
+  - 触发下载 -> 校验通过 -> 设置生效
+
+## M12：Windows 原生验收 Gate（目标平台对齐）
+
+目标：
+
+- 在 Windows 原生环境跑通本项目关键 Gate（quick/full + 桌面端手工 Gate）
+
+Gate：
+
+- Windows 上 `quick/full` PASS
+- 手工 Gate：
+  - 录 10 秒中文 -> 出稿 -> 复制成功
+
 ## 未来里程碑（非 MVP）
 
 - 热键 / 托盘 / 自动输入：在 MVP 稳定后再做（会引入平台 API 适配与更多权限/兼容性问题）
-
