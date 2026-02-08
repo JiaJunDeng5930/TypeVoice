@@ -1,3 +1,5 @@
+use std::sync::{Mutex, OnceLock};
+
 use anyhow::{anyhow, Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -9,6 +11,24 @@ pub struct ApiKeyStatus {
     pub configured: bool,
     pub source: String, // env|keyring
     pub reason: Option<String>,
+}
+
+fn api_key_cache() -> &'static Mutex<Option<String>> {
+    static CACHE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
+
+fn load_api_key_from_memory() -> Option<String> {
+    let g = api_key_cache().lock().ok()?;
+    g.as_ref().cloned().filter(|s| !s.trim().is_empty())
+}
+
+fn set_api_key_memory(key: Option<&str>) {
+    if let Ok(mut g) = api_key_cache().lock() {
+        *g = key
+            .map(|s| s.to_string())
+            .filter(|s| !s.trim().is_empty());
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -105,6 +125,11 @@ pub fn load_api_key() -> Result<String> {
             return Ok(k);
         }
     }
+
+    if let Some(k) = load_api_key_from_memory() {
+        return Ok(k);
+    }
+
     let entry = keyring::Entry::new("typevoice", "llm_api_key")
         .map_err(|e| anyhow!("keyring entry init failed: {e:?}"))?;
     let k = entry
@@ -117,6 +142,10 @@ pub fn load_api_key() -> Result<String> {
 }
 
 pub fn set_api_key(key: &str) -> Result<()> {
+    // Always keep an in-memory copy so the current session can use the key even
+    // if the OS keyring is unavailable or fails to persist for some reason.
+    set_api_key_memory(Some(key));
+
     let entry = keyring::Entry::new("typevoice", "llm_api_key")
         .map_err(|e| anyhow!("keyring entry init failed: {e:?}"))?;
     entry
@@ -126,6 +155,8 @@ pub fn set_api_key(key: &str) -> Result<()> {
 }
 
 pub fn clear_api_key() -> Result<()> {
+    set_api_key_memory(None);
+
     let entry = keyring::Entry::new("typevoice", "llm_api_key")
         .map_err(|e| anyhow!("keyring entry init failed: {e:?}"))?;
     // keyring v3 does not expose a cross-platform delete API. We overwrite with
@@ -143,6 +174,14 @@ pub fn api_key_status() -> ApiKeyStatus {
                 reason: None,
             };
         }
+    }
+
+    if load_api_key_from_memory().is_some() {
+        return ApiKeyStatus {
+            configured: true,
+            source: "memory".to_string(),
+            reason: None,
+        };
     }
 
     let entry = match keyring::Entry::new("typevoice", "llm_api_key") {
@@ -239,6 +278,9 @@ pub async fn rewrite(
 mod tests {
     use super::normalize_base_url;
     use super::api_key_status;
+    use super::load_api_key;
+    use super::set_api_key;
+    use super::clear_api_key;
 
     #[test]
     fn normalize_base_url_handles_empty_and_endpoint_suffix() {
@@ -264,5 +306,19 @@ mod tests {
         assert!(st.configured);
         assert_eq!(st.source, "env");
         std::env::remove_var("TYPEVOICE_LLM_API_KEY");
+    }
+
+    #[test]
+    fn api_key_memory_cache_allows_roundtrip_in_process() {
+        clear_api_key().ok();
+        std::env::remove_var("TYPEVOICE_LLM_API_KEY");
+
+        set_api_key("mem-key").ok();
+        let st = api_key_status();
+        assert!(st.configured);
+        assert!(st.source == "memory" || st.source == "keyring");
+
+        let k = load_api_key().unwrap();
+        assert_eq!(k, "mem-key");
     }
 }
