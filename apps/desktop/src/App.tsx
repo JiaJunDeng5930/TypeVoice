@@ -76,6 +76,7 @@ function App() {
   const taskIdRef = useRef<string>("");
   const [events, setEvents] = useState<TaskEvent[]>([]);
   const [result, setResult] = useState<TaskDone | null>(null);
+  const [editedText, setEditedText] = useState<string>("");
 
   const [templates, setTemplates] = useState<PromptTemplate[]>([]);
   const [templateId, setTemplateId] = useState<string>("");
@@ -92,7 +93,7 @@ function App() {
   const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
   const [modelUiStatus, setModelUiStatus] = useState<string>("");
 
-  const canCopy = useMemo(() => !!(result?.final_text || result?.asr_text)?.trim(), [result]);
+  const canCopy = useMemo(() => !!editedText.trim(), [editedText]);
 
   useEffect(() => {
     (async () => {
@@ -151,6 +152,7 @@ function App() {
         const done = e.payload;
         if (!done || done.task_id !== taskIdRef.current) return;
         setResult(done);
+        setEditedText(done.final_text || done.asr_text || "");
         setStatus("done");
         setTaskId("");
         await refreshHistory();
@@ -187,6 +189,7 @@ function App() {
     setStatus("running");
     setError("");
     setResult(null);
+    setEditedText("");
     setEvents([]);
     try {
       const id = (await invoke("start_transcribe_fixture", {
@@ -241,6 +244,7 @@ function App() {
     setStatus("running");
     setError("");
     setResult(null);
+    setEditedText("");
     setEvents([]);
     try {
       const b64 = await blobToBase64(recBlob);
@@ -269,9 +273,8 @@ function App() {
   }
 
   async function copy() {
-    const text = result?.final_text || result?.asr_text || "";
-    if (!text.trim()) return;
-    await navigator.clipboard.writeText(text);
+    if (!editedText.trim()) return;
+    await navigator.clipboard.writeText(editedText);
   }
 
   async function saveTemplate() {
@@ -592,6 +595,7 @@ function App() {
                   rewrite_enabled: !!h.template_id,
                   template_id: h.template_id || null,
                 });
+                setEditedText(h.final_text || h.asr_text || "");
                 setStatus("done");
               }}
             >
@@ -621,8 +625,8 @@ function App() {
             </div>
           </div>
           <textarea
-            readOnly
-            value={result.final_text || result.asr_text}
+            value={editedText}
+            onChange={(e) => setEditedText(e.currentTarget.value)}
             placeholder="result..."
           />
         </section>
