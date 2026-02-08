@@ -63,7 +63,12 @@ impl TaskManager {
         }
     }
 
-    pub fn start_fixture(&self, app: AppHandle, fixture_name: String, opts: StartOpts) -> Result<String> {
+    pub fn start_fixture(
+        &self,
+        app: AppHandle,
+        fixture_name: String,
+        opts: StartOpts,
+    ) -> Result<String> {
         let input = pipeline::fixture_path(&fixture_name)?;
         self.start_audio(app, input, opts, "Record (fixture)")
     }
@@ -80,7 +85,13 @@ impl TaskManager {
         self.start_audio_with_task_id(app, task_id, input, opts, "Record (saved)")
     }
 
-    fn start_audio(&self, app: AppHandle, input: PathBuf, opts: StartOpts, record_msg: &str) -> Result<String> {
+    fn start_audio(
+        &self,
+        app: AppHandle,
+        input: PathBuf,
+        opts: StartOpts,
+        record_msg: &str,
+    ) -> Result<String> {
         let task_id = Uuid::new_v4().to_string();
         self.start_audio_with_task_id(app, task_id, input, opts, record_msg)
     }
@@ -114,7 +125,9 @@ impl TaskManager {
         let record_msg = record_msg.to_string();
 
         tokio::spawn(async move {
-            let _ = this.run_pipeline(app, task_id.clone(), input, opts, &record_msg).await;
+            let _ = this
+                .run_pipeline(app, task_id.clone(), input, opts, &record_msg)
+                .await;
             let mut g = this.inner.lock().unwrap();
             *g = None;
         });
@@ -149,14 +162,18 @@ impl TaskManager {
     ) -> Result<()> {
         let data_dir = data_dir::data_dir()?;
 
-        emit_event(&app, &data_dir, TaskEvent {
-            task_id: task_id.clone(),
-            stage: "Record".to_string(),
-            status: "completed".to_string(),
-            message: record_msg.to_string(),
-            elapsed_ms: Some(0),
-            error_code: None,
-        });
+        emit_event(
+            &app,
+            &data_dir,
+            TaskEvent {
+                task_id: task_id.clone(),
+                stage: "Record".to_string(),
+                status: "completed".to_string(),
+                message: record_msg.to_string(),
+                elapsed_ms: Some(0),
+                error_code: None,
+            },
+        );
 
         if is_cancelled(&self.inner, &task_id) {
             emit_cancelled(&app, &data_dir, &task_id, "Record");
@@ -174,7 +191,12 @@ impl TaskManager {
                 let active = inner.lock().unwrap();
                 let a = active.as_ref().ok_or_else(|| anyhow!("task missing"))?;
                 // launch ffmpeg inside helper so we can store pid
-                let ms = pipeline::preprocess_ffmpeg_cancellable(&input2, &wav2, &a.token, &a.ffmpeg_pid)?;
+                let ms = pipeline::preprocess_ffmpeg_cancellable(
+                    &input2,
+                    &wav2,
+                    &a.token,
+                    &a.ffmpeg_pid,
+                )?;
                 Ok::<_, anyhow::Error>(ms)
             })
             .await;
@@ -231,8 +253,9 @@ impl TaskManager {
                 let active = inner.lock().unwrap();
                 let a = active.as_ref().ok_or_else(|| anyhow!("task missing"))?;
                 let model_id = pipeline::resolve_asr_model_id(&data_dir2)?;
-                let (text, rtf, device, ms) =
-                    pipeline::transcribe_with_python_runner_cancellable(&wav_path2, &model_id, &a.token, &a.asr_pid)?;
+                let (text, rtf, device, ms) = pipeline::transcribe_with_python_runner_cancellable(
+                    &wav_path2, &model_id, &a.token, &a.asr_pid,
+                )?;
                 if device != "cuda" {
                     return Err(anyhow!("device_not_cuda:{device}"));
                 }
@@ -274,7 +297,14 @@ impl TaskManager {
                 }
             }
         };
-        emit_completed(&app, &data_dir, &task_id, "Transcribe", asr_ms, format!("rtf={rtf:.3}"));
+        emit_completed(
+            &app,
+            &data_dir,
+            &task_id,
+            "Transcribe",
+            asr_ms,
+            format!("rtf={rtf:.3}"),
+        );
 
         if is_cancelled(&self.inner, &task_id) {
             emit_cancelled(&app, &data_dir, &task_id, "Transcribe");
@@ -301,13 +331,20 @@ impl TaskManager {
                 };
                 let rewrite_res = tokio::select! {
                     _ = token.cancelled() => Err(anyhow!("cancelled")),
-                    r = llm::rewrite(&tpl.system_prompt, &asr_text) => r,
+                    r = llm::rewrite(&data_dir, &tpl.system_prompt, &asr_text) => r,
                 };
                 match rewrite_res {
                     Ok(txt) => {
                         final_text = txt;
                         rewrite_ms = Some(t0.elapsed().as_millis());
-                        emit_completed(&app, &data_dir, &task_id, "Rewrite", rewrite_ms.unwrap(), "ok");
+                        emit_completed(
+                            &app,
+                            &data_dir,
+                            &task_id,
+                            "Rewrite",
+                            rewrite_ms.unwrap(),
+                            "ok",
+                        );
                     }
                     Err(e) => {
                         if is_cancelled_err(&e) || is_cancelled(&self.inner, &task_id) {
@@ -316,7 +353,15 @@ impl TaskManager {
                         }
                         // fallback to asr_text
                         rewrite_ms = Some(t0.elapsed().as_millis());
-                        emit_failed(&app, &data_dir, &task_id, "Rewrite", rewrite_ms, "E_LLM_FAILED", &e.to_string());
+                        emit_failed(
+                            &app,
+                            &data_dir,
+                            &task_id,
+                            "Rewrite",
+                            rewrite_ms,
+                            "E_LLM_FAILED",
+                            &e.to_string(),
+                        );
                     }
                 }
             }
@@ -357,14 +402,18 @@ impl TaskManager {
         emit_completed(&app, &data_dir, &task_id, "Persist", 0, "ok");
 
         // Export stage is UI-driven (copy). We still emit completed to align spec.
-        emit_event(&app, &data_dir, TaskEvent {
-            task_id: task_id.clone(),
-            stage: "Export".to_string(),
-            status: "completed".to_string(),
-            message: "copy in UI".to_string(),
-            elapsed_ms: Some(0),
-            error_code: None,
-        });
+        emit_event(
+            &app,
+            &data_dir,
+            TaskEvent {
+                task_id: task_id.clone(),
+                stage: "Export".to_string(),
+                status: "completed".to_string(),
+                message: "copy in UI".to_string(),
+                elapsed_ms: Some(0),
+                error_code: None,
+            },
+        );
 
         // Done event
         let done = TaskDone {
@@ -380,7 +429,10 @@ impl TaskManager {
             template_id,
         };
         let _ = app.emit("task_done", done.clone());
-        let _ = metrics::append_jsonl(&data_dir, &json!({"type":"task_done","task_id":task_id,"rtf":done.rtf,"device":done.device_used}));
+        let _ = metrics::append_jsonl(
+            &data_dir,
+            &json!({"type":"task_done","task_id":task_id,"rtf":done.rtf,"device":done.device_used}),
+        );
         Ok(())
     }
 }
@@ -409,7 +461,14 @@ fn emit_started(app: &AppHandle, data_dir: &Path, task_id: &str, stage: &str, ms
     );
 }
 
-fn emit_completed(app: &AppHandle, data_dir: &Path, task_id: &str, stage: &str, elapsed_ms: u128, msg: impl Into<String>) {
+fn emit_completed(
+    app: &AppHandle,
+    data_dir: &Path,
+    task_id: &str,
+    stage: &str,
+    elapsed_ms: u128,
+    msg: impl Into<String>,
+) {
     emit_event(
         app,
         data_dir,
@@ -424,7 +483,15 @@ fn emit_completed(app: &AppHandle, data_dir: &Path, task_id: &str, stage: &str, 
     );
 }
 
-fn emit_failed(app: &AppHandle, data_dir: &Path, task_id: &str, stage: &str, elapsed_ms: Option<u128>, code: &str, msg: &str) {
+fn emit_failed(
+    app: &AppHandle,
+    data_dir: &Path,
+    task_id: &str,
+    stage: &str,
+    elapsed_ms: Option<u128>,
+    code: &str,
+    msg: &str,
+) {
     emit_event(
         app,
         data_dir,
@@ -456,7 +523,10 @@ fn emit_cancelled(app: &AppHandle, data_dir: &Path, task_id: &str, stage: &str) 
 
 fn emit_event(app: &AppHandle, data_dir: &Path, ev: TaskEvent) {
     let _ = app.emit("task_event", ev.clone());
-    let _ = metrics::append_jsonl(data_dir, &json!({"type":"task_event", "task_id":ev.task_id, "stage":ev.stage, "status":ev.status, "elapsed_ms":ev.elapsed_ms, "error_code":ev.error_code, "message":ev.message}));
+    let _ = metrics::append_jsonl(
+        data_dir,
+        &json!({"type":"task_event", "task_id":ev.task_id, "stage":ev.stage, "status":ev.status, "elapsed_ms":ev.elapsed_ms, "error_code":ev.error_code, "message":ev.message}),
+    );
 }
 
 fn is_cancelled(inner: &Arc<Mutex<Option<ActiveTask>>>, task_id: &str) -> bool {

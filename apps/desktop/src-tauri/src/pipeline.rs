@@ -94,7 +94,10 @@ pub fn preprocess_ffmpeg(input: &Path, output: &Path) -> Result<u128> {
     Ok(t0.elapsed().as_millis())
 }
 
-pub fn transcribe_with_python_runner(audio_wav: &Path, model_id: &str) -> Result<(String, f64, String, u128)> {
+pub fn transcribe_with_python_runner(
+    audio_wav: &Path,
+    model_id: &str,
+) -> Result<(String, f64, String, u128)> {
     let root = repo_root()?;
     let py = default_python_path(&root);
     let t0 = Instant::now();
@@ -108,7 +111,10 @@ pub fn transcribe_with_python_runner(audio_wav: &Path, model_id: &str) -> Result
         .spawn()
         .context("failed to spawn asr runner")?;
 
-    let stdin = child.stdin.as_mut().ok_or_else(|| anyhow!("runner stdin missing"))?;
+    let stdin = child
+        .stdin
+        .as_mut()
+        .ok_or_else(|| anyhow!("runner stdin missing"))?;
     let req = json!({
         "audio_path": audio_wav,
         "language": "Chinese",
@@ -119,16 +125,22 @@ pub fn transcribe_with_python_runner(audio_wav: &Path, model_id: &str) -> Result
         .context("failed to write runner request")?;
     stdin.flush().ok();
 
-    let stdout = child.stdout.take().ok_or_else(|| anyhow!("runner stdout missing"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("runner stdout missing"))?;
     let mut reader = BufReader::new(stdout);
     let mut line = String::new();
-    reader.read_line(&mut line).context("failed to read runner output")?;
+    reader
+        .read_line(&mut line)
+        .context("failed to read runner output")?;
 
     // Try to exit quickly.
     let _ = child.kill();
     let _ = child.wait();
 
-    let v: serde_json::Value = serde_json::from_str(line.trim()).context("runner returned invalid json")?;
+    let v: serde_json::Value =
+        serde_json::from_str(line.trim()).context("runner returned invalid json")?;
     if v.get("ok").and_then(|x| x.as_bool()) != Some(true) {
         let code = v
             .get("error")
@@ -142,7 +154,9 @@ pub fn transcribe_with_python_runner(audio_wav: &Path, model_id: &str) -> Result
         .and_then(|x| x.as_str())
         .ok_or_else(|| anyhow!("runner missing text"))?
         .to_string();
-    let metrics = v.get("metrics").ok_or_else(|| anyhow!("runner missing metrics"))?;
+    let metrics = v
+        .get("metrics")
+        .ok_or_else(|| anyhow!("runner missing metrics"))?;
     let rtf = metrics
         .get("rtf")
         .and_then(|x| x.as_f64())
@@ -237,7 +251,10 @@ pub fn transcribe_with_python_runner_cancellable(
         return Err(anyhow!("cancelled"));
     }
 
-    let stdin = child.stdin.as_mut().ok_or_else(|| anyhow!("runner stdin missing"))?;
+    let stdin = child
+        .stdin
+        .as_mut()
+        .ok_or_else(|| anyhow!("runner stdin missing"))?;
     let req = json!({
         "audio_path": audio_wav,
         "language": "Chinese",
@@ -248,7 +265,10 @@ pub fn transcribe_with_python_runner_cancellable(
         .context("failed to write runner request")?;
     stdin.flush().ok();
 
-    let stdout = child.stdout.take().ok_or_else(|| anyhow!("runner stdout missing"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("runner stdout missing"))?;
     let mut reader = BufReader::new(stdout);
     let mut line = String::new();
 
@@ -265,13 +285,16 @@ pub fn transcribe_with_python_runner_cancellable(
         break;
     }
 
-    reader.read_line(&mut line).context("failed to read runner output")?;
+    reader
+        .read_line(&mut line)
+        .context("failed to read runner output")?;
 
     // Ensure process stops.
     let _ = child.kill();
     let _ = child.wait();
 
-    let v: serde_json::Value = serde_json::from_str(line.trim()).context("runner returned invalid json")?;
+    let v: serde_json::Value =
+        serde_json::from_str(line.trim()).context("runner returned invalid json")?;
     if v.get("ok").and_then(|x| x.as_bool()) != Some(true) {
         let code = v
             .get("error")
@@ -285,7 +308,9 @@ pub fn transcribe_with_python_runner_cancellable(
         .and_then(|x| x.as_str())
         .ok_or_else(|| anyhow!("runner missing text"))?
         .to_string();
-    let metrics = v.get("metrics").ok_or_else(|| anyhow!("runner missing metrics"))?;
+    let metrics = v
+        .get("metrics")
+        .ok_or_else(|| anyhow!("runner missing metrics"))?;
     let rtf = metrics
         .get("rtf")
         .and_then(|x| x.as_f64())
@@ -312,13 +337,17 @@ pub fn preprocess_ffmpeg_cancellable(
             "-loglevel",
             "error",
             "-i",
-            input.to_str().ok_or_else(|| anyhow!("non-utf8 input path"))?,
+            input
+                .to_str()
+                .ok_or_else(|| anyhow!("non-utf8 input path"))?,
             "-ac",
             "1",
             "-ar",
             "16000",
             "-vn",
-            output.to_str().ok_or_else(|| anyhow!("non-utf8 output path"))?,
+            output
+                .to_str()
+                .ok_or_else(|| anyhow!("non-utf8 output path"))?,
         ])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -344,7 +373,11 @@ pub fn preprocess_ffmpeg_cancellable(
     Ok(t0.elapsed().as_millis())
 }
 
-pub fn run_audio_pipeline_with_task_id(task_id: String, input_audio: &Path, model_id: &str) -> Result<TranscribeResult> {
+pub fn run_audio_pipeline_with_task_id(
+    task_id: String,
+    input_audio: &Path,
+    model_id: &str,
+) -> Result<TranscribeResult> {
     let root = repo_root()?;
     if !input_audio.exists() {
         return Err(anyhow!("input audio not found: {}", input_audio.display()));

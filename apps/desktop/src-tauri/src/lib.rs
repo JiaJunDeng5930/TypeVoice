@@ -1,19 +1,20 @@
-mod pipeline;
 mod data_dir;
-mod templates;
-mod llm;
 mod history;
+mod llm;
 mod metrics;
-mod settings;
 mod model;
+mod pipeline;
+mod settings;
 mod task_manager;
+mod templates;
 
-use pipeline::TranscribeResult;
-use templates::PromptTemplate;
 use history::HistoryItem;
-use settings::Settings;
 use model::ModelStatus;
+use pipeline::TranscribeResult;
+use settings::Settings;
+use settings::SettingsPatch;
 use task_manager::TaskManager;
+use templates::PromptTemplate;
 
 #[tauri::command]
 fn transcribe_fixture(fixture_name: &str) -> Result<TranscribeResult, String> {
@@ -24,7 +25,8 @@ fn transcribe_fixture(fixture_name: &str) -> Result<TranscribeResult, String> {
 fn transcribe_recording_base64(b64: &str, ext: &str) -> Result<TranscribeResult, String> {
     let task_id = uuid::Uuid::new_v4().to_string();
     let input = pipeline::save_base64_file(&task_id, b64, ext).map_err(|e| e.to_string())?;
-    pipeline::run_audio_pipeline_with_task_id(task_id, &input, "Qwen/Qwen3-ASR-0.6B").map_err(|e| e.to_string())
+    pipeline::run_audio_pipeline_with_task_id(task_id, &input, "Qwen/Qwen3-ASR-0.6B")
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -108,7 +110,7 @@ fn templates_import_json(json: &str, mode: &str) -> Result<usize, String> {
 async fn rewrite_text(template_id: &str, asr_text: &str) -> Result<String, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let tpl = templates::get_template(&dir, template_id).map_err(|e| e.to_string())?;
-    llm::rewrite(&tpl.system_prompt, asr_text)
+    llm::rewrite(&dir, &tpl.system_prompt, asr_text)
         .await
         .map_err(|e| e.to_string())
 }
@@ -160,6 +162,15 @@ fn set_settings(s: Settings) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn update_settings(patch: SettingsPatch) -> Result<Settings, String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let cur = settings::load_settings(&dir).unwrap_or_default();
+    let next = settings::apply_patch(cur, patch);
+    settings::save_settings(&dir, &next).map_err(|e| e.to_string())?;
+    Ok(next)
+}
+
+#[tauri::command]
 fn asr_model_status() -> Result<ModelStatus, String> {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
@@ -187,10 +198,12 @@ async fn download_asr_model() -> Result<ModelStatus, String> {
     let root2 = root.clone();
     let py2 = py.clone();
     let model_dir2 = model_dir.clone();
-    let st = tauri::async_runtime::spawn_blocking(move || model::download_model(&root2, &py2, &model_dir2))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
+    let st = tauri::async_runtime::spawn_blocking(move || {
+        model::download_model(&root2, &py2, &model_dir2)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
     // Set settings.asr_model to local dir if ok.
     if st.ok {
         let mut s = settings::load_settings(&dir).unwrap_or_default();
@@ -224,6 +237,7 @@ pub fn run() {
             history_clear,
             get_settings,
             set_settings,
+            update_settings,
             asr_model_status,
             download_asr_model
         ])

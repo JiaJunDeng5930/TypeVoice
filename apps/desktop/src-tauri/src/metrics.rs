@@ -24,4 +24,3 @@ pub fn append_jsonl<T: Serialize>(data_dir: &Path, obj: &T) -> Result<()> {
     f.write_all(b"\n").ok();
     Ok(())
 }
-

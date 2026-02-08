@@ -99,7 +99,7 @@ pub fn list(db_path: &Path, limit: i64) -> Result<Vec<HistoryItem>> {
 
 pub fn clear(db_path: &Path) -> Result<()> {
     let c = conn(db_path)?;
-    c.execute("DELETE FROM history", []).context("clear history failed")?;
+    c.execute("DELETE FROM history", [])
+        .context("clear history failed")?;
     Ok(())
 }
-

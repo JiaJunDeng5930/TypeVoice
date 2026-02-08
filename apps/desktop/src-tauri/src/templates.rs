@@ -92,7 +92,8 @@ pub fn export_templates_json(data_dir: &Path) -> Result<String> {
 }
 
 pub fn import_templates_json(data_dir: &Path, json_str: &str, mode: &str) -> Result<usize> {
-    let incoming: Vec<PromptTemplate> = serde_json::from_str(json_str).context("parse templates json failed")?;
+    let incoming: Vec<PromptTemplate> =
+        serde_json::from_str(json_str).context("parse templates json failed")?;
     let mut normalized = Vec::with_capacity(incoming.len());
     for mut t in incoming {
         if t.name.trim().is_empty() {
@@ -124,6 +125,8 @@ pub fn import_templates_json(data_dir: &Path, json_str: &str, mode: &str) -> Res
             save_templates(data_dir, &out)?;
             Ok(out.len())
         }
-        _ => Err(anyhow!("invalid import mode (expected 'merge' or 'replace')")),
+        _ => Err(anyhow!(
+            "invalid import mode (expected 'merge' or 'replace')"
+        )),
     }
 }

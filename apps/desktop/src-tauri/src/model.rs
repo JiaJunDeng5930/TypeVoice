@@ -40,7 +40,11 @@ pub fn verify_model_dir(model_dir: &Path) -> Result<ModelStatus> {
     })
 }
 
-pub fn download_model(repo_root: &Path, venv_python: &Path, model_dir: &Path) -> Result<ModelStatus> {
+pub fn download_model(
+    repo_root: &Path,
+    venv_python: &Path,
+    model_dir: &Path,
+) -> Result<ModelStatus> {
     std::fs::create_dir_all(model_dir.parent().unwrap_or(model_dir)).ok();
 
     let status = Command::new(venv_python)
@@ -54,4 +58,3 @@ pub fn download_model(repo_root: &Path, venv_python: &Path, model_dir: &Path) ->
     }
     verify_model_dir(model_dir)
 }
-

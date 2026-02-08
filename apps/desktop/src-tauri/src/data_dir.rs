@@ -14,4 +14,3 @@ pub fn data_dir() -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("failed to locate repo root"))?;
     Ok(root.join("tmp").join("typevoice-data"))
 }
-
