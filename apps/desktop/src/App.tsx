@@ -1,20 +1,44 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import "./App.css";
 
-type TranscribeResult = {
+type TaskEvent = {
+  task_id: string;
+  stage: string;
+  status: "started" | "completed" | "failed" | "cancelled";
+  message: string;
+  elapsed_ms?: number | null;
+  error_code?: string | null;
+};
+
+type TaskDone = {
   task_id: string;
   asr_text: string;
+  final_text: string;
   rtf: number;
   device_used: string;
   preprocess_ms: number;
   asr_ms: number;
+  rewrite_ms?: number | null;
+  rewrite_enabled: boolean;
+  template_id?: string | null;
 };
 
 type PromptTemplate = {
   id: string;
   name: string;
   system_prompt: string;
+};
+
+type Settings = {
+  asr_model?: string | null;
+};
+
+type ModelStatus = {
+  model_dir: string;
+  ok: boolean;
+  reason?: string | null;
 };
 
 type HistoryItem = {
@@ -48,8 +72,10 @@ function App() {
     "idle",
   );
   const [error, setError] = useState<string>("");
-  const [result, setResult] = useState<TranscribeResult | null>(null);
-  const [finalText, setFinalText] = useState<string>("");
+  const [taskId, setTaskId] = useState<string>("");
+  const taskIdRef = useRef<string>("");
+  const [events, setEvents] = useState<TaskEvent[]>([]);
+  const [result, setResult] = useState<TaskDone | null>(null);
 
   const [templates, setTemplates] = useState<PromptTemplate[]>([]);
   const [templateId, setTemplateId] = useState<string>("");
@@ -59,7 +85,14 @@ function App() {
   const [llmStatus, setLlmStatus] = useState<string>("");
   const [history, setHistory] = useState<HistoryItem[]>([]);
 
-  const canCopy = useMemo(() => !!(finalText || result?.asr_text)?.trim(), [finalText, result]);
+  const [templatesJson, setTemplatesJson] = useState<string>("");
+  const [templatesIoStatus, setTemplatesIoStatus] = useState<string>("");
+
+  const [asrModelDraft, setAsrModelDraft] = useState<string>("");
+  const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
+  const [modelUiStatus, setModelUiStatus] = useState<string>("");
+
+  const canCopy = useMemo(() => !!(result?.final_text || result?.asr_text)?.trim(), [result]);
 
   useEffect(() => {
     (async () => {
@@ -77,14 +110,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    (async () => {
-      try {
-        const h = (await invoke("history_list", { limit: 20 })) as HistoryItem[];
-        setHistory(h);
-      } catch (e) {
-        // ignore
-      }
-    })();
+    refreshHistory();
   }, []);
 
   useEffect(() => {
@@ -92,32 +118,83 @@ function App() {
     if (tpl) setTemplateDraft(tpl.system_prompt);
   }, [templateId, templates]);
 
-  async function run() {
+  useEffect(() => {
+    taskIdRef.current = taskId;
+  }, [taskId]);
+
+  useEffect(() => {
+    let unlistenEvent: (() => void) | null = null;
+    let unlistenDone: (() => void) | null = null;
+    (async () => {
+      unlistenEvent = await listen<TaskEvent>("task_event", (e) => {
+        const ev = e.payload;
+        if (!ev || ev.task_id !== taskIdRef.current) return;
+        setEvents((prev) => {
+          const next = [...prev, ev];
+          return next.length > 200 ? next.slice(next.length - 200) : next;
+        });
+        if (ev.status === "failed") {
+          // Non-fatal failures (e.g. Rewrite) still produce task_done.
+          if (ev.stage !== "Rewrite") {
+            setError(`${ev.stage}:${ev.error_code || "E_FAILED"}:${ev.message}`);
+            setStatus("error");
+            setTaskId("");
+          }
+        }
+        if (ev.status === "cancelled") {
+          setStatus("idle");
+          setTaskId("");
+        }
+      });
+
+      unlistenDone = await listen<TaskDone>("task_done", async (e) => {
+        const done = e.payload;
+        if (!done || done.task_id !== taskIdRef.current) return;
+        setResult(done);
+        setStatus("done");
+        setTaskId("");
+        await refreshHistory();
+      });
+    })();
+
+    return () => {
+      try {
+        unlistenEvent?.();
+      } catch {
+        // ignore
+      }
+      try {
+        unlistenDone?.();
+      } catch {
+        // ignore
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const s = (await invoke("get_settings")) as Settings;
+        setAsrModelDraft(String(s.asr_model || ""));
+      } catch {
+        // ignore
+      }
+      await refreshModelStatus();
+    })();
+  }, []);
+
+  async function startFixture() {
     setStatus("running");
     setError("");
     setResult(null);
-    setFinalText("");
+    setEvents([]);
     try {
-      const r = (await invoke("transcribe_fixture", {
+      const id = (await invoke("start_transcribe_fixture", {
         fixtureName: fixture,
-      })) as TranscribeResult;
-      setResult(r);
-      let final = "";
-      if (rewriteEnabled && templateId) {
-        try {
-          const rewritten = (await invoke("rewrite_text", {
-            templateId,
-            asrText: r.asr_text,
-          })) as string;
-          setFinalText(rewritten);
-          final = rewritten;
-        } catch (e) {
-          setLlmStatus(`rewrite_failed: ${String(e)}`);
-          setFinalText("");
-        }
-      }
-      await appendHistory(r, final || r.asr_text);
-      setStatus("done");
+        rewriteEnabled,
+        templateId: templateId || null,
+      })) as string;
+      setTaskId(id);
     } catch (e) {
       setError(String(e));
       setStatus("error");
@@ -164,30 +241,27 @@ function App() {
     setStatus("running");
     setError("");
     setResult(null);
-    setFinalText("");
+    setEvents([]);
     try {
       const b64 = await blobToBase64(recBlob);
-      const r = (await invoke("transcribe_recording_base64", {
+      const id = (await invoke("start_transcribe_recording_base64", {
         b64,
         ext: "webm",
-      })) as TranscribeResult;
-      setResult(r);
-      let final = "";
-      if (rewriteEnabled && templateId) {
-        try {
-          const rewritten = (await invoke("rewrite_text", {
-            templateId,
-            asrText: r.asr_text,
-          })) as string;
-          setFinalText(rewritten);
-          final = rewritten;
-        } catch (e) {
-          setLlmStatus(`rewrite_failed: ${String(e)}`);
-          setFinalText("");
-        }
-      }
-      await appendHistory(r, final || r.asr_text);
-      setStatus("done");
+        rewriteEnabled,
+        templateId: templateId || null,
+      })) as string;
+      setTaskId(id);
+    } catch (e) {
+      setError(String(e));
+      setStatus("error");
+    }
+  }
+
+  async function cancel() {
+    const id = taskIdRef.current;
+    if (!id) return;
+    try {
+      await invoke("cancel_task", { taskId: id });
     } catch (e) {
       setError(String(e));
       setStatus("error");
@@ -195,7 +269,7 @@ function App() {
   }
 
   async function copy() {
-    const text = finalText || result?.asr_text || "";
+    const text = result?.final_text || result?.asr_text || "";
     if (!text.trim()) return;
     await navigator.clipboard.writeText(text);
   }
@@ -229,20 +303,8 @@ function App() {
     }
   }
 
-  async function appendHistory(r: TranscribeResult, final: string) {
+  async function refreshHistory() {
     try {
-      const item: HistoryItem = {
-        task_id: r.task_id,
-        created_at_ms: Date.now(),
-        asr_text: r.asr_text,
-        final_text: final,
-        template_id: rewriteEnabled ? templateId : null,
-        rtf: r.rtf,
-        device_used: r.device_used,
-        preprocess_ms: r.preprocess_ms,
-        asr_ms: r.asr_ms,
-      };
-      await invoke("history_append", { item });
       const h = (await invoke("history_list", { limit: 20 })) as HistoryItem[];
       setHistory(h);
     } catch (e) {
@@ -259,12 +321,100 @@ function App() {
     }
   }
 
+  async function exportTemplates() {
+    setTemplatesIoStatus("");
+    try {
+      const s = (await invoke("templates_export_json")) as string;
+      setTemplatesJson(s);
+      setTemplatesIoStatus("export_ok");
+    } catch (e) {
+      setTemplatesIoStatus(`export_failed:${String(e)}`);
+    }
+  }
+
+  async function importTemplates(mode: "merge" | "replace") {
+    setTemplatesIoStatus("");
+    try {
+      await invoke("templates_import_json", { json: templatesJson, mode });
+      const t = (await invoke("list_templates")) as PromptTemplate[];
+      setTemplates(t);
+      setTemplatesIoStatus(`import_${mode}_ok`);
+    } catch (e) {
+      setTemplatesIoStatus(`import_failed:${String(e)}`);
+    }
+  }
+
+  async function refreshModelStatus() {
+    try {
+      const st = (await invoke("asr_model_status")) as ModelStatus;
+      setModelStatus(st);
+      return st;
+    } catch {
+      return null;
+    }
+  }
+
+  async function downloadModel() {
+    setModelUiStatus("");
+    try {
+      const st = (await invoke("download_asr_model")) as ModelStatus;
+      setModelStatus(st);
+      setModelUiStatus(st.ok ? "download_ok" : `download_not_ok:${st.reason || ""}`);
+      const s = (await invoke("get_settings")) as Settings;
+      setAsrModelDraft(String(s.asr_model || ""));
+    } catch (e) {
+      setModelUiStatus(`download_failed:${String(e)}`);
+    }
+  }
+
+  async function saveSettings() {
+    setModelUiStatus("");
+    try {
+      const s: Settings = { asr_model: asrModelDraft.trim() ? asrModelDraft.trim() : null };
+      await invoke("set_settings", { s });
+      setModelUiStatus("settings_saved");
+    } catch (e) {
+      setModelUiStatus(`settings_save_failed:${String(e)}`);
+    }
+  }
+
   return (
     <main className="container">
       <h1>TypeVoice (Dev)</h1>
       <p>
         当前页面用于 MVP 开发联调: 录音/fixtures 转录, 可选 LLM 改写, 以及一键复制.
       </p>
+
+      <section className="card">
+        <h2>ASR 模型</h2>
+        <div className="row">
+          <button onClick={downloadModel} disabled={status === "running"}>
+            Download Model
+          </button>
+          <button onClick={refreshModelStatus} disabled={status === "running"}>
+            Refresh
+          </button>
+          <div className="hint">
+            {modelStatus
+              ? `ok=${modelStatus.ok} dir=${modelStatus.model_dir} reason=${modelStatus.reason || ""}`
+              : "status: unknown"}
+          </div>
+        </div>
+        <div className="row">
+          <label>
+            settings.asr_model
+            <input
+              value={asrModelDraft}
+              onChange={(e) => setAsrModelDraft(e.currentTarget.value)}
+              placeholder="local dir or HF repo id"
+            />
+          </label>
+          <button onClick={saveSettings} disabled={status === "running"}>
+            Save Settings
+          </button>
+          <div className="hint">{modelUiStatus}</div>
+        </div>
+      </section>
 
       <section className="card">
         <h2>录音</h2>
@@ -341,6 +491,26 @@ function App() {
           </button>
           <div className="hint">{llmStatus}</div>
         </div>
+
+        <div className="row" style={{ marginTop: 10 }}>
+          <button onClick={exportTemplates} disabled={status === "running"}>
+            Export Templates (JSON)
+          </button>
+          <button onClick={() => importTemplates("merge")} disabled={!templatesJson.trim() || status === "running"}>
+            Import Merge
+          </button>
+          <button onClick={() => importTemplates("replace")} disabled={!templatesJson.trim() || status === "running"}>
+            Import Replace
+          </button>
+          <div className="hint">{templatesIoStatus}</div>
+        </div>
+
+        <textarea
+          value={templatesJson}
+          onChange={(e) => setTemplatesJson(e.currentTarget.value)}
+          placeholder="[ { id, name, system_prompt }, ... ]"
+          style={{ height: 120, marginTop: 10 }}
+        />
       </section>
 
       <section className="card">
@@ -360,15 +530,41 @@ function App() {
           </select>
         </label>
 
-        <button onClick={run} disabled={status === "running"}>
+        <button onClick={startFixture} disabled={status === "running"}>
           {status === "running" ? "Running..." : "Transcribe"}
+        </button>
+
+        <button onClick={cancel} disabled={status !== "running" || !taskId}>
+          Cancel
         </button>
 
         <button onClick={copy} disabled={!canCopy}>
           Copy
         </button>
+
+        <div className="hint">
+          task: {taskId || "-"}{" "}
+          {events.length ? `stage=${events[events.length - 1]!.stage} status=${events[events.length - 1]!.status}` : ""}
+        </div>
       </div>
       </section>
+
+      {events.length ? (
+        <section className="card">
+          <h2>进度</h2>
+          <div className="history">
+            {events.slice().reverse().map((ev, idx) => (
+              <div key={`${ev.stage}-${ev.status}-${idx}`} className="historyItem" style={{ cursor: "default" }}>
+                <div className="historyTitle">
+                  {ev.stage} {ev.status} {ev.elapsed_ms != null ? `(${ev.elapsed_ms}ms)` : ""}{" "}
+                  {ev.error_code ? `[${ev.error_code}]` : ""}
+                </div>
+                <div className="historyPreview">{ev.message}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <section className="card">
         <h2>历史</h2>
@@ -387,12 +583,15 @@ function App() {
                 setResult({
                   task_id: h.task_id,
                   asr_text: h.asr_text,
+                  final_text: h.final_text,
                   rtf: h.rtf,
                   device_used: h.device_used,
                   preprocess_ms: h.preprocess_ms,
                   asr_ms: h.asr_ms,
+                  rewrite_ms: null,
+                  rewrite_enabled: !!h.template_id,
+                  template_id: h.template_id || null,
                 });
-                setFinalText(h.final_text);
                 setStatus("done");
               }}
             >
@@ -423,7 +622,7 @@ function App() {
           </div>
           <textarea
             readOnly
-            value={finalText || result.asr_text}
+            value={result.final_text || result.asr_text}
             placeholder="result..."
           />
         </section>
