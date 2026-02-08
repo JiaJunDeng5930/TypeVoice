@@ -59,8 +59,9 @@
 可选项（不默认启用）：
 
 - `llm_smoke`：真实调用一次 LLM API，只验证连通性与失败回退（失败时仍能复制 ASR 原文）。
+  - 前置条件：已在 UI 内配置 LLM API Base URL / Model / 推理等级（可选）并设置 API Key（Keyring）。
+  - 验收点：HTTP 2xx 且输出非空；若返回 4xx/5xx 也必须以 `E_LLM_FAILED` 失败并保留 ASR 原文可复制。
 
 输出：
 
 - 控制台摘要 + 结构化记录（同 `quick`）
-

@@ -148,6 +148,24 @@
 - 模板：以独立文件或存储表保存，支持导入导出。
 - 敏感配置（API Key）：必须使用 Windows 安全存储优先。
 
+#### 6.2.1 LLM 配置项（必须可在 UI 配置）
+
+普通配置（可落盘到 settings.json）：
+
+- `llm_base_url`：API Base URL（例如 `https://api.openai.com/v1`）。允许用户粘贴完整 endpoint（`.../chat/completions`），应用需做归一化。
+- `llm_model`：LLM 模型名（写入 Chat Completions 的 `model` 字段）。
+- `llm_reasoning_effort`：推理等级（写入 Chat Completions 的 `reasoning_effort` 字段）。`default`/空表示“不发送该字段”。
+
+敏感配置（不得明文落盘）：
+
+- `llm_api_key`：仅存 OS Keyring（Windows 凭据管理器优先）；日志中不得出现。
+
+加载优先级（冻结）：
+
+1. `settings.json`（UI 保存的配置）
+2. 环境变量（开发/临时覆盖）：`TYPEVOICE_LLM_BASE_URL`、`TYPEVOICE_LLM_MODEL`、`TYPEVOICE_LLM_API_KEY`
+3. 内置默认值（base_url 默认 `https://api.openai.com/v1`，model 默认 `gpt-4o-mini`）
+
 ## 7. 错误模型与日志（冻结）
 
 ### 7.1 错误码（建议）

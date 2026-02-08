@@ -47,6 +47,8 @@
 - LLM 改写（冻结选择）
 - LLM 通过 API 调用
 - API 仅发送文本，不发送音频
+- LLM 相关配置必须可在 UI 中设置（不要求改源码/环境变量）
+- 可配置项：API Base URL、API Key、LLM Model、推理等级（reasoning_effort）
 - LLM 失败时必须保留 ASR 原文并允许用户复制原文
 - 提示词模板（冻结选择）
 - 提示词/模板可在 UI 内便捷编辑，不需要改源代码
