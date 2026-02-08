@@ -42,6 +42,129 @@ def ffprobe_duration_seconds(path: str) -> float:
     return float(out)
 
 
+def ffmpeg_preprocess_to_wav(input_path: str, output_path: str) -> int:
+    """Convert audio to 16kHz mono PCM WAV. Returns elapsed ms."""
+    t0 = now_ms()
+    subprocess.check_call(
+        [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            input_path,
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-vn",
+            output_path,
+        ]
+    )
+    t1 = now_ms()
+    return t1 - t0
+
+
+def cancel_ffmpeg_preprocess(input_path: str, output_path: str, delay_ms: int = 100) -> int:
+    """Start ffmpeg preprocess then kill; return cancel latency in ms."""
+    proc = subprocess.Popen(
+        [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            input_path,
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-vn",
+            output_path,
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    t0 = now_ms()
+    time.sleep(delay_ms / 1000.0)
+    proc.kill()
+    proc.wait(timeout=5)
+    t1 = now_ms()
+    return t1 - t0
+
+
+def run_asr_batch(model_id: str, requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Start runner once, send N requests, read N responses, then exit."""
+    proc = subprocess.Popen(
+        [VENV_PYTHON, "-m", "asr_runner.runner", "--model", model_id],
+        cwd=REPO_ROOT,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env={**os.environ, "PYTHONPATH": REPO_ROOT},
+    )
+    assert proc.stdin and proc.stdout
+    for req in requests:
+        proc.stdin.write(json.dumps(req, ensure_ascii=False) + "\n")
+    proc.stdin.flush()
+    # Close stdin to tell runner we are done; it will drain and exit.
+    proc.stdin.close()
+
+    responses: list[dict[str, Any]] = []
+    for _ in requests:
+        line = proc.stdout.readline()
+        if not line:
+            break
+        responses.append(json.loads(line))
+
+    try:
+        proc.wait(timeout=10)
+    except Exception:
+        proc.kill()
+        proc.wait(timeout=5)
+    return responses
+
+
+def start_asr_runner(model_id: str) -> subprocess.Popen[str]:
+    proc = subprocess.Popen(
+        [VENV_PYTHON, "-m", "asr_runner.runner", "--model", model_id],
+        cwd=REPO_ROOT,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        env={**os.environ, "PYTHONPATH": REPO_ROOT},
+    )
+    assert proc.stdin and proc.stdout
+    return proc
+
+
+def asr_roundtrip(proc: subprocess.Popen[str], req: dict[str, Any]) -> dict[str, Any]:
+    assert proc.stdin and proc.stdout
+    proc.stdin.write(json.dumps(req, ensure_ascii=False) + "\n")
+    proc.stdin.flush()
+    line = proc.stdout.readline()
+    if not line:
+        return {"ok": False, "error": {"code": "E_ASR_RUNNER_EOF", "message": "runner stdout EOF"}}
+    return json.loads(line)
+
+
+def stop_asr_runner(proc: subprocess.Popen[str]) -> None:
+    try:
+        if proc.stdin:
+            proc.stdin.close()
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=5)
+    except Exception:
+        proc.kill()
+        proc.wait(timeout=5)
+
 @dataclass(frozen=True)
 class ProcResult:
     stdout_line: str
@@ -99,4 +222,3 @@ def cancel_asr_run(model_id: str, audio_path: str, delay_ms: int = 100) -> int:
     proc.wait(timeout=5)
     t1 = now_ms()
     return t1 - t0
-
