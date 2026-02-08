@@ -23,7 +23,7 @@ from scripts._verify_util import (  # noqa: E402
 )
 
 
-MODEL_ID = "Qwen/Qwen3-ASR-0.6B"
+MODEL_ID = os.environ.get("TYPEVOICE_ASR_MODEL", "Qwen/Qwen3-ASR-0.6B")
 FIX_10 = os.path.join(REPO_ROOT, "fixtures", "zh_10s.ogg")
 FIX_60 = os.path.join(REPO_ROOT, "fixtures", "zh_60s.ogg")
 FIX_5M = os.path.join(REPO_ROOT, "fixtures", "zh_5m.ogg")

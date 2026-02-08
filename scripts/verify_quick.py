@@ -17,7 +17,7 @@ from scripts._verify_util import (  # noqa: E402
 )
 
 
-MODEL_ID = "Qwen/Qwen3-ASR-0.6B"
+MODEL_ID = os.environ.get("TYPEVOICE_ASR_MODEL", "Qwen/Qwen3-ASR-0.6B")
 FIXTURE_10S = os.path.join(REPO_ROOT, "fixtures", "zh_10s.ogg")
 FIXTURE_LONG = os.path.join(REPO_ROOT, "fixtures", "zh_5m.ogg")
 
