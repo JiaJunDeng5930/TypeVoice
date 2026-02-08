@@ -97,7 +97,7 @@ def _load_model(model_id: str, dtype: str, device_map: str, max_inference_batch_
     # frozen after perf spike.
     return Qwen3ASRModel.from_pretrained(
         model_id,
-        dtype=torch_dtype,
+        torch_dtype=torch_dtype,
         device_map=device_map,
         max_inference_batch_size=max_inference_batch_size,
         max_new_tokens=4096,
@@ -115,7 +115,7 @@ def _transcribe(model: Any, audio_path: str, language: str | None) -> str:
     return text
 
 
-def _handle_request(model: Any, model_id: str, req: dict[str, Any]) -> AsrResponse:
+def _handle_request(model: Any, model_id: str, chunk_sec: float, req: dict[str, Any]) -> AsrResponse:
     audio_path = req.get("audio_path")
     language = req.get("language", "Chinese")
     device = req.get("device", "cuda")
@@ -140,7 +140,23 @@ def _handle_request(model: Any, model_id: str, req: dict[str, Any]) -> AsrRespon
 
     audio_seconds = _ffprobe_duration_seconds(audio_path)
     t0 = _now_ms()
-    text = _transcribe(model, audio_path=audio_path, language=language)
+
+    if audio_seconds > chunk_sec:
+        # qwen-asr sets MAX_ASR_INPUT_SECONDS=1200 by default, so 5-minute audios
+        # won't be split and may run close to realtime. We do an explicit chunking
+        # pass here to keep long-audio performance within our RTF gates.
+        from qwen_asr.inference.utils import SAMPLE_RATE, normalize_audios, split_audio_into_chunks
+
+        wav = normalize_audios(audio_path)[0]
+        parts = split_audio_into_chunks(wav=wav, sr=SAMPLE_RATE, max_chunk_sec=float(chunk_sec))
+        chunk_audio = [(cwav, SAMPLE_RATE) for (cwav, _offset_sec) in parts]
+        results = model.transcribe(audio=chunk_audio, language=language)
+        text = "".join([getattr(r, "text", "") for r in results if getattr(r, "text", "") is not None])
+        if not text.strip():
+            raise RuntimeError("Empty ASR text (chunked).")
+    else:
+        text = _transcribe(model, audio_path=audio_path, language=language)
+
     t1 = _now_ms()
     elapsed_ms = t1 - t0
     rtf = (elapsed_ms / 1000.0) / max(audio_seconds, 1e-6)
@@ -161,7 +177,13 @@ def main() -> int:
     parser.add_argument("--model", default="Qwen/Qwen3-ASR-0.6B")
     parser.add_argument("--dtype", default="float16", choices=["float16", "bfloat16"])
     parser.add_argument("--device-map", default="cuda:0")
-    parser.add_argument("--max-inference-batch-size", type=int, default=1)
+    parser.add_argument("--max-inference-batch-size", type=int, default=8)
+    parser.add_argument(
+        "--chunk-sec",
+        type=float,
+        default=60.0,
+        help="Split audio longer than this into smaller chunks (seconds) to improve throughput.",
+    )
     args = parser.parse_args()
 
     _install_signal_handlers()
@@ -199,7 +221,7 @@ def main() -> int:
                 continue
 
             try:
-                resp = _handle_request(model, model_id=args.model, req=req)
+                resp = _handle_request(model, model_id=args.model, chunk_sec=args.chunk_sec, req=req)
             except Exception as e:
                 resp = AsrResponse(ok=False, error=AsrError(code="E_TRANSCRIBE_FAILED", message=str(e)))
 
@@ -217,4 +239,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
