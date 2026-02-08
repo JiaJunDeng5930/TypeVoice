@@ -2,6 +2,10 @@
 
 This repo is primarily developed in WSL, but the target runtime for the MVP is Windows desktop.
 
+For a detailed, manual, repeatable workflow (including how WSL triggers Windows builds), see:
+
+- `docs/windows-dev-from-wsl-v0.1.md`
+
 ## One-Command Gate (PowerShell)
 
 Run in a Windows PowerShell terminal (non-admin is fine):
@@ -25,4 +29,3 @@ The script intentionally fails fast if any of these are missing:
 
 - `python`, `node`, `npm`, `cargo`, `ffmpeg`, `ffprobe` are not in PATH.
 - `torch.cuda.is_available()` is `False` after installing Torch wheels.
-
