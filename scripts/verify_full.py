@@ -15,16 +15,15 @@ from scripts._verify_util import (  # noqa: E402
     cancel_ffmpeg_preprocess,
     ensure_dirs,
     ffmpeg_preprocess_to_wav,
-    ffprobe_duration_seconds,
     now_ms,
     run_asr_batch,
     start_asr_runner,
     asr_roundtrip,
     stop_asr_runner,
+    resolve_asr_model_id_or_exit,
 )
 
 
-MODEL_ID = os.environ.get("TYPEVOICE_ASR_MODEL", "Qwen/Qwen3-ASR-0.6B")
 FIX_10 = os.path.join(REPO_ROOT, "fixtures", "zh_10s.ogg")
 FIX_60 = os.path.join(REPO_ROOT, "fixtures", "zh_60s.ogg")
 FIX_5M = os.path.join(REPO_ROOT, "fixtures", "zh_5m.ogg")
@@ -63,6 +62,7 @@ def main() -> int:
     ensure_dirs()
     jsonl = os.path.join(REPO_ROOT, "metrics", "verify.jsonl")
     started_ms = now_ms()
+    model_id = resolve_asr_model_id_or_exit()
 
     # Unit tests (full)
     try:
@@ -90,7 +90,7 @@ def main() -> int:
         {"audio_path": out_60, "language": "Chinese", "device": "cuda"},
         {"audio_path": out_5m, "language": "Chinese", "device": "cuda"},
     ]
-    resps = run_asr_batch(model_id=MODEL_ID, requests=reqs)
+    resps = run_asr_batch(model_id=model_id, requests=reqs)
     if len(resps) != 3:
         print("FAIL: asr batch returned insufficient responses")
         append_jsonl(
@@ -110,7 +110,7 @@ def main() -> int:
     if cancel_ffmpeg_ms > 300:
         fail_reasons.append(f"cancel_ffmpeg_slow:{cancel_ffmpeg_ms}ms")
 
-    cancel_asr_ms = cancel_asr_run(model_id=MODEL_ID, audio_path=out_5m, delay_ms=100)
+    cancel_asr_ms = cancel_asr_run(model_id=model_id, audio_path=out_5m, delay_ms=100)
     if cancel_asr_ms > 300:
         fail_reasons.append(f"cancel_asr_slow:{cancel_asr_ms}ms")
 
@@ -118,7 +118,7 @@ def main() -> int:
     soak_start = time.time()
     soak_runs = 0
     soak_fail_reason: str | None = None
-    soak_proc = start_asr_runner(MODEL_ID)
+    soak_proc = start_asr_runner(model_id)
     try:
         while (time.time() - soak_start) < 180:
             r = asr_roundtrip(soak_proc, {"audio_path": out_10, "language": "Chinese", "device": "cuda"})

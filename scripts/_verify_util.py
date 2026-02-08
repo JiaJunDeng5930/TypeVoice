@@ -2,6 +2,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -9,6 +10,24 @@ from typing import Any
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 VENV_PYTHON = os.path.join(REPO_ROOT, ".venv", "bin", "python")
+
+DEFAULT_LOCAL_MODEL_DIR = os.path.join(REPO_ROOT, "models", "Qwen3-ASR-0.6B")
+
+
+def resolve_asr_model_id_or_exit() -> str:
+    """Resolve ASR model id/path without triggering implicit downloads."""
+    m = os.environ.get("TYPEVOICE_ASR_MODEL", "").strip()
+    if m:
+        return m
+
+    cfg = os.path.join(DEFAULT_LOCAL_MODEL_DIR, "config.json")
+    if os.path.exists(cfg):
+        return DEFAULT_LOCAL_MODEL_DIR
+
+    print("FAIL: ASR model not found (offline default).")
+    print(f"Expected local model dir: {DEFAULT_LOCAL_MODEL_DIR}")
+    print("Hint: run: .venv/bin/python scripts/download_asr_model.py")
+    raise SystemExit(2)
 
 
 def now_ms() -> int:

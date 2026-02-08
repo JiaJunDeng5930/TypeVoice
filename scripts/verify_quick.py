@@ -15,10 +15,10 @@ from scripts._verify_util import (  # noqa: E402
     ffprobe_duration_seconds,
     now_ms,
     run_asr_once,
+    resolve_asr_model_id_or_exit,
 )
 
 
-MODEL_ID = os.environ.get("TYPEVOICE_ASR_MODEL", "Qwen/Qwen3-ASR-0.6B")
 FIXTURE_10S = os.path.join(REPO_ROOT, "fixtures", "zh_10s.ogg")
 FIXTURE_LONG = os.path.join(REPO_ROOT, "fixtures", "zh_5m.ogg")
 
@@ -35,6 +35,7 @@ def main() -> int:
     ensure_dirs()
     jsonl = os.path.join(REPO_ROOT, "metrics", "verify.jsonl")
     started_ms = now_ms()
+    model_id = resolve_asr_model_id_or_exit()
 
     # Unit tests (fast subset)
     try:
@@ -48,7 +49,7 @@ def main() -> int:
 
     # ASR smoke
     audio_seconds = ffprobe_duration_seconds(FIXTURE_10S)
-    resp, wall_ms = run_asr_once(model_id=MODEL_ID, audio_path=FIXTURE_10S)
+    resp, wall_ms = run_asr_once(model_id=model_id, audio_path=FIXTURE_10S)
 
     ok = bool(resp.get("ok"))
     device_used = (resp.get("metrics") or {}).get("device_used") if isinstance(resp.get("metrics"), dict) else None
@@ -66,7 +67,7 @@ def main() -> int:
         fail_reasons.append("missing_rtf")
 
     # Cancel smoke (force kill)
-    cancel_latency_ms = cancel_asr_run(model_id=MODEL_ID, audio_path=FIXTURE_LONG, delay_ms=100)
+    cancel_latency_ms = cancel_asr_run(model_id=model_id, audio_path=FIXTURE_LONG, delay_ms=100)
     if cancel_latency_ms > 300:
         fail_reasons.append(f"cancel_slow:{cancel_latency_ms}ms")
 
