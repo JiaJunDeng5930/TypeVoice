@@ -69,7 +69,7 @@
 ### 4.1 模型与后端
 
 - 模型：`Qwen/Qwen3-ASR-0.6B`
-- 后端：PyTorch CUDA（GPU 优先）
+- 后端：PyTorch CUDA（强制；不允许 CPU 降级）
 - 允许依赖安装 CUDA 相关运行时与 VC++ Runtime（冻结）
 
 ### 4.2 ASR Runner 进程模型（建议约束）
@@ -86,7 +86,7 @@
 
 - `audio_path`：预处理后的音频文件路径
 - `language`：默认 `zh`
-- `device`：优先 `cuda`，必要时支持 `cpu`
+- `device`：必须为 `cuda`
 - `decode_params`：解码参数（需可配置，默认值在性能 Spike 后冻结）
 
 输出：
@@ -97,13 +97,13 @@
 - `rtf`：RTF
 - `audio_seconds`
 - `elapsed_ms`
-- `device_used`：cuda/cpu
+- `device_used`：cuda
 - `model_id` 与 `model_version`
 
 ### 4.4 性能与降级
 
 - 必须在 RTX 4060 Laptop 环境达成 `docs/base-spec-v0.1.md` 的 RTF 指标。
-- 若 GPU 不可用允许降级到 CPU，但必须在 UI 明示，并记录到任务 metrics。
+- 若 GPU 不可用必须失败（返回结构化错误码并给出诊断提示），不允许降级到 CPU。
 
 ## 5. LLM 改写规范（冻结）
 
@@ -116,10 +116,9 @@
 
 - 模板必须可在 UI 编辑，不需要改源码。
 - 模板至少包含：
+- `id`：模板 id
 - `name`：模板名
-- `prompt`：主体提示词（支持变量占位符）
-- `variables`：变量定义与默认值（例如 `asr_text`、`domain_hint`）
-- `output_format`：可选（纯文本、要点列表等）
+- `system_prompt`：system prompt 文本
 - 支持导入/导出 JSON。
 
 ### 5.3 错误处理
@@ -134,14 +133,14 @@
 历史记录必须包含：
 
 - `task_id`
-- `created_at`
+- `created_at_ms`
 - `asr_text`
 - `final_text`（若未启用或失败则可等于 `asr_text`）
-- `rewrite_enabled`
-- `template_id` 与模板快照（至少保存模板名或内容 hash，避免未来模板变化导致不可追溯）
-- `durations_ms`：各阶段耗时
-- `asr_metrics`：RTF、device_used 等
-- `error`：若失败，保存结构化错误摘要
+- `template_id`（可选）
+- `preprocess_ms`
+- `asr_ms`
+- `rtf`
+- `device_used`
 
 ### 6.2 配置与模板
 
@@ -196,4 +195,3 @@
 - PyTorch CUDA 的打包策略与 ASR Runner 的分发形式（独立 Python 环境、嵌入式 Python、或其他方式）。
 - 模型下载源与镜像策略。
 - FFmpeg 版本、构建选项与许可证声明写法。
-
