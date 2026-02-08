@@ -14,3 +14,4 @@
 - `docs/architecture-v0.1.md`：架构边界与接口（为 Gate 反推的工程结构）
 - `docs/roadmap-v0.1.md`：里程碑与 Gate（每个里程碑的验收条件与验证方式）
 - `docs/tasks-v0.1.md`：任务拆解（按里程碑的可执行 checklist，直接绑定 quick/full Gate）
+- `docs/windows-gate-v0.1.md`：Windows 原生验收 Gate（PowerShell 一键脚本）
