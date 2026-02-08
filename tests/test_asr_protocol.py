@@ -7,7 +7,14 @@ import pytest
 
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-VENV_PY = os.path.join(REPO_ROOT, ".venv", "bin", "python")
+
+def _venv_python_path(repo_root: str) -> str:
+    if os.name == "nt":
+        return os.path.join(repo_root, ".venv", "Scripts", "python.exe")
+    return os.path.join(repo_root, ".venv", "bin", "python")
+
+
+VENV_PY = _venv_python_path(REPO_ROOT)
 
 
 def _run_runner_protocol_only(payload: str) -> dict:
@@ -49,4 +56,3 @@ def test_runner_requires_audio_path():
     r = _run_runner_protocol_only(json.dumps({"device": "cuda"}))
     assert r["ok"] is False
     assert r["error"]["code"] == "E_BAD_REQUEST"
-
