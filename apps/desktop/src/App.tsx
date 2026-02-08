@@ -33,6 +33,9 @@ type PromptTemplate = {
 
 type Settings = {
   asr_model?: string | null;
+  llm_base_url?: string | null;
+  llm_model?: string | null;
+  llm_reasoning_effort?: string | null;
 };
 
 type ModelStatus = {
@@ -84,6 +87,11 @@ function App() {
   const [rewriteEnabled, setRewriteEnabled] = useState<boolean>(false);
   const [llmKeyDraft, setLlmKeyDraft] = useState<string>("");
   const [llmStatus, setLlmStatus] = useState<string>("");
+  const [llmBaseUrlDraft, setLlmBaseUrlDraft] = useState<string>("");
+  const [llmModelDraft, setLlmModelDraft] = useState<string>("");
+  const [llmReasoningEffortDraft, setLlmReasoningEffortDraft] =
+    useState<string>("default");
+  const [llmSettingsStatus, setLlmSettingsStatus] = useState<string>("");
   const [history, setHistory] = useState<HistoryItem[]>([]);
 
   const [templatesJson, setTemplatesJson] = useState<string>("");
@@ -178,6 +186,9 @@ function App() {
       try {
         const s = (await invoke("get_settings")) as Settings;
         setAsrModelDraft(String(s.asr_model || ""));
+        setLlmBaseUrlDraft(String(s.llm_base_url || ""));
+        setLlmModelDraft(String(s.llm_model || ""));
+        setLlmReasoningEffortDraft(String(s.llm_reasoning_effort || "default"));
       } catch {
         // ignore
       }
@@ -306,6 +317,16 @@ function App() {
     }
   }
 
+  async function clearApiKey() {
+    setLlmStatus("");
+    try {
+      await invoke("clear_llm_api_key");
+      setLlmStatus("api_key_cleared");
+    } catch (e) {
+      setLlmStatus(`api_key_clear_failed: ${String(e)}`);
+    }
+  }
+
   async function refreshHistory() {
     try {
       const h = (await invoke("history_list", { limit: 20 })) as HistoryItem[];
@@ -373,11 +394,46 @@ function App() {
   async function saveSettings() {
     setModelUiStatus("");
     try {
-      const s: Settings = { asr_model: asrModelDraft.trim() ? asrModelDraft.trim() : null };
-      await invoke("set_settings", { s });
+      await invoke("update_settings", {
+        patch: { asr_model: asrModelDraft.trim() ? asrModelDraft.trim() : null },
+      });
       setModelUiStatus("settings_saved");
     } catch (e) {
       setModelUiStatus(`settings_save_failed:${String(e)}`);
+    }
+  }
+
+  async function saveLlmSettings() {
+    setLlmSettingsStatus("");
+    try {
+      await invoke("update_settings", {
+        patch: {
+          llm_base_url: llmBaseUrlDraft.trim() ? llmBaseUrlDraft.trim() : null,
+          llm_model: llmModelDraft.trim() ? llmModelDraft.trim() : null,
+          llm_reasoning_effort:
+            llmReasoningEffortDraft !== "default"
+              ? llmReasoningEffortDraft
+              : null,
+        },
+      });
+      setLlmSettingsStatus("llm_settings_saved");
+    } catch (e) {
+      setLlmSettingsStatus(`llm_settings_save_failed:${String(e)}`);
+    }
+  }
+
+  async function clearLlmSettings() {
+    setLlmSettingsStatus("");
+    try {
+      await invoke("update_settings", {
+        patch: { llm_base_url: null, llm_model: null, llm_reasoning_effort: null },
+      });
+      setLlmBaseUrlDraft("");
+      setLlmModelDraft("");
+      setLlmReasoningEffortDraft("default");
+      setLlmSettingsStatus("llm_settings_cleared");
+    } catch (e) {
+      setLlmSettingsStatus(`llm_settings_clear_failed:${String(e)}`);
     }
   }
 
@@ -445,6 +501,47 @@ function App() {
         <h2>LLM 改写</h2>
         <div className="row">
           <label>
+            API Base URL
+            <input
+              value={llmBaseUrlDraft}
+              onChange={(e) => setLlmBaseUrlDraft(e.currentTarget.value)}
+              placeholder="https://api.openai.com/v1 (or paste /chat/completions)"
+            />
+          </label>
+          <label>
+            Model
+            <input
+              value={llmModelDraft}
+              onChange={(e) => setLlmModelDraft(e.currentTarget.value)}
+              placeholder="gpt-4o-mini"
+            />
+          </label>
+          <label>
+            推理等级
+            <select
+              value={llmReasoningEffortDraft}
+              onChange={(e) => setLlmReasoningEffortDraft(e.currentTarget.value)}
+            >
+              <option value="default">default (不发送)</option>
+              <option value="none">none</option>
+              <option value="minimal">minimal</option>
+              <option value="low">low</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+              <option value="xhigh">xhigh</option>
+            </select>
+          </label>
+          <button onClick={saveLlmSettings} disabled={status === "running"}>
+            Save LLM Settings
+          </button>
+          <button onClick={clearLlmSettings} disabled={status === "running"}>
+            Clear LLM Settings
+          </button>
+          <div className="hint">{llmSettingsStatus}</div>
+        </div>
+
+        <div className="row">
+          <label>
             Template
             <select
               value={templateId}
@@ -491,6 +588,9 @@ function App() {
           </label>
           <button onClick={setApiKey} disabled={!llmKeyDraft.trim()}>
             Save Key
+          </button>
+          <button onClick={clearApiKey}>
+            Clear Key
           </button>
           <div className="hint">{llmStatus}</div>
         </div>
