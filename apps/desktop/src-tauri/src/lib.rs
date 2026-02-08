@@ -2,9 +2,11 @@ mod pipeline;
 mod data_dir;
 mod templates;
 mod llm;
+mod history;
 
 use pipeline::TranscribeResult;
 use templates::PromptTemplate;
+use history::HistoryItem;
 
 #[tauri::command]
 fn transcribe_fixture(fixture_name: &str) -> Result<TranscribeResult, String> {
@@ -55,6 +57,30 @@ fn clear_llm_api_key() -> Result<(), String> {
     llm::clear_api_key().map_err(|e| e.to_string())
 }
 
+fn history_db_path() -> Result<std::path::PathBuf, String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).ok();
+    Ok(dir.join("history.sqlite3"))
+}
+
+#[tauri::command]
+fn history_append(item: HistoryItem) -> Result<(), String> {
+    let db = history_db_path()?;
+    history::append(&db, &item).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn history_list(limit: i64) -> Result<Vec<HistoryItem>, String> {
+    let db = history_db_path()?;
+    history::list(&db, limit).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn history_clear() -> Result<(), String> {
+    let db = history_db_path()?;
+    history::clear(&db).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -67,7 +93,10 @@ pub fn run() {
             delete_template,
             rewrite_text,
             set_llm_api_key,
-            clear_llm_api_key
+            clear_llm_api_key,
+            history_append,
+            history_list,
+            history_clear
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

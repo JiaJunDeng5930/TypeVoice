@@ -17,6 +17,18 @@ type PromptTemplate = {
   system_prompt: string;
 };
 
+type HistoryItem = {
+  task_id: string;
+  created_at_ms: number;
+  asr_text: string;
+  final_text: string;
+  template_id?: string | null;
+  rtf: number;
+  device_used: string;
+  preprocess_ms: number;
+  asr_ms: number;
+};
+
 const FIXTURES = [
   { id: "zh_10s.ogg", label: "中文 10s" },
   { id: "zh_60s.ogg", label: "中文 60s" },
@@ -45,6 +57,7 @@ function App() {
   const [rewriteEnabled, setRewriteEnabled] = useState<boolean>(false);
   const [llmKeyDraft, setLlmKeyDraft] = useState<string>("");
   const [llmStatus, setLlmStatus] = useState<string>("");
+  const [history, setHistory] = useState<HistoryItem[]>([]);
 
   const canCopy = useMemo(() => !!(finalText || result?.asr_text)?.trim(), [finalText, result]);
 
@@ -64,6 +77,17 @@ function App() {
   }, []);
 
   useEffect(() => {
+    (async () => {
+      try {
+        const h = (await invoke("history_list", { limit: 20 })) as HistoryItem[];
+        setHistory(h);
+      } catch (e) {
+        // ignore
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
     const tpl = templates.find((x) => x.id === templateId);
     if (tpl) setTemplateDraft(tpl.system_prompt);
   }, [templateId, templates]);
@@ -78,6 +102,7 @@ function App() {
         fixtureName: fixture,
       })) as TranscribeResult;
       setResult(r);
+      let final = "";
       if (rewriteEnabled && templateId) {
         try {
           const rewritten = (await invoke("rewrite_text", {
@@ -85,11 +110,13 @@ function App() {
             asrText: r.asr_text,
           })) as string;
           setFinalText(rewritten);
+          final = rewritten;
         } catch (e) {
           setLlmStatus(`rewrite_failed: ${String(e)}`);
           setFinalText("");
         }
       }
+      await appendHistory(r, final || r.asr_text);
       setStatus("done");
     } catch (e) {
       setError(String(e));
@@ -145,6 +172,7 @@ function App() {
         ext: "webm",
       })) as TranscribeResult;
       setResult(r);
+      let final = "";
       if (rewriteEnabled && templateId) {
         try {
           const rewritten = (await invoke("rewrite_text", {
@@ -152,11 +180,13 @@ function App() {
             asrText: r.asr_text,
           })) as string;
           setFinalText(rewritten);
+          final = rewritten;
         } catch (e) {
           setLlmStatus(`rewrite_failed: ${String(e)}`);
           setFinalText("");
         }
       }
+      await appendHistory(r, final || r.asr_text);
       setStatus("done");
     } catch (e) {
       setError(String(e));
@@ -196,6 +226,36 @@ function App() {
       setLlmStatus("api_key_saved");
     } catch (e) {
       setLlmStatus(`api_key_save_failed: ${String(e)}`);
+    }
+  }
+
+  async function appendHistory(r: TranscribeResult, final: string) {
+    try {
+      const item: HistoryItem = {
+        task_id: r.task_id,
+        created_at_ms: Date.now(),
+        asr_text: r.asr_text,
+        final_text: final,
+        template_id: rewriteEnabled ? templateId : null,
+        rtf: r.rtf,
+        device_used: r.device_used,
+        preprocess_ms: r.preprocess_ms,
+        asr_ms: r.asr_ms,
+      };
+      await invoke("history_append", { item });
+      const h = (await invoke("history_list", { limit: 20 })) as HistoryItem[];
+      setHistory(h);
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  async function clearHistory() {
+    try {
+      await invoke("history_clear");
+      setHistory([]);
+    } catch (e) {
+      // ignore
     }
   }
 
@@ -308,6 +368,44 @@ function App() {
           Copy
         </button>
       </div>
+      </section>
+
+      <section className="card">
+        <h2>历史</h2>
+        <div className="row">
+          <button onClick={clearHistory} disabled={history.length === 0}>
+            Clear
+          </button>
+          <div className="hint">{history.length} items</div>
+        </div>
+        <div className="history">
+          {history.map((h) => (
+            <button
+              key={h.task_id}
+              className="historyItem"
+              onClick={() => {
+                setResult({
+                  task_id: h.task_id,
+                  asr_text: h.asr_text,
+                  rtf: h.rtf,
+                  device_used: h.device_used,
+                  preprocess_ms: h.preprocess_ms,
+                  asr_ms: h.asr_ms,
+                });
+                setFinalText(h.final_text);
+                setStatus("done");
+              }}
+            >
+              <div className="historyTitle">
+                {new Date(h.created_at_ms).toLocaleString()} ({h.device_used},{" "}
+                rtf {h.rtf.toFixed(2)})
+              </div>
+              <div className="historyPreview">
+                {(h.final_text || h.asr_text).slice(0, 80)}
+              </div>
+            </button>
+          ))}
+        </div>
       </section>
 
       {status === "error" ? (
