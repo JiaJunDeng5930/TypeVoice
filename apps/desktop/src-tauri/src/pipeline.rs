@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::{anyhow, Context, Result};
+use base64::Engine;
 use serde::Serialize;
 use serde_json::json;
 use uuid::Uuid;
@@ -57,6 +58,20 @@ fn default_python_path(root: &Path) -> PathBuf {
 pub fn fixture_path(name: &str) -> Result<PathBuf> {
     let root = repo_root()?;
     Ok(root.join("fixtures").join(name))
+}
+
+pub fn save_base64_file(task_id: &str, b64: &str, ext: &str) -> Result<PathBuf> {
+    let root = repo_root()?;
+    let tmp = root.join("tmp").join("desktop");
+    std::fs::create_dir_all(&tmp).ok();
+    let ext = ext.trim_start_matches('.').to_ascii_lowercase();
+    let input = tmp.join(format!("{task_id}.{ext}"));
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64.as_bytes())
+        .context("base64 decode failed")?;
+    std::fs::write(&input, bytes).context("failed to write recording file")?;
+    Ok(input)
 }
 
 pub fn preprocess_ffmpeg(input: &Path, output: &Path) -> Result<u128> {
@@ -149,19 +164,17 @@ pub fn transcribe_with_python_runner(audio_wav: &Path, model_id: &str) -> Result
     Ok((text, rtf, device_used, t0.elapsed().as_millis()))
 }
 
-pub fn run_fixture_pipeline(fixture_name: &str) -> Result<TranscribeResult> {
-    let task_id = Uuid::new_v4().to_string();
+pub fn run_audio_pipeline_with_task_id(task_id: String, input_audio: &Path, model_id: &str) -> Result<TranscribeResult> {
     let root = repo_root()?;
-    let input = root.join("fixtures").join(fixture_name);
-    if !input.exists() {
-        return Err(anyhow!("fixture not found: {}", input.display()));
+    if !input_audio.exists() {
+        return Err(anyhow!("input audio not found: {}", input_audio.display()));
     }
     let tmp = root.join("tmp").join("desktop");
     std::fs::create_dir_all(&tmp).ok();
     let wav = tmp.join(format!("{task_id}.wav"));
 
-    let preprocess_ms = preprocess_ffmpeg(&input, &wav)?;
-    let (text, rtf, device_used, asr_ms) = transcribe_with_python_runner(&wav, "Qwen/Qwen3-ASR-0.6B")?;
+    let preprocess_ms = preprocess_ffmpeg(input_audio, &wav)?;
+    let (text, rtf, device_used, asr_ms) = transcribe_with_python_runner(&wav, model_id)?;
 
     Ok(TranscribeResult {
         task_id,
@@ -173,3 +186,11 @@ pub fn run_fixture_pipeline(fixture_name: &str) -> Result<TranscribeResult> {
     })
 }
 
+pub fn run_fixture_pipeline(fixture_name: &str) -> Result<TranscribeResult> {
+    let input = fixture_path(fixture_name)?;
+    run_audio_pipeline_with_task_id(Uuid::new_v4().to_string(), &input, "Qwen/Qwen3-ASR-0.6B")
+}
+
+pub fn run_audio_pipeline(input_audio: &Path, model_id: &str) -> Result<TranscribeResult> {
+    run_audio_pipeline_with_task_id(Uuid::new_v4().to_string(), input_audio, model_id)
+}
