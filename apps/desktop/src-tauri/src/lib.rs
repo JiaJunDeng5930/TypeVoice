@@ -15,6 +15,7 @@ use settings::Settings;
 use settings::SettingsPatch;
 use task_manager::TaskManager;
 use templates::PromptTemplate;
+use llm::ApiKeyStatus;
 
 #[tauri::command]
 fn transcribe_fixture(fixture_name: &str) -> Result<TranscribeResult, String> {
@@ -125,6 +126,11 @@ fn clear_llm_api_key() -> Result<(), String> {
     llm::clear_api_key().map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn llm_api_key_status() -> Result<ApiKeyStatus, String> {
+    Ok(llm::api_key_status())
+}
+
 fn history_db_path() -> Result<std::path::PathBuf, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).ok();
@@ -232,6 +238,7 @@ pub fn run() {
             rewrite_text,
             set_llm_api_key,
             clear_llm_api_key,
+            llm_api_key_status,
             history_append,
             history_list,
             history_clear,

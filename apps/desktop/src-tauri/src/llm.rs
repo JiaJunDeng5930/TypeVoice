@@ -4,6 +4,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::settings;
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ApiKeyStatus {
+    pub configured: bool,
+    pub source: String, // env|keyring
+    pub reason: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct LlmConfig {
     pub base_url: String, // e.g. https://api.openai.com/v1
@@ -98,9 +105,11 @@ pub fn load_api_key() -> Result<String> {
             return Ok(k);
         }
     }
-    let entry =
-        keyring::Entry::new("typevoice", "llm_api_key").context("keyring entry init failed")?;
-    let k = entry.get_password().context("keyring get failed")?;
+    let entry = keyring::Entry::new("typevoice", "llm_api_key")
+        .map_err(|e| anyhow!("keyring entry init failed: {e:?}"))?;
+    let k = entry
+        .get_password()
+        .map_err(|e| anyhow!("keyring get failed: {e:?}"))?;
     if k.trim().is_empty() {
         return Err(anyhow!("empty api key"));
     }
@@ -108,19 +117,67 @@ pub fn load_api_key() -> Result<String> {
 }
 
 pub fn set_api_key(key: &str) -> Result<()> {
-    let entry =
-        keyring::Entry::new("typevoice", "llm_api_key").context("keyring entry init failed")?;
-    entry.set_password(key).context("keyring set failed")?;
+    let entry = keyring::Entry::new("typevoice", "llm_api_key")
+        .map_err(|e| anyhow!("keyring entry init failed: {e:?}"))?;
+    entry
+        .set_password(key)
+        .map_err(|e| anyhow!("keyring set failed: {e:?}"))?;
     Ok(())
 }
 
 pub fn clear_api_key() -> Result<()> {
-    let entry =
-        keyring::Entry::new("typevoice", "llm_api_key").context("keyring entry init failed")?;
+    let entry = keyring::Entry::new("typevoice", "llm_api_key")
+        .map_err(|e| anyhow!("keyring entry init failed: {e:?}"))?;
     // keyring v3 does not expose a cross-platform delete API. We overwrite with
     // an empty password and treat empty as "not configured".
-    let _ = entry.set_password("");
+    let _ = entry.set_password("").map_err(|e| anyhow!("keyring set failed: {e:?}"));
     Ok(())
+}
+
+pub fn api_key_status() -> ApiKeyStatus {
+    if let Ok(k) = std::env::var("TYPEVOICE_LLM_API_KEY") {
+        if !k.trim().is_empty() {
+            return ApiKeyStatus {
+                configured: true,
+                source: "env".to_string(),
+                reason: None,
+            };
+        }
+    }
+
+    let entry = match keyring::Entry::new("typevoice", "llm_api_key") {
+        Ok(e) => e,
+        Err(e) => {
+            return ApiKeyStatus {
+                configured: false,
+                source: "keyring".to_string(),
+                reason: Some(format!("keyring_entry_init_failed:{e:?}")),
+            };
+        }
+    };
+
+    let k = match entry.get_password() {
+        Ok(k) => k,
+        Err(e) => {
+            return ApiKeyStatus {
+                configured: false,
+                source: "keyring".to_string(),
+                reason: Some(format!("keyring_get_failed:{e:?}")),
+            };
+        }
+    };
+    if k.trim().is_empty() {
+        return ApiKeyStatus {
+            configured: false,
+            source: "keyring".to_string(),
+            reason: Some("empty".to_string()),
+        };
+    }
+    ApiKeyStatus {
+        configured: true,
+        source: "keyring".to_string(),
+        reason: None,
+    }
 }
 
 pub async fn rewrite(
@@ -181,6 +238,7 @@ pub async fn rewrite(
 #[cfg(test)]
 mod tests {
     use super::normalize_base_url;
+    use super::api_key_status;
 
     #[test]
     fn normalize_base_url_handles_empty_and_endpoint_suffix() {
@@ -197,5 +255,14 @@ mod tests {
             normalize_base_url("http://api.server/v1/chat/completions/"),
             "http://api.server/v1"
         );
+    }
+
+    #[test]
+    fn api_key_status_prefers_env_when_set() {
+        std::env::set_var("TYPEVOICE_LLM_API_KEY", "test-key");
+        let st = api_key_status();
+        assert!(st.configured);
+        assert_eq!(st.source, "env");
+        std::env::remove_var("TYPEVOICE_LLM_API_KEY");
     }
 }

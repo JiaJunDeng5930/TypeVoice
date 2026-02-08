@@ -327,6 +327,24 @@ function App() {
     }
   }
 
+  async function checkApiKeyStatus() {
+    setLlmStatus("");
+    try {
+      const st = (await invoke("llm_api_key_status")) as {
+        configured: boolean;
+        source: string;
+        reason?: string | null;
+      };
+      setLlmStatus(
+        st.configured
+          ? `api_key_configured source=${st.source}`
+          : `api_key_missing source=${st.source} reason=${st.reason || ""}`,
+      );
+    } catch (e) {
+      setLlmStatus(`api_key_status_failed: ${String(e)}`);
+    }
+  }
+
   async function refreshHistory() {
     try {
       const h = (await invoke("history_list", { limit: 20 })) as HistoryItem[];
@@ -591,6 +609,9 @@ function App() {
           </button>
           <button onClick={clearApiKey}>
             Clear Key
+          </button>
+          <button onClick={checkApiKeyStatus}>
+            Check Key
           </button>
           <div className="hint">{llmStatus}</div>
         </div>
