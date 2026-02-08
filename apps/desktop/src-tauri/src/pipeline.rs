@@ -12,15 +12,6 @@ use serde_json::json;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize)]
-pub struct TaskEvent {
-    pub task_id: String,
-    pub stage: String,
-    pub status: String, // started|completed|failed
-    pub message: String,
-    pub elapsed_ms: Option<u128>,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct TranscribeResult {
     pub task_id: String,
     pub asr_text: String,
@@ -164,6 +155,195 @@ pub fn transcribe_with_python_runner(audio_wav: &Path, model_id: &str) -> Result
     Ok((text, rtf, device_used, t0.elapsed().as_millis()))
 }
 
+pub fn preprocess_to_temp_wav(task_id: &str, _input_audio: &Path) -> Result<PathBuf> {
+    let root = repo_root()?;
+    let tmp = root.join("tmp").join("desktop");
+    std::fs::create_dir_all(&tmp).ok();
+    Ok(tmp.join(format!("{task_id}.wav")))
+}
+
+pub fn cleanup_audio_artifacts(input_audio: &Path, wav_path: &Path) -> Result<()> {
+    // Default: do not persist audio artifacts.
+    let keep_audio = std::env::var("TYPEVOICE_KEEP_AUDIO").ok().as_deref() == Some("1");
+    if keep_audio {
+        return Ok(());
+    }
+
+    let root = repo_root()?;
+    let tmp = root.join("tmp").join("desktop");
+
+    let _ = std::fs::remove_file(wav_path);
+    // Only delete the original input if it's inside our temp dir.
+    if input_audio.starts_with(&tmp) {
+        let _ = std::fs::remove_file(input_audio);
+    }
+    Ok(())
+}
+
+pub fn resolve_asr_model_id(data_dir: &Path) -> Result<String> {
+    // Priority:
+    // 1) Settings in data dir
+    // 2) Local repo models/Qwen3-ASR-0.6B
+    // 3) Env override TYPEVOICE_ASR_MODEL
+    // 4) Default HF repo id
+    if let Ok(s) = crate::settings::load_settings(data_dir) {
+        if let Some(m) = s.asr_model {
+            if !m.trim().is_empty() {
+                return Ok(m);
+            }
+        }
+    }
+
+    let root = repo_root()?;
+    let local = root.join("models").join("Qwen3-ASR-0.6B");
+    if local.exists() {
+        return Ok(local.display().to_string());
+    }
+
+    if let Ok(m) = std::env::var("TYPEVOICE_ASR_MODEL") {
+        if !m.trim().is_empty() {
+            return Ok(m);
+        }
+    }
+
+    Ok("Qwen/Qwen3-ASR-0.6B".to_string())
+}
+
+pub fn transcribe_with_python_runner_cancellable(
+    audio_wav: &Path,
+    model_id: &str,
+    token: &tokio_util::sync::CancellationToken,
+    pid_slot: &std::sync::Arc<std::sync::Mutex<Option<u32>>>,
+) -> Result<(String, f64, String, u128)> {
+    let root = repo_root()?;
+    let py = default_python_path(&root);
+    let t0 = Instant::now();
+    let mut child = Command::new(py)
+        .current_dir(&root)
+        .env("PYTHONPATH", &root)
+        .args(["-m", "asr_runner.runner", "--model", model_id])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("failed to spawn asr runner")?;
+
+    let pid = child.id();
+    *pid_slot.lock().unwrap() = Some(pid);
+
+    if token.is_cancelled() {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(anyhow!("cancelled"));
+    }
+
+    let stdin = child.stdin.as_mut().ok_or_else(|| anyhow!("runner stdin missing"))?;
+    let req = json!({
+        "audio_path": audio_wav,
+        "language": "Chinese",
+        "device": "cuda",
+    });
+    stdin
+        .write_all(format!("{}\n", req.to_string()).as_bytes())
+        .context("failed to write runner request")?;
+    stdin.flush().ok();
+
+    let stdout = child.stdout.take().ok_or_else(|| anyhow!("runner stdout missing"))?;
+    let mut reader = BufReader::new(stdout);
+    let mut line = String::new();
+
+    // Poll cancellation while waiting for output.
+    loop {
+        if token.is_cancelled() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(anyhow!("cancelled"));
+        }
+        // read_line blocks; so we use try_wait on process + small sleep? Keep simple:
+        // attempt read_line once (will block) is not cancellable. To keep cancel <=300ms
+        // we rely on external kill by pid_slot in TaskManager.cancel().
+        break;
+    }
+
+    reader.read_line(&mut line).context("failed to read runner output")?;
+
+    // Ensure process stops.
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let v: serde_json::Value = serde_json::from_str(line.trim()).context("runner returned invalid json")?;
+    if v.get("ok").and_then(|x| x.as_bool()) != Some(true) {
+        let code = v
+            .get("error")
+            .and_then(|e| e.get("code"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("E_ASR_FAILED");
+        return Err(anyhow!("asr failed: {code}"));
+    }
+    let text = v
+        .get("text")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| anyhow!("runner missing text"))?
+        .to_string();
+    let metrics = v.get("metrics").ok_or_else(|| anyhow!("runner missing metrics"))?;
+    let rtf = metrics
+        .get("rtf")
+        .and_then(|x| x.as_f64())
+        .ok_or_else(|| anyhow!("runner missing rtf"))?;
+    let device_used = metrics
+        .get("device_used")
+        .and_then(|x| x.as_str())
+        .unwrap_or("cuda")
+        .to_string();
+    Ok((text, rtf, device_used, t0.elapsed().as_millis()))
+}
+
+pub fn preprocess_ffmpeg_cancellable(
+    input: &Path,
+    output: &Path,
+    token: &tokio_util::sync::CancellationToken,
+    pid_slot: &std::sync::Arc<std::sync::Mutex<Option<u32>>>,
+) -> Result<u128> {
+    let t0 = Instant::now();
+    let mut child = Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            input.to_str().ok_or_else(|| anyhow!("non-utf8 input path"))?,
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-vn",
+            output.to_str().ok_or_else(|| anyhow!("non-utf8 output path"))?,
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("ffmpeg preprocess failed to start")?;
+
+    *pid_slot.lock().unwrap() = Some(child.id());
+
+    loop {
+        if token.is_cancelled() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(anyhow!("cancelled"));
+        }
+        if let Some(status) = child.try_wait().context("ffmpeg try_wait failed")? {
+            if !status.success() {
+                return Err(anyhow!("ffmpeg preprocess failed: exit={status}"));
+            }
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    Ok(t0.elapsed().as_millis())
+}
+
 pub fn run_audio_pipeline_with_task_id(task_id: String, input_audio: &Path, model_id: &str) -> Result<TranscribeResult> {
     let root = repo_root()?;
     if !input_audio.exists() {
@@ -176,15 +356,7 @@ pub fn run_audio_pipeline_with_task_id(task_id: String, input_audio: &Path, mode
     let preprocess_ms = preprocess_ffmpeg(input_audio, &wav)?;
     let (text, rtf, device_used, asr_ms) = transcribe_with_python_runner(&wav, model_id)?;
 
-    // Default: do not persist audio artifacts.
-    let keep_audio = std::env::var("TYPEVOICE_KEEP_AUDIO").ok().as_deref() == Some("1");
-    if !keep_audio {
-        let _ = std::fs::remove_file(&wav);
-        // Only delete the original input if it's inside our temp dir.
-        if input_audio.starts_with(&tmp) {
-            let _ = std::fs::remove_file(input_audio);
-        }
-    }
+    let _ = cleanup_audio_artifacts(input_audio, &wav);
 
     Ok(TranscribeResult {
         task_id,
@@ -201,6 +373,4 @@ pub fn run_fixture_pipeline(fixture_name: &str) -> Result<TranscribeResult> {
     run_audio_pipeline_with_task_id(Uuid::new_v4().to_string(), &input, "Qwen/Qwen3-ASR-0.6B")
 }
 
-pub fn run_audio_pipeline(input_audio: &Path, model_id: &str) -> Result<TranscribeResult> {
-    run_audio_pipeline_with_task_id(Uuid::new_v4().to_string(), input_audio, model_id)
-}
+// Intentionally no generic "run_audio_pipeline" helper to keep call sites explicit.

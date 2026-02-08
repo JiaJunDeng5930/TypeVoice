@@ -1,4 +1,8 @@
-use std::{fs, path::{Path, PathBuf}};
+use std::{
+    collections::HashMap,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -82,3 +86,44 @@ pub fn get_template(data_dir: &Path, id: &str) -> Result<PromptTemplate> {
         .ok_or_else(|| anyhow!("template not found: {id}"))
 }
 
+pub fn export_templates_json(data_dir: &Path) -> Result<String> {
+    let all = load_templates(data_dir)?;
+    serde_json::to_string_pretty(&all).context("serialize templates export failed")
+}
+
+pub fn import_templates_json(data_dir: &Path, json_str: &str, mode: &str) -> Result<usize> {
+    let incoming: Vec<PromptTemplate> = serde_json::from_str(json_str).context("parse templates json failed")?;
+    let mut normalized = Vec::with_capacity(incoming.len());
+    for mut t in incoming {
+        if t.name.trim().is_empty() {
+            return Err(anyhow!("template name is required"));
+        }
+        if t.system_prompt.trim().is_empty() {
+            return Err(anyhow!("system_prompt is required"));
+        }
+        if t.id.trim().is_empty() {
+            t.id = Uuid::new_v4().to_string();
+        }
+        normalized.push(t);
+    }
+
+    match mode {
+        "replace" => {
+            save_templates(data_dir, &normalized)?;
+            Ok(normalized.len())
+        }
+        "merge" => {
+            let existing = load_templates(data_dir)?;
+            let mut merged: HashMap<String, PromptTemplate> =
+                existing.into_iter().map(|t| (t.id.clone(), t)).collect();
+            for t in normalized.into_iter() {
+                merged.insert(t.id.clone(), t);
+            }
+            let mut out: Vec<PromptTemplate> = merged.into_values().collect();
+            out.sort_by(|a, b| a.id.cmp(&b.id));
+            save_templates(data_dir, &out)?;
+            Ok(out.len())
+        }
+        _ => Err(anyhow!("invalid import mode (expected 'merge' or 'replace')")),
+    }
+}

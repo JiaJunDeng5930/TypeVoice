@@ -3,10 +3,17 @@ mod data_dir;
 mod templates;
 mod llm;
 mod history;
+mod metrics;
+mod settings;
+mod model;
+mod task_manager;
 
 use pipeline::TranscribeResult;
 use templates::PromptTemplate;
 use history::HistoryItem;
+use settings::Settings;
+use model::ModelStatus;
+use task_manager::TaskManager;
 
 #[tauri::command]
 fn transcribe_fixture(fixture_name: &str) -> Result<TranscribeResult, String> {
@@ -18,6 +25,53 @@ fn transcribe_recording_base64(b64: &str, ext: &str) -> Result<TranscribeResult,
     let task_id = uuid::Uuid::new_v4().to_string();
     let input = pipeline::save_base64_file(&task_id, b64, ext).map_err(|e| e.to_string())?;
     pipeline::run_audio_pipeline_with_task_id(task_id, &input, "Qwen/Qwen3-ASR-0.6B").map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn start_transcribe_fixture(
+    app: tauri::AppHandle,
+    state: tauri::State<TaskManager>,
+    fixture_name: &str,
+    rewrite_enabled: bool,
+    template_id: Option<String>,
+) -> Result<String, String> {
+    state
+        .start_fixture(
+            app,
+            fixture_name.to_string(),
+            task_manager::StartOpts {
+                rewrite_enabled,
+                template_id,
+            },
+        )
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn start_transcribe_recording_base64(
+    app: tauri::AppHandle,
+    state: tauri::State<TaskManager>,
+    b64: &str,
+    ext: &str,
+    rewrite_enabled: bool,
+    template_id: Option<String>,
+) -> Result<String, String> {
+    state
+        .start_recording_base64(
+            app,
+            b64.to_string(),
+            ext.to_string(),
+            task_manager::StartOpts {
+                rewrite_enabled,
+                template_id,
+            },
+        )
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn cancel_task(state: tauri::State<TaskManager>, task_id: &str) -> Result<(), String> {
+    state.cancel(task_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -36,6 +90,18 @@ fn upsert_template(tpl: PromptTemplate) -> Result<PromptTemplate, String> {
 fn delete_template(id: &str) -> Result<(), String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     templates::delete_template(&dir, id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn templates_export_json() -> Result<String, String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    templates::export_templates_json(&dir).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn templates_import_json(json: &str, mode: &str) -> Result<usize, String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    templates::import_templates_json(&dir, json, mode).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -81,22 +147,85 @@ fn history_clear() -> Result<(), String> {
     history::clear(&db).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn get_settings() -> Result<Settings, String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    settings::load_settings(&dir).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_settings(s: Settings) -> Result<(), String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    settings::save_settings(&dir, &s).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn asr_model_status() -> Result<ModelStatus, String> {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .ok_or_else(|| "repo root not found".to_string())?
+        .to_path_buf();
+    let model_dir = model::default_model_dir(&root);
+    model::verify_model_dir(&model_dir).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn download_asr_model() -> Result<ModelStatus, String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .ok_or_else(|| "repo root not found".to_string())?
+        .to_path_buf();
+    let model_dir = model::default_model_dir(&root);
+    let py = if cfg!(windows) {
+        root.join(".venv").join("Scripts").join("python.exe")
+    } else {
+        root.join(".venv").join("bin").join("python")
+    };
+    let root2 = root.clone();
+    let py2 = py.clone();
+    let model_dir2 = model_dir.clone();
+    let st = tauri::async_runtime::spawn_blocking(move || model::download_model(&root2, &py2, &model_dir2))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    // Set settings.asr_model to local dir if ok.
+    if st.ok {
+        let mut s = settings::load_settings(&dir).unwrap_or_default();
+        s.asr_model = Some(model_dir.display().to_string());
+        let _ = settings::save_settings(&dir, &s);
+    }
+    Ok(st)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(TaskManager::new())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             transcribe_fixture,
             transcribe_recording_base64,
+            start_transcribe_fixture,
+            start_transcribe_recording_base64,
+            cancel_task,
             list_templates,
             upsert_template,
             delete_template,
+            templates_export_json,
+            templates_import_json,
             rewrite_text,
             set_llm_api_key,
             clear_llm_api_key,
             history_append,
             history_list,
-            history_clear
+            history_clear,
+            get_settings,
+            set_settings,
+            asr_model_status,
+            download_asr_model
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
