@@ -176,6 +176,16 @@ pub fn run_audio_pipeline_with_task_id(task_id: String, input_audio: &Path, mode
     let preprocess_ms = preprocess_ffmpeg(input_audio, &wav)?;
     let (text, rtf, device_used, asr_ms) = transcribe_with_python_runner(&wav, model_id)?;
 
+    // Default: do not persist audio artifacts.
+    let keep_audio = std::env::var("TYPEVOICE_KEEP_AUDIO").ok().as_deref() == Some("1");
+    if !keep_audio {
+        let _ = std::fs::remove_file(&wav);
+        // Only delete the original input if it's inside our temp dir.
+        if input_audio.starts_with(&tmp) {
+            let _ = std::fs::remove_file(input_audio);
+        }
+    }
+
     Ok(TranscribeResult {
         task_id,
         asr_text: text,
