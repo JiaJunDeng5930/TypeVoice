@@ -9,13 +9,13 @@ mod task_manager;
 mod templates;
 
 use history::HistoryItem;
+use llm::ApiKeyStatus;
 use model::ModelStatus;
 use pipeline::TranscribeResult;
 use settings::Settings;
 use settings::SettingsPatch;
 use task_manager::TaskManager;
 use templates::PromptTemplate;
-use llm::ApiKeyStatus;
 
 #[tauri::command]
 fn transcribe_fixture(fixture_name: &str) -> Result<TranscribeResult, String> {
@@ -31,9 +31,9 @@ fn transcribe_recording_base64(b64: &str, ext: &str) -> Result<TranscribeResult,
 }
 
 #[tauri::command]
-fn start_transcribe_fixture(
+async fn start_transcribe_fixture(
     app: tauri::AppHandle,
-    state: tauri::State<TaskManager>,
+    state: tauri::State<'_, TaskManager>,
     fixture_name: &str,
     rewrite_enabled: bool,
     template_id: Option<String>,
@@ -51,9 +51,9 @@ fn start_transcribe_fixture(
 }
 
 #[tauri::command]
-fn start_transcribe_recording_base64(
+async fn start_transcribe_recording_base64(
     app: tauri::AppHandle,
-    state: tauri::State<TaskManager>,
+    state: tauri::State<'_, TaskManager>,
     b64: &str,
     ext: &str,
     rewrite_enabled: bool,

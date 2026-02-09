@@ -130,7 +130,9 @@ pub fn clear_api_key() -> Result<()> {
         .map_err(|e| anyhow!("keyring entry init failed: {e:?}"))?;
     // keyring v3 does not expose a cross-platform delete API. We overwrite with
     // an empty password and treat empty as "not configured".
-    let _ = entry.set_password("").map_err(|e| anyhow!("keyring set failed: {e:?}"));
+    let _ = entry
+        .set_password("")
+        .map_err(|e| anyhow!("keyring set failed: {e:?}"));
     Ok(())
 }
 
@@ -237,8 +239,8 @@ pub async fn rewrite(
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_base_url;
     use super::api_key_status;
+    use super::normalize_base_url;
 
     #[test]
     fn normalize_base_url_handles_empty_and_endpoint_suffix() {
