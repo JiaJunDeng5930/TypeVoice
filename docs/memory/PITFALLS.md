@@ -39,6 +39,12 @@ VERIFIED（2026-02-09，代码审阅）
 - 确保任何失败路径都 emit `task_event(status=failed, error_code=...)` 或 `task_event(status=cancelled, ...)`；
 - Rewrite 相关失败要在 Rewrite 阶段内部降级回 ASR 原文（emit `failed` 但不中断）。
 
+更正（2026-02-09）
+
+VERIFIED
+
+- 已修复：TaskManager 顶层 Err 现在会 fail-safe emit `task_event`，且 Rewrite 模板读取失败不再导致“无事件退出”。修复 commit：`d3de362`。
+
 ## MVP 取消不可达：UI 未接入 cancel_task
 
 VERIFIED（2026-02-09，代码审阅）
@@ -52,3 +58,9 @@ VERIFIED（2026-02-09，代码审阅）
 - 处理方式（修复方向）：
 - UI 增加 Cancel 按钮或允许再次点击主按钮触发 `cancel_task`；
 - Cancel 后应在 <=300ms 内 UI 明确显示“已取消”，并确保后端停止 ffmpeg/asr runner。
+
+更正（2026-02-09）
+
+VERIFIED
+
+- 已修复：转录中点击主按钮触发 `cancel_task`，并有“CANCELLING...”提示与 `task_event(status=cancelled)` 处理。修复 commit：`d3de362`。

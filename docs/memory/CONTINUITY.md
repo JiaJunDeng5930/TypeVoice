@@ -47,6 +47,21 @@ UNCONFIRMED（需要在 Windows 打包/运行环境或 full gate 进一步验证
 - ffmpeg 内置定位方案（Tauri bundle resources 路径、命名与许可）如何实现与验收。
 - `verify_full` 在当前机器是否可通过（GPU/fixtures/模型安装齐备时）。
 
+## Fixes Applied（2026-02-09）
+
+VERIFIED（已合并到 git main，且本机通过：`cargo test`、`pytest`、`npm run build`）
+
+- P0：UI 已接入取消任务（转录中点击主按钮触发取消，取消中禁用重复操作）。
+- P0：TaskManager 顶层 Err 现在会发出 fail-safe `task_event`，避免 UI 卡死；Rewrite 模板读取失败不再导致整个任务无事件退出。
+- P1：FFmpeg 预处理失败现在携带 stderr 摘要；错误码映射为 `E_FFMPEG_NOT_FOUND`/`E_FFMPEG_FAILED`（否则 `E_PREPROCESS_FAILED`），并支持 env 覆盖 `TYPEVOICE_FFMPEG`/`TYPEVOICE_FFPROBE`。
+- P1：模型下载脚本写入 `REVISION.txt` 与 `manifest.json`；Rust 侧 `asr_model_status` 会校验 manifest 并返回 `model_version`；ASR Runner 会在 metrics 中填充 `model_version`（本地目录模型）。
+- P2：metrics 落盘不再吞 I/O 错误（改为传播，并在 emit 处记录 stderr）；LLM 失败 body 截断；settings 解析失败会自动备份 `settings.json` 并恢复默认值而非静默吞掉。
+
+Commit References（VERIFIED）
+
+- `d3de362`：`fix(core): enable cancel and harden task pipeline`
+- `518fe18`：`feat(model): add manifest and version metadata`
+
 UNCONFIRMED
 
 - `verify_quick` / `verify_full` 是否在本机当前环境可直接通过（本回合未执行）。
