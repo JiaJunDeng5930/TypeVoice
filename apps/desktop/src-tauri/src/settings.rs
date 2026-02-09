@@ -70,8 +70,44 @@ pub fn load_settings(data_dir: &Path) -> Result<Settings> {
     Ok(v)
 }
 
+fn now_ms() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+pub fn load_settings_or_recover(data_dir: &Path) -> Settings {
+    match load_settings(data_dir) {
+        Ok(s) => s,
+        Err(e) => {
+            let p = settings_path(data_dir);
+            if p.exists() {
+                let backup = data_dir.join(format!("settings.json.corrupt.{}", now_ms()));
+                if let Err(re) = fs::rename(&p, &backup) {
+                    eprintln!(
+                        "settings.json corrupt, and failed to back it up (src={}, dst={}): {re:#}",
+                        p.display(),
+                        backup.display()
+                    );
+                } else {
+                    eprintln!(
+                        "settings.json corrupt; moved to {} (error: {:#})",
+                        backup.display(),
+                        e
+                    );
+                }
+            } else {
+                eprintln!("settings load failed (missing file): {e:#}");
+            }
+            Settings::default()
+        }
+    }
+}
+
 pub fn save_settings(data_dir: &Path, settings: &Settings) -> Result<()> {
-    std::fs::create_dir_all(data_dir).ok();
+    std::fs::create_dir_all(data_dir).context("create data dir failed")?;
     let p = settings_path(data_dir);
     let s = serde_json::to_string_pretty(settings).context("serialize settings failed")?;
     fs::write(&p, s).context("write settings.json failed")?;

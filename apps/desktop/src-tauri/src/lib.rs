@@ -158,7 +158,7 @@ fn history_clear() -> Result<(), String> {
 #[tauri::command]
 fn get_settings() -> Result<Settings, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    settings::load_settings(&dir).map_err(|e| e.to_string())
+    Ok(settings::load_settings_or_recover(&dir))
 }
 
 #[tauri::command]
@@ -170,7 +170,7 @@ fn set_settings(s: Settings) -> Result<(), String> {
 #[tauri::command]
 fn update_settings(patch: SettingsPatch) -> Result<Settings, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let cur = settings::load_settings(&dir).unwrap_or_default();
+    let cur = settings::load_settings_or_recover(&dir);
     let next = settings::apply_patch(cur, patch);
     settings::save_settings(&dir, &next).map_err(|e| e.to_string())?;
     Ok(next)
@@ -212,7 +212,7 @@ async fn download_asr_model() -> Result<ModelStatus, String> {
     .map_err(|e| e.to_string())?;
     // Set settings.asr_model to local dir if ok.
     if st.ok {
-        let mut s = settings::load_settings(&dir).unwrap_or_default();
+        let mut s = settings::load_settings_or_recover(&dir);
         s.asr_model = Some(model_dir.display().to_string());
         let _ = settings::save_settings(&dir, &s);
     }

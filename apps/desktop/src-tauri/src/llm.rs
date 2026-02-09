@@ -75,7 +75,7 @@ fn normalize_reasoning_effort(s: &str) -> Option<String> {
 }
 
 pub fn load_config(data_dir: &std::path::Path) -> LlmConfig {
-    let s = settings::load_settings(data_dir).unwrap_or_default();
+    let s = settings::load_settings_or_recover(data_dir);
 
     let base_url = s
         .llm_base_url
@@ -219,6 +219,11 @@ pub async fn rewrite(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
+        let body = if body.len() > 1024 {
+            format!("{}...(truncated)", &body[..1024])
+        } else {
+            body
+        };
         return Err(anyhow!("llm http {status}: {body}"));
     }
 

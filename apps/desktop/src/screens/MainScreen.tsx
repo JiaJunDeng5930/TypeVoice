@@ -6,7 +6,7 @@ import { copyText } from "../lib/clipboard";
 import type { HistoryItem, Settings, TaskDone, TaskEvent } from "../types";
 import { IconStart, IconStop, IconTranscribing } from "../ui/icons";
 
-type UiState = "idle" | "recording" | "transcribing";
+type UiState = "idle" | "recording" | "transcribing" | "cancelling";
 
 type Props = {
   settings: Settings | null;
@@ -35,7 +35,8 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
   const hint = useMemo(() => {
     if (ui === "idle") return "START";
     if (ui === "recording") return "STOP";
-    return "TRANSCRIBING";
+    if (ui === "cancelling") return "CANCELLING";
+    return "CANCEL";
   }, [ui]);
 
   useEffect(() => {
@@ -88,6 +89,9 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
           activeTaskIdRef.current = "";
           setUi("idle");
           pushToast("ERROR", "danger");
+        }
+        if (ev.status === "failed" && ev.stage === "Rewrite") {
+          pushToast("REWRITE FAILED", "danger");
         }
         if (ev.status === "cancelled") {
           activeTaskIdRef.current = "";
@@ -172,9 +176,23 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
     }
   }
 
+  async function cancelActiveTask() {
+    const id = activeTaskIdRef.current;
+    if (!id) return;
+    setUi("cancelling");
+    try {
+      await invoke("cancel_task", { taskId: id });
+      pushToast("CANCELLING...", "default");
+    } catch {
+      setUi("transcribing");
+      pushToast("CANCEL FAILED", "danger");
+    }
+  }
+
   async function onMainButtonClick() {
     if (ui === "idle") return startRecording();
     if (ui === "recording") return stopAndTranscribe();
+    if (ui === "transcribing") return cancelActiveTask();
   }
 
   async function copyLast() {
@@ -192,9 +210,9 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
       <div className="mainCenter">
         <button
           type="button"
-          className={`mainButton ${ui === "transcribing" ? "isBusy" : ""}`}
+          className={`mainButton ${ui === "transcribing" || ui === "cancelling" ? "isBusy" : ""}`}
           onClick={onMainButtonClick}
-          disabled={ui === "transcribing"}
+          disabled={ui === "cancelling"}
           onMouseEnter={() => setHover(true)}
           onMouseLeave={() => setHover(false)}
           onFocus={() => setHover(true)}
@@ -205,6 +223,8 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
           {ui === "idle" ? (
             <IconStart size={84} tone="accent" />
           ) : ui === "recording" ? (
+            <IconStop size={84} tone="accent" />
+          ) : ui === "cancelling" ? (
             <IconStop size={84} tone="accent" />
           ) : (
             <IconTranscribing size={84} tone="accent" />

@@ -135,9 +135,36 @@ impl TaskManager {
             match rt {
                 Ok(rt) => {
                     rt.block_on(async move {
-                        let _ = this
-                            .run_pipeline(app, task_id.clone(), input, opts, &record_msg)
+                        let res = this
+                            .run_pipeline(app.clone(), task_id.clone(), input, opts, &record_msg)
                             .await;
+                        if let Err(e) = res {
+                            // Fail-safe: ensure the UI always gets a terminal event.
+                            let maybe_dir = data_dir::data_dir().ok();
+                            if let Some(dir) = maybe_dir {
+                                emit_failed(
+                                    &app,
+                                    &dir,
+                                    &task_id,
+                                    "Internal",
+                                    None,
+                                    "E_INTERNAL",
+                                    &e.to_string(),
+                                );
+                            } else {
+                                let _ = app.emit(
+                                    "task_event",
+                                    TaskEvent {
+                                        task_id: task_id.clone(),
+                                        stage: "Internal".to_string(),
+                                        status: "failed".to_string(),
+                                        message: e.to_string(),
+                                        elapsed_ms: None,
+                                        error_code: Some("E_INTERNAL".to_string()),
+                                    },
+                                );
+                            }
+                        }
                         let mut g = this.inner.lock().unwrap();
                         *g = None;
                     });
@@ -227,14 +254,22 @@ impl TaskManager {
                         let _ = pipeline::cleanup_audio_artifacts(&input, &wav_path);
                         return Ok(());
                     }
+                    let msg = e.to_string();
+                    let code = if msg.contains("E_FFMPEG_NOT_FOUND") {
+                        "E_FFMPEG_NOT_FOUND"
+                    } else if msg.contains("E_FFMPEG_FAILED") {
+                        "E_FFMPEG_FAILED"
+                    } else {
+                        "E_PREPROCESS_FAILED"
+                    };
                     emit_failed(
                         &app,
                         &data_dir,
                         &task_id,
                         "Preprocess",
                         None,
-                        "E_PREPROCESS_FAILED",
-                        &e.to_string(),
+                        code,
+                        &msg,
                     );
                     let _ = pipeline::cleanup_audio_artifacts(&input, &wav_path);
                     return Ok(());
@@ -343,34 +378,9 @@ impl TaskManager {
                 template_id = Some(tid.clone());
                 emit_started(&app, &data_dir, &task_id, "Rewrite", "llm");
                 let t0 = Instant::now();
-                let tpl = templates::get_template(&data_dir, &tid)?;
-                let token = {
-                    let g = self.inner.lock().unwrap();
-                    g.as_ref().unwrap().token.clone()
-                };
-                let rewrite_res = tokio::select! {
-                    _ = token.cancelled() => Err(anyhow!("cancelled")),
-                    r = llm::rewrite(&data_dir, &tpl.system_prompt, &asr_text) => r,
-                };
-                match rewrite_res {
-                    Ok(txt) => {
-                        final_text = txt;
-                        rewrite_ms = Some(t0.elapsed().as_millis());
-                        emit_completed(
-                            &app,
-                            &data_dir,
-                            &task_id,
-                            "Rewrite",
-                            rewrite_ms.unwrap(),
-                            "ok",
-                        );
-                    }
+                let tpl = match templates::get_template(&data_dir, &tid) {
+                    Ok(t) => Some(t),
                     Err(e) => {
-                        if is_cancelled_err(&e) || is_cancelled(&self.inner, &task_id) {
-                            emit_cancelled(&app, &data_dir, &task_id, "Rewrite");
-                            return Ok(());
-                        }
-                        // fallback to asr_text
                         rewrite_ms = Some(t0.elapsed().as_millis());
                         emit_failed(
                             &app,
@@ -378,9 +388,51 @@ impl TaskManager {
                             &task_id,
                             "Rewrite",
                             rewrite_ms,
-                            "E_LLM_FAILED",
+                            "E_TEMPLATE_NOT_FOUND",
                             &e.to_string(),
                         );
+                        None
+                    }
+                };
+                if let Some(tpl) = tpl {
+                    let token = {
+                        let g = self.inner.lock().unwrap();
+                        g.as_ref().unwrap().token.clone()
+                    };
+                    let rewrite_res = tokio::select! {
+                        _ = token.cancelled() => Err(anyhow!("cancelled")),
+                        r = llm::rewrite(&data_dir, &tpl.system_prompt, &asr_text) => r,
+                    };
+                    match rewrite_res {
+                        Ok(txt) => {
+                            final_text = txt;
+                            rewrite_ms = Some(t0.elapsed().as_millis());
+                            emit_completed(
+                                &app,
+                                &data_dir,
+                                &task_id,
+                                "Rewrite",
+                                rewrite_ms.unwrap(),
+                                "ok",
+                            );
+                        }
+                        Err(e) => {
+                            if is_cancelled_err(&e) || is_cancelled(&self.inner, &task_id) {
+                                emit_cancelled(&app, &data_dir, &task_id, "Rewrite");
+                                return Ok(());
+                            }
+                            // fallback to asr_text
+                            rewrite_ms = Some(t0.elapsed().as_millis());
+                            emit_failed(
+                                &app,
+                                &data_dir,
+                                &task_id,
+                                "Rewrite",
+                                rewrite_ms,
+                                "E_LLM_FAILED",
+                                &e.to_string(),
+                            );
+                        }
                     }
                 }
             }
@@ -448,10 +500,12 @@ impl TaskManager {
             template_id,
         };
         let _ = app.emit("task_done", done.clone());
-        let _ = metrics::append_jsonl(
+        if let Err(e) = metrics::append_jsonl(
             &data_dir,
             &json!({"type":"task_done","task_id":task_id,"rtf":done.rtf,"device":done.device_used}),
-        );
+        ) {
+            eprintln!("metrics append failed (task_done): {e:#}");
+        }
         Ok(())
     }
 }
@@ -542,10 +596,12 @@ fn emit_cancelled(app: &AppHandle, data_dir: &Path, task_id: &str, stage: &str) 
 
 fn emit_event(app: &AppHandle, data_dir: &Path, ev: TaskEvent) {
     let _ = app.emit("task_event", ev.clone());
-    let _ = metrics::append_jsonl(
+    if let Err(e) = metrics::append_jsonl(
         data_dir,
         &json!({"type":"task_event", "task_id":ev.task_id, "stage":ev.stage, "status":ev.status, "elapsed_ms":ev.elapsed_ms, "error_code":ev.error_code, "message":ev.message}),
-    );
+    ) {
+        eprintln!("metrics append failed (task_event): {e:#}");
+    }
 }
 
 fn is_cancelled(inner: &Arc<Mutex<Option<ActiveTask>>>, task_id: &str) -> bool {

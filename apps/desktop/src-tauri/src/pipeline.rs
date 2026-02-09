@@ -1,5 +1,5 @@
 use std::{
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::Instant,
@@ -10,6 +10,8 @@ use base64::Engine;
 use serde::Serialize;
 use serde_json::json;
 use uuid::Uuid;
+
+const MAX_TOOL_STDERR_BYTES: usize = 4096;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TranscribeResult {
@@ -46,6 +48,53 @@ fn default_python_path(root: &Path) -> PathBuf {
     }
 }
 
+fn resolve_tool_path(env_key: &str, candidate_file: &str, fallback: &str) -> String {
+    if let Ok(p) = std::env::var(env_key) {
+        let t = p.trim();
+        if !t.is_empty() {
+            return t.to_string();
+        }
+    }
+
+    // In packaged apps it's common to place helper binaries next to the main executable.
+    if cfg!(windows) {
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                let cand = dir.join(candidate_file);
+                if cand.exists() {
+                    return cand.display().to_string();
+                }
+            }
+        }
+    }
+
+    fallback.to_string()
+}
+
+fn ffmpeg_cmd() -> String {
+    resolve_tool_path("TYPEVOICE_FFMPEG", "ffmpeg.exe", "ffmpeg")
+}
+
+fn ffprobe_cmd() -> String {
+    resolve_tool_path("TYPEVOICE_FFPROBE", "ffprobe.exe", "ffprobe")
+}
+
+fn truncate_stderr_bytes(mut b: Vec<u8>) -> Vec<u8> {
+    if b.len() > MAX_TOOL_STDERR_BYTES {
+        b.truncate(MAX_TOOL_STDERR_BYTES);
+    }
+    b
+}
+
+fn stderr_excerpt_from_child(mut stderr: Option<std::process::ChildStderr>) -> String {
+    let mut buf = Vec::new();
+    if let Some(ref mut s) = stderr {
+        let _ = s.read_to_end(&mut buf);
+    }
+    let buf = truncate_stderr_bytes(buf);
+    String::from_utf8_lossy(&buf).trim().to_string()
+}
+
 pub fn fixture_path(name: &str) -> Result<PathBuf> {
     let root = repo_root()?;
     Ok(root.join("fixtures").join(name))
@@ -67,7 +116,8 @@ pub fn save_base64_file(task_id: &str, b64: &str, ext: &str) -> Result<PathBuf> 
 
 pub fn preprocess_ffmpeg(input: &Path, output: &Path) -> Result<u128> {
     let t0 = Instant::now();
-    let status = Command::new("ffmpeg")
+    let cmd = ffmpeg_cmd();
+    let out = Command::new(&cmd)
         .args([
             "-y",
             "-hide_banner",
@@ -86,10 +136,25 @@ pub fn preprocess_ffmpeg(input: &Path, output: &Path) -> Result<u128> {
                 .to_str()
                 .ok_or_else(|| anyhow!("non-utf8 output path"))?,
         ])
-        .status()
-        .context("ffmpeg preprocess failed to start")?;
-    if !status.success() {
-        return Err(anyhow!("ffmpeg preprocess failed: exit={status}"));
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                anyhow!("E_FFMPEG_NOT_FOUND: ffmpeg not found (cmd={cmd})")
+            } else {
+                anyhow!("E_FFMPEG_FAILED: failed to start ffmpeg (cmd={cmd}): {e}")
+            }
+        })?;
+    if !out.status.success() {
+        let mut stderr = out.stderr;
+        stderr = truncate_stderr_bytes(stderr);
+        let excerpt = String::from_utf8_lossy(&stderr).trim().to_string();
+        return Err(anyhow!(
+            "E_FFMPEG_FAILED: ffmpeg preprocess failed: exit={} stderr={}",
+            out.status,
+            excerpt
+        ));
     }
     Ok(t0.elapsed().as_millis())
 }
@@ -104,6 +169,7 @@ pub fn transcribe_with_python_runner(
     let mut child = Command::new(py)
         .current_dir(&root)
         .env("PYTHONPATH", &root)
+        .env("TYPEVOICE_FFPROBE", ffprobe_cmd())
         .args(["-m", "asr_runner.runner", "--model", model_id])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -133,7 +199,11 @@ pub fn transcribe_with_python_runner(
     let mut line = String::new();
     reader
         .read_line(&mut line)
-        .context("failed to read runner output")?;
+        .map_err(|e| {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow!("failed to read runner output: {e}")
+        })?;
 
     // Try to exit quickly.
     let _ = child.kill();
@@ -235,6 +305,8 @@ pub fn transcribe_with_python_runner_cancellable(
     let mut child = Command::new(py)
         .current_dir(&root)
         .env("PYTHONPATH", &root)
+        // If the app bundles ffprobe, provide its location to the runner.
+        .env("TYPEVOICE_FFPROBE", ffprobe_cmd())
         .args(["-m", "asr_runner.runner", "--model", model_id])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -248,6 +320,7 @@ pub fn transcribe_with_python_runner_cancellable(
     if token.is_cancelled() {
         let _ = child.kill();
         let _ = child.wait();
+        *pid_slot.lock().unwrap() = None;
         return Err(anyhow!("cancelled"));
     }
 
@@ -277,6 +350,7 @@ pub fn transcribe_with_python_runner_cancellable(
         if token.is_cancelled() {
             let _ = child.kill();
             let _ = child.wait();
+            *pid_slot.lock().unwrap() = None;
             return Err(anyhow!("cancelled"));
         }
         // read_line blocks; so we use try_wait on process + small sleep? Keep simple:
@@ -287,11 +361,17 @@ pub fn transcribe_with_python_runner_cancellable(
 
     reader
         .read_line(&mut line)
-        .context("failed to read runner output")?;
+        .map_err(|e| {
+            let _ = child.kill();
+            let _ = child.wait();
+            *pid_slot.lock().unwrap() = None;
+            anyhow!("failed to read runner output: {e}")
+        })?;
 
     // Ensure process stops.
     let _ = child.kill();
     let _ = child.wait();
+    *pid_slot.lock().unwrap() = None;
 
     let v: serde_json::Value =
         serde_json::from_str(line.trim()).context("runner returned invalid json")?;
@@ -330,7 +410,8 @@ pub fn preprocess_ffmpeg_cancellable(
     pid_slot: &std::sync::Arc<std::sync::Mutex<Option<u32>>>,
 ) -> Result<u128> {
     let t0 = Instant::now();
-    let mut child = Command::new("ffmpeg")
+    let cmd = ffmpeg_cmd();
+    let mut child = Command::new(&cmd)
         .args([
             "-y",
             "-hide_banner",
@@ -350,9 +431,15 @@ pub fn preprocess_ffmpeg_cancellable(
                 .ok_or_else(|| anyhow!("non-utf8 output path"))?,
         ])
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
-        .context("ffmpeg preprocess failed to start")?;
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                anyhow!("E_FFMPEG_NOT_FOUND: ffmpeg not found (cmd={cmd})")
+            } else {
+                anyhow!("E_FFMPEG_FAILED: failed to start ffmpeg (cmd={cmd}): {e}")
+            }
+        })?;
 
     *pid_slot.lock().unwrap() = Some(child.id());
 
@@ -360,16 +447,26 @@ pub fn preprocess_ffmpeg_cancellable(
         if token.is_cancelled() {
             let _ = child.kill();
             let _ = child.wait();
+            *pid_slot.lock().unwrap() = None;
             return Err(anyhow!("cancelled"));
         }
         if let Some(status) = child.try_wait().context("ffmpeg try_wait failed")? {
             if !status.success() {
-                return Err(anyhow!("ffmpeg preprocess failed: exit={status}"));
+                let excerpt = stderr_excerpt_from_child(child.stderr.take());
+                *pid_slot.lock().unwrap() = None;
+                return Err(anyhow!(
+                    "E_FFMPEG_FAILED: ffmpeg preprocess failed: exit={} stderr={}",
+                    status,
+                    excerpt
+                ));
             }
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
+    // Drain stderr on success too, to avoid holding OS pipes unnecessarily.
+    let _ = stderr_excerpt_from_child(child.stderr.take());
+    *pid_slot.lock().unwrap() = None;
     Ok(t0.elapsed().as_millis())
 }
 

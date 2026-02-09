@@ -52,9 +52,10 @@ def append_jsonl(path: str, obj: dict[str, Any]) -> None:
 
 
 def ffprobe_duration_seconds(path: str) -> float:
+    ffprobe = os.environ.get("TYPEVOICE_FFPROBE", "").strip() or "ffprobe"
     out = subprocess.check_output(
         [
-            "ffprobe",
+            ffprobe,
             "-v",
             "error",
             "-show_entries",
@@ -70,10 +71,11 @@ def ffprobe_duration_seconds(path: str) -> float:
 
 def ffmpeg_preprocess_to_wav(input_path: str, output_path: str) -> int:
     """Convert audio to 16kHz mono PCM WAV. Returns elapsed ms."""
+    ffmpeg = os.environ.get("TYPEVOICE_FFMPEG", "").strip() or "ffmpeg"
     t0 = now_ms()
     subprocess.check_call(
         [
-            "ffmpeg",
+            ffmpeg,
             "-y",
             "-hide_banner",
             "-loglevel",
@@ -94,9 +96,10 @@ def ffmpeg_preprocess_to_wav(input_path: str, output_path: str) -> int:
 
 def cancel_ffmpeg_preprocess(input_path: str, output_path: str, delay_ms: int = 100) -> int:
     """Start ffmpeg preprocess then kill; return cancel latency in ms."""
+    ffmpeg = os.environ.get("TYPEVOICE_FFMPEG", "").strip() or "ffmpeg"
     proc = subprocess.Popen(
         [
-            "ffmpeg",
+            ffmpeg,
             "-y",
             "-hide_banner",
             "-loglevel",
