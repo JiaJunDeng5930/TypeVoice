@@ -56,11 +56,29 @@ class AsrMetrics:
 
 
 @dataclass(frozen=True)
+class AsrSegment:
+    index: int
+    start_sec: float
+    end_sec: float
+    duration_sec: float
+    text: str
+
+
+@dataclass(frozen=True)
+class AsrChunking:
+    enabled: bool
+    chunk_sec: float
+    num_segments: int
+
+
+@dataclass(frozen=True)
 class AsrResponse:
     ok: bool
     text: str | None = None
     metrics: AsrMetrics | None = None
     error: AsrError | None = None
+    segments: list[AsrSegment] | None = None
+    chunking: AsrChunking | None = None
 
 
 class _Terminated(Exception):
@@ -146,6 +164,7 @@ def _handle_request(model: Any, model_id: str, chunk_sec: float, req: dict[str, 
     audio_seconds = _ffprobe_duration_seconds(audio_path)
     t0 = _now_ms()
 
+    segments: list[AsrSegment] = []
     if audio_seconds > chunk_sec:
         # qwen-asr sets MAX_ASR_INPUT_SECONDS=1200 by default, so 5-minute audios
         # won't be split and may run close to realtime. We do an explicit chunking
@@ -156,11 +175,35 @@ def _handle_request(model: Any, model_id: str, chunk_sec: float, req: dict[str, 
         parts = split_audio_into_chunks(wav=wav, sr=SAMPLE_RATE, max_chunk_sec=float(chunk_sec))
         chunk_audio = [(cwav, SAMPLE_RATE) for (cwav, _offset_sec) in parts]
         results = model.transcribe(audio=chunk_audio, language=language)
-        text = "".join([getattr(r, "text", "") for r in results if getattr(r, "text", "") is not None])
+        for i, (cwav, offset_sec) in enumerate(parts):
+            t = getattr(results[i], "text", "") if i < len(results) else ""
+            # cwav is a 1-D waveform (array-like)
+            dur = float(len(cwav)) / float(SAMPLE_RATE) if SAMPLE_RATE else 0.0
+            start = float(offset_sec)
+            end = start + dur
+            segments.append(
+                AsrSegment(
+                    index=i,
+                    start_sec=start,
+                    end_sec=end,
+                    duration_sec=dur,
+                    text=str(t or ""),
+                )
+            )
+        text = "".join([s.text for s in segments if s.text is not None])
         if not text.strip():
             raise RuntimeError("Empty ASR text (chunked).")
     else:
         text = _transcribe(model, audio_path=audio_path, language=language)
+        segments.append(
+            AsrSegment(
+                index=0,
+                start_sec=0.0,
+                end_sec=float(audio_seconds),
+                duration_sec=float(audio_seconds),
+                text=text,
+            )
+        )
 
     t1 = _now_ms()
     elapsed_ms = t1 - t0
@@ -174,7 +217,12 @@ def _handle_request(model: Any, model_id: str, chunk_sec: float, req: dict[str, 
         model_id=model_id,
         model_version=_infer_model_version(model_id),
     )
-    return AsrResponse(ok=True, text=text, metrics=metrics)
+    chunking = AsrChunking(
+        enabled=bool(audio_seconds > chunk_sec),
+        chunk_sec=float(chunk_sec),
+        num_segments=len(segments),
+    )
+    return AsrResponse(ok=True, text=text, metrics=metrics, segments=segments, chunking=chunking)
 
 
 def _infer_model_version(model_id: str) -> str | None:
@@ -208,11 +256,17 @@ def main() -> int:
         action="store_true",
         help="Do not load model; only validate request/response protocol for unit tests.",
     )
+    parser.add_argument(
+        "--daemon",
+        action="store_true",
+        help="Load model once, emit a ready line, then handle multiple requests (JSONL).",
+    )
     args = parser.parse_args()
 
     _install_signal_handlers()
 
     model = None
+    t0 = _now_ms()
     if not args.protocol_only:
         # Load once, then handle multiple requests (JSONL).
         try:
@@ -227,6 +281,19 @@ def main() -> int:
             sys.stdout.write(json.dumps(asdict(resp), ensure_ascii=False) + "\n")
             sys.stdout.flush()
             return 2
+    t1 = _now_ms()
+
+    if args.daemon:
+        ready = {
+            "type": "asr_ready",
+            "ok": True,
+            "model_id": args.model,
+            "model_version": _infer_model_version(args.model),
+            "device_used": "cuda",
+            "warmup_ms": int(t1 - t0),
+        }
+        sys.stdout.write(json.dumps(ready, ensure_ascii=False) + "\n")
+        sys.stdout.flush()
 
     while True:
         try:
