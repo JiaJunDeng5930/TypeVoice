@@ -124,17 +124,31 @@ impl TaskManager {
         let this = self.clone();
         let record_msg = record_msg.to_string();
 
-        // In practice, the invoke handler thread may not have an active Tokio
-        // reactor. We detach into an OS thread and drive the async pipeline via
-        // Tauri's global runtime to avoid "no reactor running" panics.
+        // The invoke handler may execute on a thread without an active Tokio
+        // runtime/reactor. We detach into an OS thread and drive the async
+        // pipeline using a dedicated Tokio runtime to avoid "no reactor
+        // running" panics (panicking here aborts the process on Windows).
         std::thread::spawn(move || {
-            tauri::async_runtime::block_on(async move {
-                let _ = this
-                    .run_pipeline(app, task_id.clone(), input, opts, &record_msg)
-                    .await;
-                let mut g = this.inner.lock().unwrap();
-                *g = None;
-            });
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build();
+            match rt {
+                Ok(rt) => {
+                    rt.block_on(async move {
+                        let _ = this
+                            .run_pipeline(app, task_id.clone(), input, opts, &record_msg)
+                            .await;
+                        let mut g = this.inner.lock().unwrap();
+                        *g = None;
+                    });
+                }
+                Err(e) => {
+                    // Best-effort cleanup; we might not have a data_dir to emit metrics.
+                    eprintln!("failed to create tokio runtime for task {task_id}: {e}");
+                    let mut g = this.inner.lock().unwrap();
+                    *g = None;
+                }
+            }
         });
 
         Ok(active)
