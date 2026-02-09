@@ -97,7 +97,6 @@ Local-only artifacts (gitignored): `fixtures/` (audio), `models/` (downloaded mo
 对于这些文件，在符合上述要求时自行修改，不需要询问用户或者争取用户同意
 
 <!-- BEGIN AGENTS_MD_PROJECT_INDEX -->
-
 ```text
 [Project Index]|root:.
 |IMPORTANT: Prefer retrieval-led reasoning over pre-training-led reasoning for repository-specific behavior, structure, and APIs.
@@ -110,16 +109,17 @@ Local-only artifacts (gitignored): `fixtures/` (audio), `models/` (downloaded mo
 |scripts:{windows/,_verify_util.py,download_asr_model.py,verify_full.py,verify_quick.py}
 |tests:{test_asr_protocol.py}
 |apps/desktop:{.vscode/,public/,src-tauri/,src/,.gitignore,index.html,package-lock.json,package.json,README.md,tsconfig.json,tsconfig.node.json,vite.config.ts}
-|docs/memory:{CONTINUITY.md,PITFALLS.md,SPEC.md,USER_PREFS.md}
+|docs/memory:{CONTINUITY.md,DECISIONS.md,PITFALLS.md,SPEC.md,USER_PREFS.md}
 |scripts/windows:{windows_gate.ps1}
 |apps/desktop/public:{fonts/,tauri.svg,vite.svg}
 |apps/desktop/src:{assets/,lib/,screens/,styles/,ui/,App.tsx,main.tsx,types.ts,vite-env.d.ts}
-|apps/desktop/src-tauri:{capabilities/,gen/,icons/,src/,.gitignore,build.rs,Cargo.lock,Cargo.toml,tauri.conf.json}
+|apps/desktop/src-tauri:{.cargo/,capabilities/,gen/,icons/,src/,.gitignore,build.rs,Cargo.lock,Cargo.toml,tauri.conf.json}
 |apps/desktop/public/fonts:{OFL.txt,Silkscreen-Bold.ttf,Silkscreen-Regular.ttf}
+|apps/desktop/src-tauri/.cargo:{config.toml}
 |apps/desktop/src-tauri/capabilities:{default.json}
 |apps/desktop/src-tauri/gen:{schemas/}
 |apps/desktop/src-tauri/icons:{128x128.png,128x128@2x.png,32x32.png,icon.icns,icon.ico,icon.png,Square107x107Logo.png,Square142x142Logo.png,Square150x150Logo.png,Square284x284Logo.png,Square30x30Logo.png,Square310x310Logo.png,Square44x44Logo.png,Square71x71Logo.png,Square89x89Logo.png,StoreLogo.png}
-|apps/desktop/src-tauri/src:{data_dir.rs,history.rs,lib.rs,llm.rs,main.rs,metrics.rs,model.rs,pipeline.rs,settings.rs,task_manager.rs,templates.rs}
+|apps/desktop/src-tauri/src:{asr_service.rs,data_dir.rs,debug_log.rs,history.rs,lib.rs,llm.rs,main.rs,metrics.rs,model.rs,panic_log.rs,pipeline.rs,safe_print.rs,settings.rs,startup_trace.rs,task_manager.rs,templates.rs}
 |apps/desktop/src/assets:{react.svg}
 |apps/desktop/src/lib:{audio.ts,clipboard.ts}
 |apps/desktop/src/screens:{HistoryScreen.tsx,MainScreen.tsx,SettingsScreen.tsx}
@@ -127,5 +127,4 @@ Local-only artifacts (gitignored): `fixtures/` (audio), `models/` (downloaded mo
 |apps/desktop/src/ui:{icons.tsx,PixelButton.tsx,PixelDialog.tsx,PixelInput.tsx,PixelSelect.tsx,PixelTabs.tsx,PixelToast.tsx,PixelToggle.tsx}
 |apps/desktop/src-tauri/gen/schemas:{acl-manifests.json,capabilities.json,desktop-schema.json,linux-schema.json}
 ```
-
 <!-- END AGENTS_MD_PROJECT_INDEX -->
