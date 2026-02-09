@@ -7,6 +7,7 @@ mod metrics;
 mod model;
 mod pipeline;
 mod safe_print;
+mod panic_log;
 mod settings;
 mod task_manager;
 mod templates;
@@ -232,6 +233,7 @@ async fn download_asr_model() -> Result<ModelStatus, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    panic_log::install_best_effort();
     tauri::Builder::default()
         .manage(TaskManager::new())
         .setup(|app| {
