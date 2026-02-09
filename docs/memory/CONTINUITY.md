@@ -64,8 +64,12 @@ Commit References（VERIFIED）
 
 UNCONFIRMED
 
-- `verify_quick` / `verify_full` 是否在本机当前环境可直接通过（本回合未执行）。
 - Windows 目标机上的原生 Gate（`scripts/windows/windows_gate.ps1`）是否已经跑通并留档。
+
+VERIFIED（2026-02-09，本机执行）
+
+- `scripts/verify_quick.py` 通过：`PASS: rtf=0.266... device=cuda cancel_ms=116 ...`
+- `scripts/verify_full.py` 通过：`PASS: rtf_60=0.091... rtf_5m=0.047... cancel_ffmpeg_ms=104 cancel_asr_ms=108 soak_runs=138 ...`
 
 ## Next
 
