@@ -2,6 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
+use crate::debug_log;
 use crate::settings;
 
 #[derive(Debug, Clone, Serialize)]
@@ -184,6 +185,7 @@ pub fn api_key_status() -> ApiKeyStatus {
 
 pub async fn rewrite(
     data_dir: &std::path::Path,
+    task_id: &str,
     system_prompt: &str,
     asr_text: &str,
 ) -> Result<String> {
@@ -208,6 +210,28 @@ pub async fn rewrite(
         reasoning_effort: cfg.reasoning_effort.as_deref(),
     };
 
+    if debug_log::verbose_enabled() && debug_log::include_llm() {
+        if let Ok(req_value) = serde_json::to_value(&req) {
+            let url2 = url.clone();
+            let wrapper = serde_json::json!({
+                "url": url2,
+                "request": req_value,
+            });
+            let bytes = serde_json::to_vec_pretty(&wrapper).unwrap_or_default();
+            if let Some(info) =
+                debug_log::write_payload_best_effort(data_dir, task_id, "llm_request.json", bytes)
+            {
+                debug_log::emit_debug_event_best_effort(
+                    data_dir,
+                    "debug_llm_request",
+                    task_id,
+                    &info,
+                    Some(format!("model={} url={}", cfg.model, url)),
+                );
+            }
+        }
+    }
+
     let resp = client
         .post(url)
         .bearer_auth(key)
@@ -216,18 +240,36 @@ pub async fn rewrite(
         .await
         .context("llm http request failed")?;
 
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        let body = if body.len() > 1024 {
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+
+    if debug_log::verbose_enabled() && debug_log::include_llm() {
+        if let Some(info) = debug_log::write_payload_best_effort(
+            data_dir,
+            task_id,
+            "llm_response.txt",
+            body.as_bytes().to_vec(),
+        ) {
+            debug_log::emit_debug_event_best_effort(
+                data_dir,
+                "debug_llm_response",
+                task_id,
+                &info,
+                Some(format!("http_status={}", status)),
+            );
+        }
+    }
+
+    if !status.is_success() {
+        let msg = if body.len() > 1024 {
             format!("{}...(truncated)", &body[..1024])
         } else {
             body
         };
-        return Err(anyhow!("llm http {status}: {body}"));
+        return Err(anyhow!("llm http {status}: {msg}"));
     }
 
-    let r: ChatResp = resp.json().await.context("llm response parse failed")?;
+    let r: ChatResp = serde_json::from_str(&body).context("llm response parse failed")?;
     let content = r
         .choices
         .get(0)

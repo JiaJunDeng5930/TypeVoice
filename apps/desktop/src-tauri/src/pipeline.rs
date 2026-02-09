@@ -71,11 +71,11 @@ fn resolve_tool_path(env_key: &str, candidate_file: &str, fallback: &str) -> Str
     fallback.to_string()
 }
 
-fn ffmpeg_cmd() -> String {
+pub fn ffmpeg_cmd() -> String {
     resolve_tool_path("TYPEVOICE_FFMPEG", "ffmpeg.exe", "ffmpeg")
 }
 
-fn ffprobe_cmd() -> String {
+pub fn ffprobe_cmd() -> String {
     resolve_tool_path("TYPEVOICE_FFPROBE", "ffprobe.exe", "ffprobe")
 }
 
@@ -293,6 +293,7 @@ pub fn resolve_asr_model_id(data_dir: &Path) -> Result<String> {
     Ok("Qwen/Qwen3-ASR-0.6B".to_string())
 }
 
+#[allow(dead_code)]
 pub fn transcribe_with_python_runner_cancellable(
     audio_wav: &Path,
     model_id: &str,

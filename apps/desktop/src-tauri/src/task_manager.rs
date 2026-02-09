@@ -12,7 +12,7 @@ use tauri::{AppHandle, Emitter};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::{data_dir, history, llm, metrics, pipeline, templates};
+use crate::{asr_service, data_dir, history, llm, metrics, pipeline, templates};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskEvent {
@@ -47,6 +47,7 @@ pub struct StartOpts {
 #[derive(Clone)]
 pub struct TaskManager {
     inner: Arc<Mutex<Option<ActiveTask>>>,
+    asr: asr_service::AsrService,
 }
 
 struct ActiveTask {
@@ -60,7 +61,35 @@ impl TaskManager {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(None)),
+            asr: asr_service::AsrService::new(),
         }
+    }
+
+    pub fn warmup_asr_best_effort(&self) {
+        let this = self.clone();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build();
+            if let Ok(rt) = rt {
+                rt.block_on(async move {
+                    if let Ok(dir) = data_dir::data_dir() {
+                        let _ = tokio::task::spawn_blocking(move || this.asr.ensure_started(&dir))
+                            .await;
+                    }
+                });
+            }
+        });
+    }
+
+    pub fn restart_asr_best_effort(&self, reason: &str) {
+        let this = self.clone();
+        let reason = reason.to_string();
+        std::thread::spawn(move || {
+            if let Ok(dir) = data_dir::data_dir() {
+                let _ = this.asr.restart(&dir, &reason);
+            }
+        });
     }
 
     pub fn start_fixture(
@@ -299,21 +328,66 @@ impl TaskManager {
 
         // ASR
         emit_started(&app, &data_dir, &task_id, "Transcribe", "asr");
-        let (asr_text, rtf, device_used, asr_ms) = {
+        let (
+            asr_text,
+            rtf,
+            device_used,
+            asr_ms,
+            runner_elapsed_ms,
+            audio_seconds,
+            asr_model_id,
+            asr_model_version,
+        ) = {
             let inner = self.inner.clone();
             let wav_path2 = wav_path.clone();
             let data_dir2 = data_dir.clone();
+            let asr = self.asr.clone();
+            let task_id2 = task_id.clone();
             let join = tokio::task::spawn_blocking(move || {
                 let active = inner.lock().unwrap();
                 let a = active.as_ref().ok_or_else(|| anyhow!("task missing"))?;
-                let model_id = pipeline::resolve_asr_model_id(&data_dir2)?;
-                let (text, rtf, device, ms) = pipeline::transcribe_with_python_runner_cancellable(
-                    &wav_path2, &model_id, &a.token, &a.asr_pid,
+                let (resp, wall_ms) = asr.transcribe(
+                    &data_dir2,
+                    &task_id2,
+                    &wav_path2,
+                    "Chinese",
+                    &a.token,
+                    &a.asr_pid,
                 )?;
-                if device != "cuda" {
-                    return Err(anyhow!("device_not_cuda:{device}"));
+                if !resp.ok {
+                    let code = resp
+                        .error
+                        .as_ref()
+                        .map(|e| e.code.as_str())
+                        .unwrap_or("E_ASR_FAILED");
+                    let msg = resp
+                        .error
+                        .as_ref()
+                        .map(|e| e.message.as_str())
+                        .unwrap_or("");
+                    if msg.trim().is_empty() {
+                        return Err(anyhow!("asr failed: {code}"));
+                    }
+                    return Err(anyhow!("asr failed: {code}: {msg}"));
                 }
-                Ok::<_, anyhow::Error>((text, rtf, device, ms))
+                let text = resp.text.clone().unwrap_or_default();
+                if text.trim().is_empty() {
+                    return Err(anyhow!("empty_text"));
+                }
+                let m = resp.metrics.clone().ok_or_else(|| anyhow!("missing_metrics"))?;
+                if m.device_used != "cuda" {
+                    return Err(anyhow!("device_not_cuda:{}", m.device_used));
+                }
+                Ok::<_, anyhow::Error>((
+                    text,
+                    m.rtf,
+                    m.device_used,
+                    wall_ms,
+                    m.elapsed_ms,
+                    m.audio_seconds,
+                    m.model_id,
+                    m.model_version,
+                ))
             })
             .await;
             match join {
@@ -401,8 +475,8 @@ impl TaskManager {
                     };
                     let rewrite_res = tokio::select! {
                         _ = token.cancelled() => Err(anyhow!("cancelled")),
-                        r = llm::rewrite(&data_dir, &tpl.system_prompt, &asr_text) => r,
-                    };
+                    r = llm::rewrite(&data_dir, &task_id, &tpl.system_prompt, &asr_text) => r,
+                };
                     match rewrite_res {
                         Ok(txt) => {
                             final_text = txt;
@@ -505,6 +579,30 @@ impl TaskManager {
             &json!({"type":"task_done","task_id":task_id,"rtf":done.rtf,"device":done.device_used}),
         ) {
             eprintln!("metrics append failed (task_done): {e:#}");
+        }
+
+        // Perf summary (machine-readable, no sensitive payload).
+        let overhead_ms_u128 = asr_ms.saturating_sub(runner_elapsed_ms.max(0) as u128);
+        let overhead_ms = overhead_ms_u128.min(u64::MAX as u128) as u64;
+        if let Err(e) = metrics::append_jsonl(
+            &data_dir,
+            &json!({
+                "type": "task_perf",
+                "task_id": task_id,
+                "audio_seconds": audio_seconds,
+                "preprocess_ms": preprocess_ms,
+                "asr_roundtrip_ms": asr_ms,
+                "asr_runner_elapsed_ms": runner_elapsed_ms,
+                "asr_overhead_ms": overhead_ms,
+                "rtf": rtf,
+                "rewrite_ms": rewrite_ms,
+                "device_used": done.device_used,
+                "asr_model_id": asr_model_id,
+                "asr_model_version": asr_model_version,
+                "asr_warmup_ms": self.asr.warmup_ms(),
+            }),
+        ) {
+            eprintln!("metrics append failed (task_perf): {e:#}");
         }
         Ok(())
     }

@@ -1,4 +1,6 @@
+mod asr_service;
 mod data_dir;
+mod debug_log;
 mod history;
 mod llm;
 mod metrics;
@@ -16,6 +18,7 @@ use settings::Settings;
 use settings::SettingsPatch;
 use task_manager::TaskManager;
 use templates::PromptTemplate;
+use tauri::Manager;
 
 #[tauri::command]
 fn transcribe_fixture(fixture_name: &str) -> Result<TranscribeResult, String> {
@@ -111,7 +114,8 @@ fn templates_import_json(json: &str, mode: &str) -> Result<usize, String> {
 async fn rewrite_text(template_id: &str, asr_text: &str) -> Result<String, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let tpl = templates::get_template(&dir, template_id).map_err(|e| e.to_string())?;
-    llm::rewrite(&dir, &tpl.system_prompt, asr_text)
+    let task_id = uuid::Uuid::new_v4().to_string();
+    llm::rewrite(&dir, &task_id, &tpl.system_prompt, asr_text)
         .await
         .map_err(|e| e.to_string())
 }
@@ -168,11 +172,17 @@ fn set_settings(s: Settings) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn update_settings(patch: SettingsPatch) -> Result<Settings, String> {
+fn update_settings(state: tauri::State<TaskManager>, patch: SettingsPatch) -> Result<Settings, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let cur = settings::load_settings_or_recover(&dir);
+    let asr_model_changed = patch.asr_model.is_some();
     let next = settings::apply_patch(cur, patch);
     settings::save_settings(&dir, &next).map_err(|e| e.to_string())?;
+    // If ASR model changed, restart the resident ASR runner.
+    // We do this best-effort; errors are surfaced later via task events.
+    if asr_model_changed {
+        state.restart_asr_best_effort("settings_changed");
+    }
     Ok(next)
 }
 
@@ -223,6 +233,12 @@ async fn download_asr_model() -> Result<ModelStatus, String> {
 pub fn run() {
     tauri::Builder::default()
         .manage(TaskManager::new())
+        .setup(|app| {
+            // Warm up the ASR runner in background so first transcription is fast.
+            let state = app.state::<TaskManager>();
+            state.warmup_asr_best_effort();
+            Ok(())
+        })
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             transcribe_fixture,
