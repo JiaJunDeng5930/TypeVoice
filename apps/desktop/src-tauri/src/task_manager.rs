@@ -193,7 +193,7 @@ impl TaskManager {
                 }
                 Err(e) => {
                     // Best-effort cleanup; we might not have a data_dir to emit metrics.
-                    eprintln!("failed to create tokio runtime for task {task_id}: {e}");
+                    crate::safe_eprintln!("failed to create tokio runtime for task {task_id}: {e}");
                     let mut g = this.inner.lock().unwrap();
                     *g = None;
                 }
@@ -571,7 +571,7 @@ impl TaskManager {
             &data_dir,
             &json!({"type":"task_done","task_id":task_id,"rtf":done.rtf,"device":done.device_used}),
         ) {
-            eprintln!("metrics append failed (task_done): {e:#}");
+            crate::safe_eprintln!("metrics append failed (task_done): {e:#}");
         }
 
         // Perf summary (machine-readable, no sensitive payload).
@@ -595,7 +595,7 @@ impl TaskManager {
                 "asr_warmup_ms": self.asr.warmup_ms(),
             }),
         ) {
-            eprintln!("metrics append failed (task_perf): {e:#}");
+            crate::safe_eprintln!("metrics append failed (task_perf): {e:#}");
         }
         Ok(())
     }
@@ -691,7 +691,7 @@ fn emit_event(app: &AppHandle, data_dir: &Path, ev: TaskEvent) {
         data_dir,
         &json!({"type":"task_event", "task_id":ev.task_id, "stage":ev.stage, "status":ev.status, "elapsed_ms":ev.elapsed_ms, "error_code":ev.error_code, "message":ev.message}),
     ) {
-        eprintln!("metrics append failed (task_event): {e:#}");
+        crate::safe_eprintln!("metrics append failed (task_event): {e:#}");
     }
 }
 

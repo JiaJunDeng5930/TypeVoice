@@ -6,6 +6,7 @@ mod llm;
 mod metrics;
 mod model;
 mod pipeline;
+mod safe_print;
 mod settings;
 mod task_manager;
 mod templates;

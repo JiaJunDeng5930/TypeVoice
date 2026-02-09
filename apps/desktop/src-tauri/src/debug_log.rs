@@ -112,12 +112,15 @@ pub fn write_payload_best_effort(
 
     let dir = debug_task_dir(data_dir, task_id);
     if let Err(e) = fs::create_dir_all(&dir) {
-        eprintln!("debug_log: create_dir_all failed: {}: {e}", dir.display());
+        crate::safe_eprintln!(
+            "debug_log: create_dir_all failed: {}: {e}",
+            dir.display()
+        );
         return None;
     }
     let path = dir.join(filename);
     if let Err(e) = fs::write(&path, &out) {
-        eprintln!("debug_log: write failed: {}: {e}", path.display());
+        crate::safe_eprintln!("debug_log: write failed: {}: {e}", path.display());
         return None;
     }
 
@@ -154,7 +157,7 @@ pub fn emit_debug_event_best_effort(
         "note": note,
     });
     if let Err(e) = metrics::append_jsonl(data_dir, &obj) {
-        eprintln!("debug_log: metrics append failed: {e:#}");
+        crate::safe_eprintln!("debug_log: metrics append failed: {e:#}");
     }
 }
 
@@ -191,7 +194,7 @@ pub fn prune_debug_dir_best_effort(data_dir: &Path) {
     dirs.sort_by(|a, b| b.0.cmp(&a.0));
     for (_m, p) in dirs.into_iter().skip(max_keep) {
         if let Err(e) = fs::remove_dir_all(&p) {
-            eprintln!("debug_log: remove_dir_all failed: {}: {e}", p.display());
+            crate::safe_eprintln!("debug_log: remove_dir_all failed: {}: {e}", p.display());
         }
     }
 }

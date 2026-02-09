@@ -86,20 +86,20 @@ pub fn load_settings_or_recover(data_dir: &Path) -> Settings {
             if p.exists() {
                 let backup = data_dir.join(format!("settings.json.corrupt.{}", now_ms()));
                 if let Err(re) = fs::rename(&p, &backup) {
-                    eprintln!(
+                    crate::safe_eprintln!(
                         "settings.json corrupt, and failed to back it up (src={}, dst={}): {re:#}",
                         p.display(),
                         backup.display()
                     );
                 } else {
-                    eprintln!(
+                    crate::safe_eprintln!(
                         "settings.json corrupt; moved to {} (error: {:#})",
                         backup.display(),
                         e
                     );
                 }
             } else {
-                eprintln!("settings load failed (missing file): {e:#}");
+                crate::safe_eprintln!("settings load failed (missing file): {e:#}");
             }
             Settings::default()
         }

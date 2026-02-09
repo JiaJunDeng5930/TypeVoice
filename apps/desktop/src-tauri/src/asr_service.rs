@@ -314,7 +314,7 @@ impl AsrService {
         g.model_id = None;
         g.warmup_ms = None;
         g.model_version = None;
-        eprintln!("asr_service: killed runner ({reason})");
+        crate::safe_eprintln!("asr_service: killed runner ({reason})");
     }
 
     pub fn warmup_ms(&self) -> Option<i64> {
