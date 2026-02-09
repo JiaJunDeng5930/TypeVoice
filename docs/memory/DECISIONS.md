@@ -36,3 +36,14 @@ VERIFIED（2026-02-09）
 - 取舍：调试符号更少，但仍保留基本可用的回溯与调试能力；不影响 release 构建与运行时行为。
 - 复核方式：
   - 在 Windows repo `apps/desktop/src-tauri/` 目录下，对比改动前后 `Measure-Command { cargo build }` 的耗时（尤其是增量编译 + 链接）。
+
+## Windows Gate 可选启用 sccache（Rust 编译缓存）
+
+VERIFIED（2026-02-09）
+
+- 背景：Windows 侧仅用于编译/运行验证，Rust 依赖体量较大时，重复编译会明显拖慢迭代；同时不希望把额外工具作为硬依赖阻塞新环境启动（见 `docs/windows-gate-v0.1.md` 的“一键 gate”目标）。
+- 决策：在 `scripts/windows/windows_gate.ps1` 中检测 `sccache`，若存在则自动设置 `RUSTC_WRAPPER=sccache` 并使用 repo-local `SCCACHE_DIR`；未安装时仅提示安装方式并继续执行。
+- 取舍：将加速能力作为“可选增强”，避免因缺少 `sccache` 影响现有 Windows gate。
+- 复核方式：
+  - Windows 上执行 `scripts/windows/windows_gate.ps1`，应能看到 `sccache enabled` 或 `sccache not found (optional)` 的 INFO 输出；
+  - 若启用后，运行 `sccache --show-stats` 观察 cache hits 增长。

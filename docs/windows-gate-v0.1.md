@@ -23,6 +23,16 @@ What it does:
 - Runs `verify_quick` and `verify_full`.
 - Starts `npm run tauri dev`.
 
+## Optional Speed-Up: sccache (Rust Compile Cache)
+
+If `sccache` is installed and available in PATH, the gate script will automatically enable it for Rust builds.
+
+Install once (Windows PowerShell):
+
+```powershell
+cargo install sccache
+```
+
 ## Expected Failures
 
 The script intentionally fails fast if any of these are missing:

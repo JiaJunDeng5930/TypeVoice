@@ -58,6 +58,8 @@ Run from Windows PowerShell or Windows Terminal (non-admin is fine):
 Set-Location D:\Projects\TypeVoice\apps\desktop
 $env:RUST_BACKTRACE = "1"
 $env:RUST_LOG = "debug"
+# Optional speed-up (install once: `cargo install sccache`)
+# $env:RUSTC_WRAPPER = "sccache"
 npm run tauri dev
 ```
 
@@ -77,6 +79,12 @@ From WSL:
 
 ```bash
 /mnt/c/Windows/System32/cmd.exe /d /c "cd /d D:\Projects\TypeVoice\apps\desktop && set RUST_BACKTRACE=1 && set RUST_LOG=debug && npm run tauri dev"
+```
+
+Optional speed-up (`sccache`, install once in Windows: `cargo install sccache`):
+
+```bash
+/mnt/c/Windows/System32/cmd.exe /d /c "cd /d D:\Projects\TypeVoice\apps\desktop && set RUST_BACKTRACE=1 && set RUST_LOG=debug && set RUSTC_WRAPPER=sccache && npm run tauri dev"
 ```
 
 Why `cd /d`:
@@ -158,4 +166,3 @@ Fix:
 Fix:
 
 - Use file redirection to `D:\typevoice-logs\...` and inspect logs from WSL via `/mnt/d/...`.
-

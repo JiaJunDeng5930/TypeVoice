@@ -15,6 +15,17 @@ function Ensure-Command([string]$name) {
   }
 }
 
+function Try-Enable-Sccache([string]$repoRoot) {
+  if (Get-Command "sccache" -ErrorAction SilentlyContinue) {
+    $env:RUSTC_WRAPPER = "sccache"
+    $env:SCCACHE_DIR = (Join-Path $repoRoot ".cache\\sccache")
+    New-Item -ItemType Directory -Force -Path $env:SCCACHE_DIR | Out-Null
+    Info ("sccache enabled: RUSTC_WRAPPER=sccache SCCACHE_DIR=" + $env:SCCACHE_DIR)
+  } else {
+    Info "sccache not found (optional). Install once with: cargo install sccache"
+  }
+}
+
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $RepoRoot
 
@@ -27,6 +38,9 @@ Ensure-Command "npm"
 Ensure-Command "cargo"
 Ensure-Command "ffmpeg"
 Ensure-Command "ffprobe"
+
+# Optional speed-up: enable Rust compile cache if available.
+Try-Enable-Sccache $RepoRoot
 
 # Python venv (repo-local)
 $VenvPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
@@ -86,4 +100,3 @@ Info "running verify_full"
 Info "starting desktop app (tauri dev)"
 Set-Location (Join-Path $RepoRoot "apps\desktop")
 npm run tauri dev
-
