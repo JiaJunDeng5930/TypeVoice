@@ -124,14 +124,17 @@ impl TaskManager {
         let this = self.clone();
         let record_msg = record_msg.to_string();
 
-        // Tauri invoke handlers are not guaranteed to run inside a Tokio runtime.
-        // Use Tauri's runtime handle to spawn background tasks safely.
-        tauri::async_runtime::spawn(async move {
-            let _ = this
-                .run_pipeline(app, task_id.clone(), input, opts, &record_msg)
-                .await;
-            let mut g = this.inner.lock().unwrap();
-            *g = None;
+        // In practice, the invoke handler thread may not have an active Tokio
+        // reactor. We detach into an OS thread and drive the async pipeline via
+        // Tauri's global runtime to avoid "no reactor running" panics.
+        std::thread::spawn(move || {
+            tauri::async_runtime::block_on(async move {
+                let _ = this
+                    .run_pipeline(app, task_id.clone(), input, opts, &record_msg)
+                    .await;
+                let mut g = this.inner.lock().unwrap();
+                *g = None;
+            });
         });
 
         Ok(active)
