@@ -1,3 +1,7 @@
+# 环境
+
+你当前的环境是 WSL2，host 为 Win11
+
 # Repository Guidelines
 
 ## Project Structure & Module Organization
