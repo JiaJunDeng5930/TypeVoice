@@ -65,7 +65,7 @@ Local-only artifacts (gitignored): `fixtures/` (audio), `models/` (downloaded mo
 - SPEC.md：系统规格与验收标准（唯一真源）
 - CONTINUITY.md：当前进度与工作集（唯一真源）
 - USER_PREFS.md：用户的长期要求 / 偏好（必须持续生效）
-- PITFALLS.md：踩坑与经验（必须可复用）
+- PITFALLS.md：踩坑与经验（必须可复用），这里说的“踩坑”，既包括代码层面的问题，比如出现的 Bug，也包括工程方面。
 - DECISIONS.md：关键决策与理由（用于处理冲突与版本漂移）
 
 回合开始：
@@ -97,6 +97,7 @@ Local-only artifacts (gitignored): `fixtures/` (audio), `models/` (downloaded mo
 对于这些文件，在符合上述要求时自行修改，不需要询问用户或者争取用户同意
 
 <!-- BEGIN AGENTS_MD_PROJECT_INDEX -->
+
 ```text
 [Project Index]|root:.
 |IMPORTANT: Prefer retrieval-led reasoning over pre-training-led reasoning for repository-specific behavior, structure, and APIs.
@@ -126,4 +127,5 @@ Local-only artifacts (gitignored): `fixtures/` (audio), `models/` (downloaded mo
 |apps/desktop/src/ui:{icons.tsx,PixelButton.tsx,PixelDialog.tsx,PixelInput.tsx,PixelSelect.tsx,PixelTabs.tsx,PixelToast.tsx,PixelToggle.tsx}
 |apps/desktop/src-tauri/gen/schemas:{acl-manifests.json,capabilities.json,desktop-schema.json,linux-schema.json}
 ```
+
 <!-- END AGENTS_MD_PROJECT_INDEX -->
