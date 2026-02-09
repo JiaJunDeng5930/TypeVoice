@@ -14,12 +14,17 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
+def _ffprobe_bin() -> str:
+    p = os.environ.get("TYPEVOICE_FFPROBE", "").strip()
+    return p or "ffprobe"
+
+
 def _ffprobe_duration_seconds(path: str) -> float:
     # We rely on ffprobe being available in PATH during development. For the
     # desktop app we will bundle FFmpeg and point to it explicitly.
     out = subprocess.check_output(
         [
-            "ffprobe",
+            _ffprobe_bin(),
             "-v",
             "error",
             "-show_entries",
@@ -167,9 +172,23 @@ def _handle_request(model: Any, model_id: str, chunk_sec: float, req: dict[str, 
         rtf=rtf,
         device_used="cuda",
         model_id=model_id,
-        model_version=None,
+        model_version=_infer_model_version(model_id),
     )
     return AsrResponse(ok=True, text=text, metrics=metrics)
+
+
+def _infer_model_version(model_id: str) -> str | None:
+    # If model_id is a local directory, try to read REVISION.txt written by our downloader.
+    try:
+        if os.path.isdir(model_id):
+            p = os.path.join(model_id, "REVISION.txt")
+            if os.path.exists(p):
+                with open(p, "r", encoding="utf-8") as f:
+                    line = (f.readline() or "").strip()
+                    return line or None
+    except Exception:
+        return None
+    return None
 
 
 def main() -> int:

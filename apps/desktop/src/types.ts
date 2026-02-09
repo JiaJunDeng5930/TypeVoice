@@ -39,6 +39,7 @@ export type ModelStatus = {
   model_dir: string;
   ok: boolean;
   reason?: string | null;
+  model_version?: string | null;
 };
 
 export type ApiKeyStatus = {
@@ -58,4 +59,3 @@ export type HistoryItem = {
   preprocess_ms: number;
   asr_ms: number;
 };
-

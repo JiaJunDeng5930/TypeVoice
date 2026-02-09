@@ -244,7 +244,7 @@ export function SettingsScreen({
           <div className="muted">
             {modelStatus
               ? modelStatus.ok
-                ? `OK  ${modelStatus.model_dir}`
+                ? `OK${modelStatus.model_version ? `  ${modelStatus.model_version}` : ""}  ${modelStatus.model_dir}`
                 : `MISSING  ${modelStatus.reason || ""}`
               : "UNKNOWN"}
           </div>
