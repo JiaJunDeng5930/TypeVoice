@@ -1,0 +1,5 @@
+[target.x86_64-pc-windows-msvc]
+# The release binary was intermittently crashing on startup with STATUS_STACK_OVERFLOW (0xc00000fd).
+# We reserve a larger main-thread stack to make startup robust on Windows.
+rustflags = ["-C", "link-arg=/STACK:8388608"]
+
