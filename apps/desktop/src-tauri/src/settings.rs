@@ -117,6 +117,8 @@ pub fn save_settings(data_dir: &Path, settings: &Settings) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{apply_patch, Settings, SettingsPatch};
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn apply_patch_is_partial_and_can_clear() {
@@ -144,5 +146,23 @@ mod tests {
         assert_eq!(next.llm_reasoning_effort, None);
         assert_eq!(next.rewrite_enabled, Some(true));
         assert_eq!(next.rewrite_template_id, None);
+    }
+
+    #[test]
+    fn load_settings_or_recover_moves_corrupt_file_and_returns_default() {
+        let td = tempdir().expect("tempdir");
+        let data_dir = td.path().join("data");
+        fs::create_dir_all(&data_dir).expect("mkdir");
+        fs::write(data_dir.join("settings.json"), "{not-json").expect("write");
+
+        let s = super::load_settings_or_recover(&data_dir);
+        assert_eq!(s.asr_model, None);
+        assert!(!data_dir.join("settings.json").exists());
+
+        let entries: Vec<_> = fs::read_dir(&data_dir)
+            .expect("read_dir")
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(entries.iter().any(|n| n.starts_with("settings.json.corrupt.")));
     }
 }
