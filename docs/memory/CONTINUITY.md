@@ -10,6 +10,7 @@
 VERIFIED
 
 - 外置记忆文件尚未存在，现已在 `docs/memory/` 初始化最小骨架：`docs/memory/SPEC.md`、`docs/memory/CONTINUITY.md`、`docs/memory/USER_PREFS.md`。
+- 外置记忆初始化已提交到 git（commit `97564c7`：`docs(memory): init external memory scaffolding`）。
 - 冻结规格与 Gate 的真源在 `docs/*.md`，`README.md` 明确“只有写入文档的内容才视为可靠约束与验收依据”。
 - 工程结构与主要入口：Desktop `apps/desktop/`（Vite + React + TS），Tauri Rust 入口 `apps/desktop/src-tauri/src/main.rs`、`apps/desktop/src-tauri/src/lib.rs`；ASR Runner `asr_runner/runner.py`（stdin/stdout JSON，支持 `--protocol-only`）；验证门禁 `scripts/verify_quick.py`、`scripts/verify_full.py`（结构化指标落盘 `metrics/verify.jsonl`）；后端任务事件由 Rust `TaskManager` emit `task_event` / `task_done` 并写入数据目录的 `metrics.jsonl`（默认 `tmp/typevoice-data/metrics.jsonl`，见 `apps/desktop/src-tauri/src/task_manager.rs`、`apps/desktop/src-tauri/src/metrics.rs`、`apps/desktop/src/screens/MainScreen.tsx`）。
 - 默认数据目录：`TYPEVOICE_DATA_DIR` 可覆盖；否则默认 `tmp/typevoice-data`（开发默认）。来源：`apps/desktop/src-tauri/src/data_dir.rs`。
