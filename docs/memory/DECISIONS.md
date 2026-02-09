@@ -26,3 +26,13 @@ VERIFIED（2026-02-09）
 - 复核方式：
   - 在 Windows repo `git pull` 后执行 `git status`，不应出现大面积“仅行尾变化”的改动；
   - 在 WSL repo `git status` 保持干净。
+
+## 减少 dev profile 调试信息以缩短链接时间
+
+VERIFIED（2026-02-09）
+
+- 背景：Windows 侧 `tauri dev` 会频繁触发 Rust debug 构建；在依赖体量较大的情况下（`tauri`/`tokio`/`reqwest`/`rusqlite` 等，见 `apps/desktop/src-tauri/Cargo.toml`），链接阶段往往成为迭代瓶颈。
+- 决策：在 `apps/desktop/src-tauri/Cargo.toml` 中为 dev profile 设置 `debug = 1`，减少调试信息生成量，以降低链接开销并加快增量迭代。
+- 取舍：调试符号更少，但仍保留基本可用的回溯与调试能力；不影响 release 构建与运行时行为。
+- 复核方式：
+  - 在 Windows repo `apps/desktop/src-tauri/` 目录下，对比改动前后 `Measure-Command { cargo build }` 的耗时（尤其是增量编译 + 链接）。

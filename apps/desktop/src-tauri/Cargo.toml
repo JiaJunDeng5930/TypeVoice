@@ -35,3 +35,7 @@ sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"
+
+[profile.dev]
+# Speed up dev iterations: reduce debug info to lower link time while keeping backtraces usable.
+debug = 1
