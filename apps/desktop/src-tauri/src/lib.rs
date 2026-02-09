@@ -8,6 +8,7 @@ mod model;
 mod pipeline;
 mod safe_print;
 mod panic_log;
+mod startup_trace;
 mod settings;
 mod task_manager;
 mod templates;
@@ -233,13 +234,19 @@ async fn download_asr_model() -> Result<ModelStatus, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    startup_trace::mark_best_effort("run_enter");
     panic_log::install_best_effort();
+    startup_trace::mark_best_effort("panic_hook_installed");
+    let ctx = tauri::generate_context!();
+    startup_trace::mark_best_effort("context_generated");
     tauri::Builder::default()
         .manage(TaskManager::new())
         .setup(|app| {
+            startup_trace::mark_best_effort("setup_enter");
             // Warm up the ASR runner in background so first transcription is fast.
             let state = app.state::<TaskManager>();
             state.warmup_asr_best_effort();
+            startup_trace::mark_best_effort("setup_exit");
             Ok(())
         })
         .plugin(tauri_plugin_opener::init())
@@ -267,6 +274,6 @@ pub fn run() {
             asr_model_status,
             download_asr_model
         ])
-        .run(tauri::generate_context!())
+        .run(ctx)
         .expect("error while running tauri application");
 }
