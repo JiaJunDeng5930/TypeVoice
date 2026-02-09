@@ -68,16 +68,9 @@ impl TaskManager {
     pub fn warmup_asr_best_effort(&self) {
         let this = self.clone();
         std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build();
-            if let Ok(rt) = rt {
-                rt.block_on(async move {
-                    if let Ok(dir) = data_dir::data_dir() {
-                        let _ = tokio::task::spawn_blocking(move || this.asr.ensure_started(&dir))
-                            .await;
-                    }
-                });
+            // ASR warmup is synchronous; do not create nested Tokio runtimes here.
+            if let Ok(dir) = data_dir::data_dir() {
+                let _ = this.asr.ensure_started(&dir);
             }
         });
     }
