@@ -14,6 +14,9 @@ VERIFIED
 - 冻结规格与 Gate 的真源在 `docs/*.md`，`README.md` 明确“只有写入文档的内容才视为可靠约束与验收依据”。
 - 工程结构与主要入口：Desktop `apps/desktop/`（Vite + React + TS），Tauri Rust 入口 `apps/desktop/src-tauri/src/main.rs`、`apps/desktop/src-tauri/src/lib.rs`；ASR Runner `asr_runner/runner.py`（stdin/stdout JSON，支持 `--protocol-only`）；验证门禁 `scripts/verify_quick.py`、`scripts/verify_full.py`（结构化指标落盘 `metrics/verify.jsonl`）；后端任务事件由 Rust `TaskManager` emit `task_event` / `task_done` 并写入数据目录的 `metrics.jsonl`（默认 `tmp/typevoice-data/metrics.jsonl`，见 `apps/desktop/src-tauri/src/task_manager.rs`、`apps/desktop/src-tauri/src/metrics.rs`、`apps/desktop/src/screens/MainScreen.tsx`）。
 - 默认数据目录：`TYPEVOICE_DATA_DIR` 可覆盖；否则默认 `tmp/typevoice-data`（开发默认）。来源：`apps/desktop/src-tauri/src/data_dir.rs`。
+- 已实现更细 debug 日志与 ASR runner 常驻：
+- Debug verbose 仅在 `TYPEVOICE_DEBUG_VERBOSE=1` 时记录“分段信息/分段转写/LLM 请求与返回”的完整 payload（写入 `TYPEVOICE_DATA_DIR/debug/<task_id>/...`，并在 `metrics.jsonl` 里追加 `debug_*` 事件引用 `payload_path`）。
+- ASR Runner 在程序启动后后台 warmup 并常驻复用；取消会 kill runner 进程，随后自动重启；变更 ASR 模型设置会触发 best-effort 重启。实现提交：`50cf52a`、`f020829`。
 - 2026-02-09 全工程 review 已完成并记录（本回合已验证：`pytest -m quick`、`cargo test`、`npm run build` 均通过）。
 
 ## Review Findings（2026-02-09）
