@@ -4,107 +4,121 @@
 
 - 本文件记录“当前进度与工作集”，用于跨回合恢复上下文。
 - 内容必须区分 `VERIFIED`（能用代码/文档/命令复核）与 `UNCONFIRMED`（推断/未验证）。
+- 冻结规格的真源在 `docs/*.md`；本文件只做“可执行的接手摘要”，避免复述导致漂移（VERIFIED：`docs/memory/SPEC.md`）。
 
-## Now
+## 当前有效目标（与 SPEC 对齐）
 
-VERIFIED
+VERIFIED（截至 2026-02-09）
 
-- 外置记忆文件尚未存在，现已在 `docs/memory/` 初始化最小骨架：`docs/memory/SPEC.md`、`docs/memory/CONTINUITY.md`、`docs/memory/USER_PREFS.md`。
-- 外置记忆初始化已提交到 git（commit `97564c7`：`docs(memory): init external memory scaffolding`）。
-- Windows Release 启动闪退（APPCRASH / `0xc00000fd`）已定位并修复：通过 `apps/desktop/src-tauri/.cargo/config.toml` 将 Windows MSVC 目标 `SizeOfStackReserve` 提升到 8MB，release 进程可稳定运行。修复 commit：`4703678`。
-- 冻结规格与 Gate 的真源在 `docs/*.md`，`README.md` 明确“只有写入文档的内容才视为可靠约束与验收依据”。
-- 工程结构与主要入口：Desktop `apps/desktop/`（Vite + React + TS），Tauri Rust 入口 `apps/desktop/src-tauri/src/main.rs`、`apps/desktop/src-tauri/src/lib.rs`；ASR Runner `asr_runner/runner.py`（stdin/stdout JSON，支持 `--protocol-only`）；验证门禁 `scripts/verify_quick.py`、`scripts/verify_full.py`（结构化指标落盘 `metrics/verify.jsonl`）；后端任务事件由 Rust `TaskManager` emit `task_event` / `task_done` 并写入数据目录的 `metrics.jsonl`（默认 `tmp/typevoice-data/metrics.jsonl`，见 `apps/desktop/src-tauri/src/task_manager.rs`、`apps/desktop/src-tauri/src/metrics.rs`、`apps/desktop/src/screens/MainScreen.tsx`）。
-- 默认数据目录：`TYPEVOICE_DATA_DIR` 可覆盖；否则默认 `tmp/typevoice-data`（开发默认）。来源：`apps/desktop/src-tauri/src/data_dir.rs`。
-- 已实现更细 debug 日志与 ASR runner 常驻：
-- Debug verbose 仅在 `TYPEVOICE_DEBUG_VERBOSE=1` 时记录“分段信息/分段转写/LLM 请求与返回”的完整 payload（写入 `TYPEVOICE_DATA_DIR/debug/<task_id>/...`，并在 `metrics.jsonl` 里追加 `debug_*` 事件引用 `payload_path`）。
-- ASR Runner 在程序启动后后台 warmup 并常驻复用；取消会 kill runner 进程，随后自动重启；变更 ASR 模型设置会触发 best-effort 重启。实现提交：`50cf52a`、`f020829`。
-- 2026-02-09 全工程 review 已完成并记录（本回合已验证：`pytest -m quick`、`cargo test`、`npm run build` 均通过）。
+- 目标：Windows 桌面端“录完再出稿”语音打字工具（录音结束 -> 本地 ASR -> 可选 LLM Rewrite -> 一键复制），优先可用性/稳定性/速度/可取消/可观测。真源：`docs/base-spec-v0.1.md`、`docs/tech-spec-v0.1.md`、`docs/verification-v0.1.md`。
+- 本阶段目标（性能与可观测性）：
+- 性能优化：基于落盘指标/日志梳理各阶段耗时，定位主要瓶颈并给出改进方案。
+- 可观测性增强：在 debug 开关开启时，必须能在日志中看到：
+  - 音频切分信息（分几段、每段起止/时长）；
+  - 每段 ASR 转录文本；
+  - 每次 LLM 请求的完整输入（system/user、拼接上下文等）；
+  - LLM 原始返回内容。
+- 常驻能力：ASR runner 在程序启动后常驻后台（减少首条转录延迟），并可在设置变更时重启。
 
-## Review Findings（2026-02-09）
+## 当前状态（Done / Now / Next）
 
-VERIFIED（来自代码审阅与本机可复核命令）
+### Done
 
-- [Critical] UI 侧没有可达的“取消任务”入口，不符合冻结规格“任何阶段可取消（<=300ms）”：
-- 证据：`apps/desktop/src/screens/MainScreen.tsx` 未调用 `invoke("cancel_task")`，且转录中按钮禁用 `disabled={ui === "transcribing"}`。
-- 后端虽提供命令：`apps/desktop/src-tauri/src/lib.rs` 有 `cancel_task` command，`apps/desktop/src-tauri/src/task_manager.rs` 有 `TaskManager.cancel()`。
-- [Critical] `TaskManager` 顶层错误会被吞掉，可能导致 UI 卡死在 TRANSCRIBING（无 `task_event`/`task_done`）：
-- 证据：`apps/desktop/src-tauri/src/task_manager.rs` 中 `run_pipeline(...).await` 的结果被 `let _ = ...` 丢弃，且部分路径使用 `?` 可能直接返回错误而未 emit 事件（例如 Rewrite 阶段模板读取）。
-- [High] FFmpeg 失败诊断与错误码不对齐技术规格：
-- 证据：`apps/desktop/src-tauri/src/pipeline.rs` 的 ffmpeg 调用丢弃 stderr（`Stdio::null()`），`apps/desktop/src-tauri/src/task_manager.rs` 预处理失败上报 `E_PREPROCESS_FAILED`，但 `docs/tech-spec-v0.1.md` 建议 `E_FFMPEG_NOT_FOUND`/`E_FFMPEG_FAILED` 且需要 stderr 摘要用于 UI 诊断。
-- [High] FFmpeg 内置并可定位尚未落地，当前依赖 PATH：
-- 证据：`apps/desktop/src-tauri/src/pipeline.rs` 通过 `Command::new("ffmpeg")`；技术规格要求 Windows 安装包内置 `ffmpeg.exe` 并可在运行时定位（`docs/tech-spec-v0.1.md`）。
-- [High] 模型校验不足，不满足 hash/manifest/版本记录等冻结要求：
-- 证据：`apps/desktop/src-tauri/src/model.rs` 仅校验 `model_dir` 与 `config.json` 存在；技术规格 `docs/tech-spec-v0.1.md` 要求至少 hash/manifest + 版本标识记录。
-- [High] 指标落盘吞 I/O 错误，观测数据可能静默丢失：
-- 证据：`apps/desktop/src-tauri/src/metrics.rs` 使用 `write_all(...).ok()`。
-- [High] LLM 失败信息可能过长并原样进入 metrics/message（缺少截断/脱敏），与“简要错误摘要”目标不匹配：
-- 证据：`apps/desktop/src-tauri/src/llm.rs` 在非 2xx 时返回 `body` 全文，`apps/desktop/src-tauri/src/task_manager.rs` 会将错误 `to_string()` 作为事件 message，并写入 metrics。
-- [Medium] settings 解析失败会被当作默认值（行为“静默回退”），可能掩盖配置损坏：
-- 证据：`apps/desktop/src-tauri/src/lib.rs` 的 `update_settings` 使用 `unwrap_or_default()`。
-- [Medium] ASR Runner 的 `model_version` 当前恒为 `None`，不满足技术规格中“输出 model_version”的建议字段：
-- 证据：`asr_runner/runner.py` 固定填 `model_version=None`，而 `scripts/download_asr_model.py` 会写入 `REVISION.txt` 可用于填充。
-- [Medium] 测试覆盖偏薄：主要覆盖 runner protocol-only，未覆盖 TaskManager 事件序列与取消等硬约束路径：
-- 证据：`tests/test_asr_protocol.py`。
+VERIFIED（已合并到 main，且可在本机复核）
 
-UNCONFIRMED（需要在 Windows 打包/运行环境或 full gate 进一步验证）
+- Debug verbose 日志链路已实现：
+- 仅在 `TYPEVOICE_DEBUG_VERBOSE=1` 时才落“ASR 分段信息 / LLM 请求与返回”的完整 payload：
+  - payload 落盘：`TYPEVOICE_DATA_DIR/debug/<task_id>/asr_segments.json|llm_request.json|llm_response.txt`
+  - 同时在 `TYPEVOICE_DATA_DIR/metrics.jsonl` 追加 `debug_*` 事件，引用 `payload_path`（见 `apps/desktop/src-tauri/src/debug_log.rs`、`apps/desktop/src-tauri/src/asr_service.rs`、`apps/desktop/src-tauri/src/llm.rs`）。
+- ASR runner 常驻已实现：
+  - 启动时后台 warmup，常驻复用；设置里 ASR 模型变更会 best-effort 重启（见 `apps/desktop/src-tauri/src/task_manager.rs`、`apps/desktop/src-tauri/src/asr_service.rs`）。
+  - 可通过 env 关闭常驻用于排障：`TYPEVOICE_ASR_RESIDENT=0`（见 `apps/desktop/src-tauri/src/task_manager.rs`）。
+- Windows release “localhost 无法连接/闪退”排障已完成并修复两类问题：
+  - release 资源加载：启用 Tauri `custom-protocol`（见 `apps/desktop/src-tauri/Cargo.toml`）。
+  - 闪退根因：`APPCRASH` / `0xc00000fd (STATUS_STACK_OVERFLOW)`；通过提升 Windows MSVC 目标主线程栈保留大小到 8MB 修复：
+    - 配置：`apps/desktop/src-tauri/.cargo/config.toml`（`/STACK:8388608`）
+    - 复核：`objdump -x ...typevoice-desktop.exe` 中 `SizeOfStackReserve == 0x00800000`
+    - 风险与经验已写入：`docs/memory/PITFALLS.md`、`docs/memory/DECISIONS.md`。
+- Windows GUI 子系统诊断补强（best-effort）：
+  - `safe_eprintln!`：避免依赖不可用 stderr（`apps/desktop/src-tauri/src/safe_print.rs`）
+  - panic hook 与启动面包屑落盘：`apps/desktop/src-tauri/src/panic_log.rs`、`apps/desktop/src-tauri/src/startup_trace.rs`（注意：这两者用于排障，不是业务日志）。
 
-- ffmpeg 内置定位方案（Tauri bundle resources 路径、命名与许可）如何实现与验收。
-- `verify_full` 在当前机器是否可通过（GPU/fixtures/模型安装齐备时）。
+### Now
 
-## Fixes Applied（2026-02-09）
+VERIFIED（当前现状）
 
-VERIFIED（已合并到 git main，且本机通过：`cargo test`、`pytest`、`npm run build`）
+- Windows release 版本可稳定运行，数据目录为 `D:\\Projects\\TypeVoice\\tmp\\typevoice-data`（等价于默认 `tmp/typevoice-data`）。
+- 最新一次任务的 `metrics.jsonl` 中只有 `task_event/task_perf`，没有 `debug_*` 事件；且 `debug/` 目录不存在：说明当次运行时未开启 `TYPEVOICE_DEBUG_VERBOSE`，因此“分片转录/LLM 请求与回复原文”没有被记录下来（这是预期行为，不是 bug）。
 
-- P0：UI 已接入取消任务（转录中点击主按钮触发取消，取消中禁用重复操作）。
-- P0：TaskManager 顶层 Err 现在会发出 fail-safe `task_event`，避免 UI 卡死；Rewrite 模板读取失败不再导致整个任务无事件退出。
-- P1：FFmpeg 预处理失败现在携带 stderr 摘要；错误码映射为 `E_FFMPEG_NOT_FOUND`/`E_FFMPEG_FAILED`（否则 `E_PREPROCESS_FAILED`），并支持 env 覆盖 `TYPEVOICE_FFMPEG`/`TYPEVOICE_FFPROBE`。
-- P1：模型下载脚本写入 `REVISION.txt` 与 `manifest.json`；Rust 侧 `asr_model_status` 会校验 manifest 并返回 `model_version`；ASR Runner 会在 metrics 中填充 `model_version`（本地目录模型）。
-- P2：metrics 落盘不再吞 I/O 错误（改为传播，并在 emit 处记录 stderr）；LLM 失败 body 截断；settings 解析失败会自动备份 `settings.json` 并恢复默认值而非静默吞掉。
+### Next
 
-Commit References（VERIFIED）
+VERIFIED（下一步推进顺序，零上下文 agent 可直接做）
 
-- `d3de362`：`fix(core): enable cancel and harden task pipeline`
-- `518fe18`：`feat(model): add manifest and version metadata`
+1. 让“完整调试日志”可重复产出：
+- 在 Windows 启动进程时设置 `TYPEVOICE_DEBUG_VERBOSE=1`（必要时再加 `TYPEVOICE_DEBUG_INCLUDE_LLM=1`、`TYPEVOICE_DEBUG_INCLUDE_ASR_SEGMENTS=1`）。
+- 触发一次转录任务后，从 `tmp/typevoice-data/metrics.jsonl` 找到最后一个 `task_id`，读取：
+  - `tmp/typevoice-data/debug/<task_id>/asr_segments.json`
+  - `tmp/typevoice-data/debug/<task_id>/llm_request.json`
+  - `tmp/typevoice-data/debug/<task_id>/llm_response.txt`
+2. 做性能分析（不依赖 debug verbose）：
+- 从 `metrics.jsonl` 的 `task_perf` 汇总分布（preprocess/asr/rewrite），找瓶颈（当前样本里 Rewrite 往往是最大项）。
+- 若要细到“音频切分/每段耗时”，需扩展 ASR runner 协议或在 Rust 侧记录更细粒度的分段耗时（当前仅落分段文本与元信息）。
 
-UNCONFIRMED
+## 当前工作集（关键文件 / 命令 / 约束）
 
-- Windows 目标机上的原生 Gate（`scripts/windows/windows_gate.ps1`）是否已经跑通并留档。
-
-VERIFIED（2026-02-09，本机执行）
-
-- `scripts/verify_quick.py` 通过：`PASS: rtf=0.266... device=cuda cancel_ms=116 ...`
-- `scripts/verify_full.py` 通过：`PASS: rtf_60=0.091... rtf_5m=0.047... cancel_ffmpeg_ms=104 cancel_asr_ms=108 soak_runs=138 ...`
-
-## Next
-
-UNCONFIRMED
-
-- 明确 `docs/memory/SPEC.md` 的权威性边界：
-- 是否仅作为索引与最小摘要（推荐，避免与 `docs/*-spec*.md` 漂移），还是要逐步迁移为唯一真源。
-- 运行并记录一次验证结果：repo root 执行 `./.venv/bin/python scripts/verify_quick.py` 与 `./.venv/bin/python scripts/verify_full.py`。
-- 在 Windows 原生环境跑 M12 Gate，并将结果写入本外置记忆（或另建 `docs/memory/DECISIONS.md` / `PITFALLS.md` 视情况追加）。
-- 修复优先级（建议按严重度）：
-- P0：补齐 UI 取消入口（对齐“任何阶段可取消”）。
-- P0：保证任意失败路径都能 emit `task_event(status=failed|cancelled)`，避免 UI 卡死。
-- P1：对齐 FFmpeg 失败诊断（stderr 摘要）与错误码映射。
-- P1：补齐 model 校验与 version/manifest 记录。
-- P2：修复 metrics 落盘吞错、LLM 错误消息截断/脱敏、settings load 错误提示。
-
-## Open Questions
-
-UNCONFIRMED
-
-- 分发形态对齐：技术规格要求“内置 FFmpeg 随包分发”，但当前开发实现里 `apps/desktop/src-tauri/src/pipeline.rs` 通过 `Command::new(\"ffmpeg\")` 依赖 PATH（打包时如何定位内置 ffmpeg？是否已有实现但未在此处体现？）。
-- 模型校验深度：当前 `apps/desktop/src-tauri/src/model.rs` 的校验是“目录存在 + config.json 存在”的最小集合；是否要对齐 `docs/tech-spec-v0.1.md` 所要求的 hash/manifest 校验与版本记录。
-- ASR Runner 的分发策略：当前依赖 repo-local `.venv` + `python -m asr_runner.runner`；Windows 发布时是否采用嵌入式 Python 或其他方式（技术规格列为待确认）。
-
-## Working Set
+### 关键文件
 
 VERIFIED
 
-- 冻结规格入口：
-- `docs/base-spec-v0.1.md`；`docs/tech-spec-v0.1.md`；`docs/verification-v0.1.md`；`docs/roadmap-v0.1.md`；`docs/tasks-v0.1.md`。
-- 核心实现文件（优先阅读）：
-- `apps/desktop/src-tauri/src/task_manager.rs`；`apps/desktop/src-tauri/src/pipeline.rs`；`apps/desktop/src-tauri/src/llm.rs`；`apps/desktop/src-tauri/src/settings.rs`；`asr_runner/runner.py`。
-- 验证与测试：
-- `scripts/verify_quick.py`；`scripts/verify_full.py`；`tests/test_asr_protocol.py`。
+- 任务编排与阶段指标：`apps/desktop/src-tauri/src/task_manager.rs`
+- ASR 常驻与分段 payload：`apps/desktop/src-tauri/src/asr_service.rs`
+- LLM 请求/响应与 payload：`apps/desktop/src-tauri/src/llm.rs`
+- Debug 开关与 payload 落盘策略：`apps/desktop/src-tauri/src/debug_log.rs`
+- 数据目录解析：`apps/desktop/src-tauri/src/data_dir.rs`
+- Windows 栈配置：`apps/desktop/src-tauri/.cargo/config.toml`
+- Tauri release 资源：`apps/desktop/src-tauri/Cargo.toml`（`custom-protocol`）
+- 运行时数据（Windows）：`tmp/typevoice-data/metrics.jsonl`、`tmp/typevoice-data/history.sqlite3`、`tmp/typevoice-data/debug/`
+
+### 关键命令
+
+VERIFIED（WSL/Windows 均可执行；Windows 建议用 PowerShell 执行）
+
+- Windows 编译 release：
+- `cd D:\\Projects\\TypeVoice\\apps\\desktop && npm run tauri build`
+- Windows 直接运行 release（无控制台）：
+- `D:\\Projects\\TypeVoice\\apps\\desktop\\src-tauri\\target\\release\\typevoice-desktop.exe`
+- 查询阶段耗时（示例）：
+- `jq -r 'select(.type==\"task_perf\") | {task_id, audio_seconds, preprocess_ms, asr_roundtrip_ms, rewrite_ms} | @json' tmp/typevoice-data/metrics.jsonl | tail`
+- 找 debug payload 事件（要求 debug verbose 已开）：
+- `jq -r 'select(.type|startswith(\"debug_\")) | [.type,.task_id,.payload_path,.note] | @tsv' tmp/typevoice-data/metrics.jsonl | tail`
+- Gate（repo root）：
+- `./.venv/bin/python scripts/verify_quick.py`
+- `./.venv/bin/python scripts/verify_full.py`
+
+### 关键约束
+
+VERIFIED（来自冻结规格与实现约束）
+
+- ASR 必须使用 CUDA，不允许 CPU 降级（见 `docs/base-spec-v0.1.md`、`docs/verification-v0.1.md`）。
+- 取消需要快速（<=300ms），并在任意阶段都可取消（见 `docs/verification-v0.1.md`）。
+- Debug 完整 payload 仅在 debug 开关开启时落盘（隐私/可观测性的折中），默认不记录。
+- Windows release（GUI 子系统）不要依赖 stdout/stderr 做诊断，优先落盘到 data dir（见 `docs/memory/PITFALLS.md`）。
+
+## 风险与坑（指向 PITFALLS）
+
+VERIFIED
+
+- Windows release 闪退 `0xc00000fd`（栈溢出）可能复发：若移除/覆盖 `apps/desktop/src-tauri/.cargo/config.toml`，需优先回归验证。见 `docs/memory/PITFALLS.md`。
+- Windows GUI 子系统无控制台导致“看不到日志/重定向为空”，排障必须走文件落盘；必要时使用 `safe_eprintln!`。见 `docs/memory/PITFALLS.md`。
+- 若忘记开启 `TYPEVOICE_DEBUG_VERBOSE`，就无法从日志拿到“分片转录/LLM 原文”。这是预期行为但容易误判为“日志没实现”。见本文件 Now。
+
+## 未确认事项（UNCONFIRMED + 推荐验证动作）
+
+UNCONFIRMED
+
+- Windows 原生 Gate（M12）是否跑通并留档（真源：`docs/tasks-v0.1.md`）。
+  - 推荐验证：在 Windows 上跑 `scripts/windows/windows_gate.ps1`，将结果写入 `docs/memory/CONTINUITY.md` 的 Done。
+- “每段音频分片的耗时”是否需要精确记录：
+  - 当前协议只提供 segments 文本/起止时间，整体 ASR wall time 在 `task_perf.asr_roundtrip_ms`；
+  - 推荐验证：检查 `asr_runner/runner.py` 是否能输出 per-segment 处理耗时；若不能，需要设计扩展字段并补测试。
+
