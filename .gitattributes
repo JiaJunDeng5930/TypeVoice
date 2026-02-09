@@ -1,0 +1,21 @@
+# Normalize line endings across WSL-edit + Windows-build workflow.
+# Keep scope limited to source/config/docs scripts to avoid surprising global effects.
+*.rs text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.py text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.js text eol=lf
+*.jsx text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.ps1 text eol=lf
+*.sh text eol=lf
+*.txt text eol=lf
+
+# Lockfile: avoid CRLF churn on Windows checkouts.
+Cargo.lock text eol=lf

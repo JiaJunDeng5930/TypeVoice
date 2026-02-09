@@ -16,3 +16,13 @@ VERIFIED（2026-02-09）
 - 取舍：属于“运行时健壮性优先”的工程化修复；不改变业务逻辑，仅改变链接器栈配置。
 - 复核方式：检查 PE 头 `SizeOfStackReserve` 为 `0x00800000`；并验证 release 进程稳定运行 >= 30s 且无新的 APPCRASH 事件。
 
+## 统一行尾为 LF（仅源码/配置范围）
+
+VERIFIED（2026-02-09）
+
+- 背景：本仓库采用“WSL 统一编辑、Windows 侧仅用于编译运行验证”的双工作副本模式；若 Windows checkout 发生 CRLF 漂移，容易导致大量文件被误判为变更，并放大增量编译失效的概率（见 `docs/windows-dev-from-wsl-v0.1.md` 中对 Windows 侧编辑与行尾警告的提醒）。
+- 决策：新增根目录 `.gitattributes`，对源码/常见配置与脚本文件类型强制 `eol=lf`，避免行尾漂移造成噪声改动与无效重编译。
+- 方案：`.gitattributes` 覆盖 `*.rs/*.ts(x)/*.py/*.toml/*.json/*.md/*.ps1/*.sh` 等；并显式约束 `Cargo.lock` 为 LF。
+- 复核方式：
+  - 在 Windows repo `git pull` 后执行 `git status`，不应出现大面积“仅行尾变化”的改动；
+  - 在 WSL repo `git status` 保持干净。
