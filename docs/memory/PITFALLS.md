@@ -64,3 +64,20 @@ VERIFIED（2026-02-09，代码审阅）
 VERIFIED
 
 - 已修复：转录中点击主按钮触发 `cancel_task`，并有“CANCELLING...”提示与 `task_event(status=cancelled)` 处理。修复 commit：`d3de362`。
+
+## Windows Release 闪退：STATUS_STACK_OVERFLOW (0xc00000fd)
+
+VERIFIED（2026-02-09）
+
+- 复现条件：
+- Windows 上运行 `apps/desktop/src-tauri/target/release/typevoice-desktop.exe`（GUI 子系统）启动后数秒内退出；
+- 事件查看器 Application Error/WER 显示异常码 `0xc00000fd`，模块为 `typevoice-desktop.exe`。
+- 现象：
+- UI 看不到页面或一闪而过；偶发显示 `localhost` 拒绝连接，但本质是进程崩溃导致。
+- 影响：
+- Release 版本不可用，无法验证性能与日志。
+- 处理方式：
+- 提升 Windows MSVC 目标的主线程栈保留大小到 8MB：`apps/desktop/src-tauri/.cargo/config.toml` 设置 `-C link-arg=/STACK:8388608`。
+- 复核：
+- `objdump -x ...typevoice-desktop.exe` 中 `SizeOfStackReserve == 0x00800000`；
+- 启动后进程稳定运行 >= 30s，且无新的 APPCRASH 事件。
