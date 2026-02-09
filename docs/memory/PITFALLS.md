@@ -81,3 +81,23 @@ VERIFIED（2026-02-09）
 - 复核：
 - `objdump -x ...typevoice-desktop.exe` 中 `SizeOfStackReserve == 0x00800000`；
 - 启动后进程稳定运行 >= 30s，且无新的 APPCRASH 事件。
+
+## Windows Release 无控制台：不要依赖 stdout/stderr 做诊断（SafeEprintln）
+
+VERIFIED（2026-02-09）
+
+- 背景：
+- `apps/desktop/src-tauri/src/main.rs` 在 release 下启用 `windows_subsystem = "windows"`，这会让进程默认没有控制台窗口。
+- 复现条件：
+- 在 PowerShell 里运行 release exe 并重定向：`& typevoice-desktop.exe 1> out.txt 2> err.txt`。
+- 现象：
+- `out.txt/err.txt` 可能仍为空（即使代码里有 `eprintln!`），导致“闪退时完全没输出”的错觉。
+- 影响：
+- 启动早期崩溃/卡死时，基于控制台的诊断手段基本失效。
+- 处理方式：
+- 诊断输出优先写入数据目录文件（例如 `metrics.jsonl`、`startup_trace.log`、`panic.log`），而不是依赖控制台；
+- 对少量 best-effort 的 stderr 输出，使用 `apps/desktop/src-tauri/src/safe_print.rs` 的 `safe_eprintln!`（忽略写入错误），避免把“打印失败”放大成新的故障源。
+
+UNCONFIRMED（但建议遵守）
+
+- 在部分环境里，如果 panic hook/日志输出链路反复尝试向不可用的 stderr 写入，可能引入递归/放大故障；因此在 Windows release 上应尽量减少对 stderr 的依赖，必要时一律走文件落盘。
