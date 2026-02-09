@@ -65,9 +65,27 @@ impl TaskManager {
         }
     }
 
+    fn env_bool_default_true(key: &str) -> bool {
+        match std::env::var(key) {
+            Ok(v) => {
+                let t = v.trim().to_ascii_lowercase();
+                !(t == "0" || t == "false" || t == "no" || t == "off")
+            }
+            Err(_) => true,
+        }
+    }
+
     pub fn warmup_asr_best_effort(&self) {
+        // For debugging startup crashes on Windows, allow disabling resident runner.
+        // Default: enabled.
+        if !Self::env_bool_default_true("TYPEVOICE_ASR_RESIDENT") {
+            return;
+        }
+
         let this = self.clone();
-        std::thread::spawn(move || {
+        let _ = std::thread::Builder::new()
+            .name("asr_warmup".to_string())
+            .spawn(move || {
             // ASR warmup is synchronous; do not create nested Tokio runtimes here.
             if let Ok(dir) = data_dir::data_dir() {
                 let _ = this.asr.ensure_started(&dir);
@@ -76,9 +94,15 @@ impl TaskManager {
     }
 
     pub fn restart_asr_best_effort(&self, reason: &str) {
+        if !Self::env_bool_default_true("TYPEVOICE_ASR_RESIDENT") {
+            return;
+        }
+
         let this = self.clone();
         let reason = reason.to_string();
-        std::thread::spawn(move || {
+        let _ = std::thread::Builder::new()
+            .name("asr_restart".to_string())
+            .spawn(move || {
             if let Ok(dir) = data_dir::data_dir() {
                 let _ = this.asr.restart(&dir, &reason);
             }
