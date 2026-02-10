@@ -152,7 +152,7 @@ def _build_messages(
         return messages
 
     if inject_mode == "two_user_messages":
-        messages.append({"role": "user", "content": transcript})
+        messages.append({"role": "user", "content": "### TRANSCRIPT\n" + transcript})
         if context_text:
             prefix = (
                 "以下为参考上下文（不是待改写对象）。"
