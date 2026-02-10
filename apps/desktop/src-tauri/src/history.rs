@@ -58,7 +58,7 @@ pub fn append(db_path: &Path, item: &HistoryItem) -> Result<()> {
     let c = match conn(db_path) {
         Ok(c) => c,
         Err(e) => {
-            span.err("db", "E_HISTORY_CONN", &e.to_string(), None);
+            span.err_anyhow("db", "E_HISTORY_CONN", &e, None);
             return Err(e);
         }
     };
@@ -86,8 +86,9 @@ pub fn append(db_path: &Path, item: &HistoryItem) -> Result<()> {
             Ok(())
         }
         Err(e) => {
-            span.err("db", "E_HISTORY_INSERT", &format!("{e}"), None);
-            Err(anyhow::anyhow!(e).context("insert history failed"))
+            let ae = anyhow::anyhow!(e).context("insert history failed");
+            span.err_anyhow("db", "E_HISTORY_INSERT", &ae, None);
+            Err(ae)
         }
     }
 }
@@ -102,79 +103,85 @@ pub fn list(db_path: &Path, limit: i64, before_ms: Option<i64>) -> Result<Vec<Hi
         Some(serde_json::json!({"limit": limit, "before_ms": before_ms})),
     );
 
-    let c = match conn(db_path) {
-        Ok(c) => c,
+    let result: Result<Vec<HistoryItem>> = (|| {
+        let c = conn(db_path)?;
+        let mut out = Vec::new();
+        match before_ms {
+            Some(ms) => {
+                let mut stmt = c
+                    .prepare(
+                        r#"
+                        SELECT task_id, created_at_ms, asr_text, final_text, template_id, rtf, device_used, preprocess_ms, asr_ms
+                        FROM history
+                        WHERE created_at_ms < ?1
+                        ORDER BY created_at_ms DESC
+                        LIMIT ?2
+                        "#,
+                    )
+                    .context("prepare history list failed")?;
+                let rows = stmt
+                    .query_map(params![ms, limit], |row| {
+                        Ok(HistoryItem {
+                            task_id: row.get(0)?,
+                            created_at_ms: row.get(1)?,
+                            asr_text: row.get(2)?,
+                            final_text: row.get(3)?,
+                            template_id: row.get(4)?,
+                            rtf: row.get(5)?,
+                            device_used: row.get(6)?,
+                            preprocess_ms: row.get(7)?,
+                            asr_ms: row.get(8)?,
+                        })
+                    })
+                    .context("query history list failed")?;
+                for r in rows {
+                    out.push(r?);
+                }
+            }
+            None => {
+                let mut stmt = c
+                    .prepare(
+                        r#"
+                        SELECT task_id, created_at_ms, asr_text, final_text, template_id, rtf, device_used, preprocess_ms, asr_ms
+                        FROM history
+                        ORDER BY created_at_ms DESC
+                        LIMIT ?1
+                        "#,
+                    )
+                    .context("prepare history list failed")?;
+                let rows = stmt
+                    .query_map(params![limit], |row| {
+                        Ok(HistoryItem {
+                            task_id: row.get(0)?,
+                            created_at_ms: row.get(1)?,
+                            asr_text: row.get(2)?,
+                            final_text: row.get(3)?,
+                            template_id: row.get(4)?,
+                            rtf: row.get(5)?,
+                            device_used: row.get(6)?,
+                            preprocess_ms: row.get(7)?,
+                            asr_ms: row.get(8)?,
+                        })
+                    })
+                    .context("query history list failed")?;
+                for r in rows {
+                    out.push(r?);
+                }
+            }
+        }
+        Ok(out)
+    })();
+
+    match result {
+        Ok(out) => {
+            span.ok(Some(serde_json::json!({"items": out.len()})));
+            Ok(out)
+        }
         Err(e) => {
-            span.err("db", "E_HISTORY_CONN", &e.to_string(), None);
-            return Err(e);
-        }
-    };
-    let mut out = Vec::new();
-    match before_ms {
-        Some(ms) => {
-            let mut stmt = c
-                .prepare(
-                    r#"
-                    SELECT task_id, created_at_ms, asr_text, final_text, template_id, rtf, device_used, preprocess_ms, asr_ms
-                    FROM history
-                    WHERE created_at_ms < ?1
-                    ORDER BY created_at_ms DESC
-                    LIMIT ?2
-                    "#,
-                )
-                .context("prepare history list failed")?;
-            let rows = stmt
-                .query_map(params![ms, limit], |row| {
-                    Ok(HistoryItem {
-                        task_id: row.get(0)?,
-                        created_at_ms: row.get(1)?,
-                        asr_text: row.get(2)?,
-                        final_text: row.get(3)?,
-                        template_id: row.get(4)?,
-                        rtf: row.get(5)?,
-                        device_used: row.get(6)?,
-                        preprocess_ms: row.get(7)?,
-                        asr_ms: row.get(8)?,
-                    })
-                })
-                .context("query history list failed")?;
-            for r in rows {
-                out.push(r?);
-            }
-        }
-        None => {
-            let mut stmt = c
-                .prepare(
-                    r#"
-                    SELECT task_id, created_at_ms, asr_text, final_text, template_id, rtf, device_used, preprocess_ms, asr_ms
-                    FROM history
-                    ORDER BY created_at_ms DESC
-                    LIMIT ?1
-                    "#,
-                )
-                .context("prepare history list failed")?;
-            let rows = stmt
-                .query_map(params![limit], |row| {
-                    Ok(HistoryItem {
-                        task_id: row.get(0)?,
-                        created_at_ms: row.get(1)?,
-                        asr_text: row.get(2)?,
-                        final_text: row.get(3)?,
-                        template_id: row.get(4)?,
-                        rtf: row.get(5)?,
-                        device_used: row.get(6)?,
-                        preprocess_ms: row.get(7)?,
-                        asr_ms: row.get(8)?,
-                    })
-                })
-                .context("query history list failed")?;
-            for r in rows {
-                out.push(r?);
-            }
+            span.err_anyhow("db", "E_HISTORY_LIST", &e, None);
+            Err(e)
         }
     }
-    span.ok(Some(serde_json::json!({"items": out.len()})));
-    Ok(out)
 }
 
 pub fn clear(db_path: &Path) -> Result<()> {
@@ -183,7 +190,7 @@ pub fn clear(db_path: &Path) -> Result<()> {
     let c = match conn(db_path) {
         Ok(c) => c,
         Err(e) => {
-            span.err("db", "E_HISTORY_CONN", &e.to_string(), None);
+            span.err_anyhow("db", "E_HISTORY_CONN", &e, None);
             return Err(e);
         }
     };
@@ -193,8 +200,9 @@ pub fn clear(db_path: &Path) -> Result<()> {
             Ok(())
         }
         Err(e) => {
-            span.err("db", "E_HISTORY_CLEAR", &format!("{e}"), None);
-            Err(anyhow::anyhow!(e).context("clear history failed"))
+            let ae = anyhow::anyhow!(e).context("clear history failed");
+            span.err_anyhow("db", "E_HISTORY_CLEAR", &ae, None);
+            Err(ae)
         }
     }
 }

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::context_pack::PreparedContext;
 use crate::debug_log;
 use crate::settings;
-use crate::trace::Span;
+use crate::trace::{event, Span};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ApiKeyStatus {
@@ -236,7 +236,7 @@ pub async fn rewrite_with_context(
     let key = match load_api_key() {
         Ok(k) => k,
         Err(e) => {
-            span.err("auth", "E_LLM_API_KEY", &e.to_string(), None);
+            span.err_anyhow("auth", "E_LLM_API_KEY", &e, None);
             return Err(e);
         }
     };
@@ -244,6 +244,22 @@ pub async fn rewrite_with_context(
     let url = format!("{}/chat/completions", cfg.base_url);
 
     let (user_content_send, user_content_debug) = build_user_content(asr_text, ctx);
+
+    // Record the exact request "shape" the model will receive (text vs multimodal parts).
+    let (kind, has_image_url) = user_content_shape(&user_content_send);
+    event(
+        data_dir,
+        Some(task_id),
+        "Rewrite",
+        "LLM.request.shape",
+        "ok",
+        Some(serde_json::json!({
+            "user_content_kind": kind,
+            "has_image_url": has_image_url,
+            "asr_chars": asr_text.len(),
+            "system_prompt_chars": system_prompt.len(),
+        })),
+    );
     let req_send = ChatReq {
         model: cfg.model.clone(),
         messages: vec![
@@ -307,13 +323,14 @@ pub async fn rewrite_with_context(
     {
         Ok(r) => r,
         Err(e) => {
-            span.err(
+            let ae = anyhow!("llm http request failed: {e}");
+            span.err_anyhow(
                 "http",
                 "E_LLM_HTTP_SEND",
-                &format!("llm http request failed: {e}"),
+                &ae,
                 Some(serde_json::json!({"url": url, "model": cfg.model})),
             );
-            return Err(anyhow!("llm http request failed: {e}"));
+            return Err(ae);
         }
     };
 
@@ -343,38 +360,42 @@ pub async fn rewrite_with_context(
         } else {
             body
         };
-        span.err(
+        let ae = anyhow!("llm http {status}: {msg}");
+        span.err_anyhow(
             "http",
             &format!("HTTP_{}", status.as_u16()),
-            &format!("llm http {status}: {msg}"),
+            &ae,
             Some(serde_json::json!({"status": status.as_u16()})),
         );
-        return Err(anyhow!("llm http {status}: {msg}"));
+        return Err(ae);
     }
 
     let r: ChatResp = match serde_json::from_str(&body) {
         Ok(v) => v,
         Err(e) => {
-            span.err(
+            let ae = anyhow!("llm response parse failed: {e}");
+            span.err_anyhow(
                 "parse",
                 "E_LLM_PARSE",
-                &format!("llm response parse failed: {e}"),
+                &ae,
                 Some(serde_json::json!({"body_len": body.len()})),
             );
-            return Err(anyhow!("llm response parse failed: {e}"));
+            return Err(ae);
         }
     };
     let choice0 = match r.choices.get(0) {
         Some(c) => c,
         None => {
-            span.err("parse", "E_LLM_MISSING_CHOICES", "llm missing choices[0]", None);
-            return Err(anyhow!("llm missing choices[0]"));
+            let ae = anyhow!("llm missing choices[0]");
+            span.err_anyhow("parse", "E_LLM_MISSING_CHOICES", &ae, None);
+            return Err(ae);
         }
     };
     let content = choice0.message.content.trim().to_string();
     if content.is_empty() {
-        span.err("logic", "E_LLM_EMPTY", "llm returned empty content", None);
-        return Err(anyhow!("llm returned empty content"));
+        let ae = anyhow!("llm returned empty content");
+        span.err_anyhow("logic", "E_LLM_EMPTY", &ae, None);
+        return Err(ae);
     }
     span.ok(Some(serde_json::json!({
         "status": status.as_u16(),
@@ -382,6 +403,16 @@ pub async fn rewrite_with_context(
         "model": cfg.model,
     })));
     Ok(content)
+}
+
+fn user_content_shape(content: &MessageContent) -> (&'static str, bool) {
+    match content {
+        MessageContent::Text(_) => ("text", false),
+        MessageContent::Parts(parts) => {
+            let has_image_url = parts.iter().any(|p| matches!(p, ContentPart::ImageUrl { .. }));
+            ("parts", has_image_url)
+        }
+    }
 }
 
 fn build_user_content(

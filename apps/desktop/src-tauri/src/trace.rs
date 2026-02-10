@@ -5,11 +5,13 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
+use anyhow::Error as AnyhowError;
 use serde::Serialize;
 use serde_json::Value;
 
 const DEFAULT_TRACE_MAX_BYTES: u64 = 10_000_000; // 10MB
 const DEFAULT_TRACE_MAX_FILES: usize = 5;
+const DEFAULT_BACKTRACE_MAX_CHARS: usize = 12_000;
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -45,6 +47,11 @@ fn env_usize(key: &str, default: usize) -> usize {
 pub fn enabled() -> bool {
     // Default: enabled. Users can set TYPEVOICE_TRACE_ENABLED=0 to disable.
     env_bool_default_true("TYPEVOICE_TRACE_ENABLED")
+}
+
+fn backtrace_enabled() -> bool {
+    // Default: enabled. Users can set TYPEVOICE_TRACE_BACKTRACE=0 to disable.
+    env_bool_default_true("TYPEVOICE_TRACE_BACKTRACE")
 }
 
 fn max_bytes() -> u64 {
@@ -124,6 +131,107 @@ pub fn emit_best_effort(data_dir: &Path, ev: &TraceEvent) {
         return;
     }
     let _ = f.write_all(b"\n");
+}
+
+fn clamp_chars(s: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    let mut out = String::with_capacity(std::cmp::min(s.len(), max_chars));
+    for (i, ch) in s.chars().enumerate() {
+        if i >= max_chars {
+            break;
+        }
+        if ch == '\0' {
+            continue;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn redact_user_paths(s: &str) -> String {
+    // Goal: avoid leaking personal absolute paths in trace logs while keeping backtraces usable.
+    // We do NOT try to perfectly sanitize everything; we just scrub common "home dir" patterns.
+    fn scrub_after(hay: &str, marker: &str, sep: char) -> String {
+        let mut out = String::with_capacity(hay.len());
+        let mut i = 0;
+        while let Some(pos) = hay[i..].find(marker) {
+            let abs = i + pos;
+            out.push_str(&hay[i..abs]);
+            out.push_str(marker);
+            let name_start = abs + marker.len();
+            let rest = &hay[name_start..];
+            let mut name_end = name_start;
+            for ch in rest.chars() {
+                if ch == sep {
+                    break;
+                }
+                name_end += ch.len_utf8();
+            }
+            out.push_str("<redacted>");
+            i = name_end;
+        }
+        out.push_str(&hay[i..]);
+        out
+    }
+
+    let mut t = s.to_string();
+    t = scrub_after(&t, "\\Users\\", '\\');
+    t = scrub_after(&t, "/Users/", '/');
+    t = scrub_after(&t, "/home/", '/');
+    t
+}
+
+fn anyhow_chain(err: &AnyhowError) -> Vec<String> {
+    err.chain().map(|e| e.to_string()).collect()
+}
+
+fn maybe_backtrace_string() -> Option<String> {
+    if !backtrace_enabled() {
+        return None;
+    }
+    let bt = std::backtrace::Backtrace::force_capture();
+    let s = format!("{bt:?}");
+    Some(clamp_chars(&redact_user_paths(&s), DEFAULT_BACKTRACE_MAX_CHARS))
+}
+
+fn merge_ctx(base: serde_json::Map<String, Value>, extra: Option<Value>) -> Value {
+    match extra {
+        None => Value::Object(base),
+        Some(Value::Object(m)) => {
+            let mut out = base;
+            for (k, v) in m.into_iter() {
+                out.insert(k, v);
+            }
+            Value::Object(out)
+        }
+        Some(v) => {
+            let mut out = base;
+            out.insert("extra".to_string(), v);
+            Value::Object(out)
+        }
+    }
+}
+
+fn ctx_for_anyhow_error(err: &AnyhowError, extra: Option<Value>) -> Value {
+    let mut m = serde_json::Map::new();
+    m.insert("err_chain".to_string(), serde_json::json!(anyhow_chain(err)));
+    if let Some(bt) = maybe_backtrace_string() {
+        m.insert("backtrace".to_string(), serde_json::json!(bt));
+    }
+    merge_ctx(m, extra)
+}
+
+fn ctx_with_backtrace(extra: Option<Value>) -> Option<Value> {
+    if !backtrace_enabled() {
+        return extra;
+    }
+    let mut m = serde_json::Map::new();
+    if let Some(bt) = maybe_backtrace_string() {
+        m.insert("backtrace".to_string(), serde_json::json!(bt));
+    }
+    Some(merge_ctx(m, extra))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -269,7 +377,29 @@ impl Span {
                     code: code.to_string(),
                     message: message.to_string(),
                 }),
-                ctx,
+                ctx: ctx_with_backtrace(ctx),
+            },
+        );
+    }
+
+    pub fn err_anyhow(mut self, kind: &str, code: &str, err: &AnyhowError, ctx: Option<Value>) {
+        self.finished = true;
+        emit_best_effort(
+            &self.data_dir,
+            &TraceEvent {
+                ts_ms: now_ms(),
+                task_id: self.task_id.clone(),
+                stage: self.stage.clone(),
+                step_id: self.step_id.clone(),
+                op: "end".to_string(),
+                status: "err".to_string(),
+                duration_ms: Some(self.t0.elapsed().as_millis()),
+                error: Some(TraceError {
+                    kind: kind.to_string(),
+                    code: code.to_string(),
+                    message: err.to_string(),
+                }),
+                ctx: Some(ctx_for_anyhow_error(err, ctx)),
             },
         );
     }
@@ -280,6 +410,7 @@ impl Drop for Span {
         if self.finished {
             return;
         }
+        let ctx = ctx_with_backtrace(None);
         emit_best_effort(
             &self.data_dir,
             &TraceEvent {
@@ -295,7 +426,7 @@ impl Drop for Span {
                     code: "ABORTED".to_string(),
                     message: "span dropped without explicit ok/err".to_string(),
                 }),
-                ctx: None,
+                ctx,
             },
         );
     }

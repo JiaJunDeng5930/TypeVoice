@@ -144,10 +144,10 @@ pub fn load_settings_or_recover(data_dir: &Path) -> Settings {
                 crate::safe_eprintln!("settings load failed (missing file): {e:#}");
             }
 
-            span.err(
+            span.err_anyhow(
                 "parse",
                 "E_SETTINGS_LOAD",
-                &e.to_string(),
+                &e,
                 Some(serde_json::json!({
                     "had_file": had_file,
                     "backup_ok": backup_ok,
@@ -165,8 +165,9 @@ pub fn save_settings(data_dir: &Path, settings: &Settings) -> Result<()> {
     let p = settings_path(data_dir);
     let s = serde_json::to_string_pretty(settings).context("serialize settings failed")?;
     if let Err(e) = fs::write(&p, s) {
-        span.err("io", "E_SETTINGS_WRITE", &format!("write settings.json failed: {e}"), None);
-        return Err(anyhow::anyhow!("write settings.json failed: {e}"));
+        let ae = anyhow::anyhow!("write settings.json failed: {e}");
+        span.err_anyhow("io", "E_SETTINGS_WRITE", &ae, None);
+        return Err(ae);
     }
     span.ok(None);
     Ok(())
