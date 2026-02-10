@@ -42,6 +42,15 @@ VERIFIED（已合并到 main，且可在本机复核）
 - Windows GUI 子系统诊断补强（best-effort）：
   - `safe_eprintln!`：避免依赖不可用 stderr（`apps/desktop/src-tauri/src/safe_print.rs`）
   - panic hook 与启动面包屑落盘：`apps/desktop/src-tauri/src/panic_log.rs`、`apps/desktop/src-tauri/src/startup_trace.rs`（注意：这两者用于排障，不是业务日志）。
+- Windows 编译迭代提速（源码行尾 + Rust dev 链接 + sccache，可复核）：
+  - 行尾规范化：新增 `.gitattributes`，对源码/常见配置与脚本强制 LF（减少 Windows checkout 的 CRLF 漂移噪声）。
+  - Rust dev profile：`apps/desktop/src-tauri/Cargo.toml` 设置 `[profile.dev] debug = 1`（降低链接开销）。
+  - Windows gate：`scripts/windows/windows_gate.ps1` 可选启用 `sccache`（存在则设置 `RUSTC_WRAPPER=sccache` 与 repo-local `SCCACHE_DIR`）。
+  - Windows 实测（PowerShell `Measure-Command`，在 `D:\\Projects\\TypeVoice`，使用隔离的 `CARGO_TARGET_DIR`）：
+  - `cargo build`（无 sccache，clean target）：约 127s
+  - `cargo build`（sccache 空缓存，clean target）：约 157s（写缓存开销）
+  - `cargo build`（sccache 缓存命中，删除 target 后重建）：约 68s（`sccache --show-stats` 可见 hits）
+  - 增量（对 `src-tauri/src/main.rs` 加一行触发重建）：无 sccache 约 2.26s；sccache 约 1.85s
 
 ### Now
 
@@ -121,4 +130,3 @@ UNCONFIRMED
 - “每段音频分片的耗时”是否需要精确记录：
   - 当前协议只提供 segments 文本/起止时间，整体 ASR wall time 在 `task_perf.asr_roundtrip_ms`；
   - 推荐验证：检查 `asr_runner/runner.py` 是否能输出 per-segment 处理耗时；若不能，需要设计扩展字段并补测试。
-

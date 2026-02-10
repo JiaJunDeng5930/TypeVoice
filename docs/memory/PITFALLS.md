@@ -101,3 +101,33 @@ VERIFIED（2026-02-09）
 UNCONFIRMED（但建议遵守）
 
 - 在部分环境里，如果 panic hook/日志输出链路反复尝试向不可用的 stderr 写入，可能引入递归/放大故障；因此在 Windows release 上应尽量减少对 stderr 的依赖，必要时一律走文件落盘。
+
+## Windows 安装 sccache：`cargo install sccache` 编译失败
+
+VERIFIED（2026-02-10）
+
+- 复现条件：
+  - Windows 环境执行 `cargo install sccache`（Rust 工具链：`rustc 1.93.0` / `cargo 1.93.0`）。
+- 现象：
+  - `sccache` 编译失败，报错包含 `unresolved import windows_sys::Win32::System::Threading::CreateProcessW`，导致无法通过 `cargo install` 安装。
+- 影响：
+  - 无法按预期启用 `RUSTC_WRAPPER=sccache`，Windows 侧编译迭代提速落不下来。
+- 处理方式：
+  - 改用官方 release 的预编译 `sccache.exe`：
+    - 从 GitHub release 下载 `sccache-*-x86_64-pc-windows-msvc.zip` 并解压得到 `sccache.exe`
+    - 将其放到 `%USERPROFILE%\\.cargo\\bin\\sccache.exe`（或任意在 PATH 中的目录）
+    - 复核：`sccache --version` 可执行
+
+## Windows benchmark 清理 `target` 失败：文件被占用（Access Denied）
+
+VERIFIED（2026-02-10）
+
+- 复现条件：
+  - Windows 上对 `apps/desktop/src-tauri/target` 执行 `cargo clean` 或递归删除（Remove-Item），同时存在进程占用生成的 `.exe/.dll`（例如曾启动过 `typevoice-desktop.exe`）。
+- 现象：
+  - 清理失败，报错包含 `拒绝访问 (os error 5)`，有时后续链接也会因无法写入输出文件而失败（例如 `LNK1104` 无法打开输出 `.dll`）。
+- 影响：
+  - 基准测试/清理步骤不稳定，可能误判编译耗时或直接导致构建失败。
+- 处理方式：
+  - 先停止可能占用文件的进程（例如 `typevoice-desktop`、`node`）。
+  - 基准测试时避免使用共享的默认 `target/`：改用独立的 `CARGO_TARGET_DIR`（例如 repo 下 `tmp/bench-*/target`），并用“带重试”的删除逻辑清理该目录。
