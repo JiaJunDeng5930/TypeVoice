@@ -27,10 +27,12 @@ Info "running: cargo check (Windows compile gate)"
 Push-Location "apps/desktop/src-tauri"
 try {
   cargo check --locked
+  if ($LASTEXITCODE -ne 0) {
+    Fail ("cargo check failed (exit_code=" + $LASTEXITCODE + ")")
+  }
 } finally {
   Pop-Location
 }
 
 Write-Host "PASS" -ForegroundColor Green
 exit 0
-
