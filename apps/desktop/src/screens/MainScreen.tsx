@@ -186,12 +186,15 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
         // ignore
       }
     };
-  }, [hotkeysEnabled, onHistoryChanged, pushToast, showOverlay]);
+  }, [hotkeysEnabled, onHistoryChanged, pushToast, rewriteEnabled, showOverlay, templateId]);
 
   async function startRecording(source: "ui" | "hotkey" = "ui") {
     chunksRef.current = [];
     hotkeySessionRef.current = source === "hotkey";
     if (hotkeySessionRef.current) void overlaySet(true, "REC");
+    // Snapshot settings at the moment recording starts.
+    const rewriteEnabledNow = rewriteEnabled;
+    const templateIdNow = templateId;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
@@ -222,8 +225,8 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
           const id = (await invoke("start_transcribe_recording_base64", {
             b64,
             ext,
-            rewriteEnabled,
-            templateId,
+            rewriteEnabled: rewriteEnabledNow,
+            templateId: templateIdNow,
           })) as string;
           activeTaskIdRef.current = id;
         } catch {

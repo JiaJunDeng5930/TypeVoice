@@ -45,6 +45,20 @@ VERIFIED
 
 - 已修复：TaskManager 顶层 Err 现在会 fail-safe emit `task_event`，且 Rewrite 模板读取失败不再导致“无事件退出”。修复 commit：`d3de362`。
 
+## 热键触发的录音未带上 Rewrite 设置：看起来“Rewrite 没启用”
+
+VERIFIED（2026-02-11，Windows 实测 + trace 复核）
+
+- 复现条件：
+  - UI 中 `rewrite_enabled=true`（Settings 页面显示 Rewrite ON）。
+  - 使用全局热键（PTT/Toggle）触发录音并完成一次转录。
+- 现象：
+  - 后端 trace 里 `CMD.start_transcribe_recording_base64` 的 `ctx.rewrite_enabled=false`，且 `template_id=null`；
+  - 任务没有进入 `Rewrite` 阶段（`metrics.jsonl` 无 `stage=Rewrite` 事件，`rewrite_ms=null`），看起来像“Rewrite 没启用”。
+- 根因：
+  - 前端热键监听的 `useEffect` 没有把 `rewriteEnabled/templateId` 纳入依赖，导致热键回调捕获了旧渲染的设置值（仍为 false/null），进而把错误参数传给 `start_transcribe_recording_base64`。
+- 处理方式：
+  - 让热键监听随 `rewriteEnabled/templateId` 更新，且在 `startRecording` 开始时对这两个值做快照后再用于 invoke。
 ## MVP 取消不可达：UI 未接入 cancel_task
 
 VERIFIED（2026-02-09，代码审阅）
