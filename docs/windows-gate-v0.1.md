@@ -15,6 +15,15 @@ Set-Location C:\path\to\TypeVoice
 powershell -ExecutionPolicy Bypass -File .\scripts\windows\windows_gate.ps1
 ```
 
+## Fast Gate: Windows Compile Check
+
+If you only need a quick "does the Windows Rust backend compile?" check, run:
+
+```powershell
+Set-Location C:\path\to\TypeVoice
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\windows_compile_gate.ps1
+```
+
 What it does:
 
 - Creates repo-local venv (`.venv`) and installs Python deps (including Torch CUDA wheels).

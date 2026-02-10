@@ -46,6 +46,13 @@ VERIFIED（2026-02-09）
 - 复核方式：
   - 在 Windows repo `apps/desktop/src-tauri/` 目录下，对比改动前后 `Measure-Command { cargo build }` 的耗时（尤其是增量编译 + 链接）。
 
+## 新增 Windows 编译闸门（fail-fast）
+
+VERIFIED（2026-02-10）
+
+- 背景：WSL/Linux 上的 `cargo test` 不会编译 `#[cfg(windows)]` 的代码，导致 Windows-only 编译错误（例如 Tauri `manage()` 的 `Send+Sync` 约束）无法被现有 gate 提前发现。
+- 决策：新增 `scripts/windows/windows_compile_gate.ps1`，要求在仓库根目录运行，执行 `apps/desktop/src-tauri` 的 `cargo check --locked` 作为快速闸门；并在 `scripts/windows/windows_gate.ps1` 开始阶段先运行它以 fail-fast。
+
 ## Windows Gate 可选启用 sccache（Rust 编译缓存）
 
 VERIFIED（2026-02-09）

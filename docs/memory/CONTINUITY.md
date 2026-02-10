@@ -26,10 +26,11 @@ VERIFIED（截至 2026-02-10）
 
 VERIFIED（已合并到 main，且可在本机复核）
 
+- Windows 快速质量闸门补强：新增 Windows 编译闸门脚本 `scripts/windows/windows_compile_gate.ps1`，用于快速捕获 Windows-only 编译错误（例如 Tauri state 的 `Send/Sync` 约束问题）；并已接入 `scripts/windows/windows_gate.ps1`，会在重步骤（torch/model/npm）前 fail-fast。
 - Debug verbose 日志链路已实现：
-- 仅在 `TYPEVOICE_DEBUG_VERBOSE=1` 时才落“ASR 分段信息 / LLM 请求与返回”的完整 payload：
-  - payload 落盘：`TYPEVOICE_DATA_DIR/debug/<task_id>/asr_segments.json|llm_request.json|llm_response.txt`
-  - 同时在 `TYPEVOICE_DATA_DIR/metrics.jsonl` 追加 `debug_*` 事件，引用 `payload_path`（见 `apps/desktop/src-tauri/src/debug_log.rs`、`apps/desktop/src-tauri/src/asr_service.rs`、`apps/desktop/src-tauri/src/llm.rs`）。
+  - 仅在 `TYPEVOICE_DEBUG_VERBOSE=1` 时才落“ASR 分段信息 / LLM 请求与返回”的完整 payload：
+    - payload 落盘：`TYPEVOICE_DATA_DIR/debug/<task_id>/asr_segments.json|llm_request.json|llm_response.txt`
+    - 同时在 `TYPEVOICE_DATA_DIR/metrics.jsonl` 追加 `debug_*` 事件，引用 `payload_path`（见 `apps/desktop/src-tauri/src/debug_log.rs`、`apps/desktop/src-tauri/src/asr_service.rs`、`apps/desktop/src-tauri/src/llm.rs`）。
 - ASR runner 常驻已实现：
   - 启动时后台 warmup，常驻复用；设置里 ASR 模型变更会 best-effort 重启（见 `apps/desktop/src-tauri/src/task_manager.rs`、`apps/desktop/src-tauri/src/asr_service.rs`）。
   - 可通过 env 关闭常驻用于排障：`TYPEVOICE_ASR_RESIDENT=0`（见 `apps/desktop/src-tauri/src/task_manager.rs`）。

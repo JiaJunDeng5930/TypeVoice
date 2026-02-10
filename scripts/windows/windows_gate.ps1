@@ -39,6 +39,10 @@ Ensure-Command "cargo"
 Ensure-Command "ffmpeg"
 Ensure-Command "ffprobe"
 
+# Fast fail: Windows-only compile gate (catches Send/Sync and other Windows-specific errors).
+Info "running windows compile gate"
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\windows_compile_gate.ps1
+
 # Optional speed-up: enable Rust compile cache if available.
 Try-Enable-Sccache $RepoRoot
 

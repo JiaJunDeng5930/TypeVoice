@@ -23,6 +23,7 @@
 
 必须包含：
 
+- Windows 编译闸门（当改动涉及 `apps/desktop/src-tauri` 的 Windows/Tauri 相关代码时）：在 Windows PowerShell 中运行 `.\scripts\windows\windows_compile_gate.ps1`，必须通过。
 - 单元测试（仅纯逻辑、无 GPU/无网络部分）
 - ASR 烟雾测试（`fixtures/zh_10s.ogg`）
 - 断言：`text` 非空
