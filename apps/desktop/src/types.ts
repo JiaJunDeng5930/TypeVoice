@@ -40,6 +40,11 @@ export type Settings = {
   context_include_clipboard?: boolean | null;
   context_include_prev_window_screenshot?: boolean | null;
   llm_supports_vision?: boolean | null;
+
+  hotkeys_enabled?: boolean | null;
+  hotkey_ptt?: string | null;
+  hotkey_toggle?: string | null;
+  hotkeys_show_overlay?: boolean | null;
 };
 
 export type ModelStatus = {

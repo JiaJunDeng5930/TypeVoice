@@ -36,7 +36,13 @@ VERIFIED（main 已包含，且可在本机复核）
 - Windows ContextCapture：自动采集并附带到 Rewrite：
   - `RECENT HISTORY`（历史文本）、`CLIPBOARD`（剪贴板文本）、`PREVIOUS WINDOW`（TypeVoice 之前的外部前台窗口信息 + 截图，best-effort）。
   - 截图链路带诊断：失败会在 `trace.jsonl` 记录 step、WinAPI 名称、返回值与 `GetLastError`。见 `apps/desktop/src-tauri/src/context_capture.rs`、`apps/desktop/src-tauri/src/context_capture_windows.rs`。
-  - 截图质量：缩放采用双线性插值；最大边默认 1600，可用 `TYPEVOICE_CONTEXT_SCREENSHOT_MAX_SIDE` 覆盖。
+- 截图质量：缩放采用双线性插值；最大边默认 1600，可用 `TYPEVOICE_CONTEXT_SCREENSHOT_MAX_SIDE` 覆盖。
+
+- 全局快捷键录音输入 + overlay 悬浮指示（按住说话/按一下切换）：
+  - 后端：`tauri-plugin-global-shortcut` 注册全局热键，触发时 emit `tv_hotkey_record`；
+  - 前端：监听事件并复用现有 `MediaRecorder` 录音实现；
+  - overlay：额外创建 `overlay` 窗口，前端通过 `overlay_set_state` 命令显示 `REC/TRANSCRIBING/COPIED/ERROR` 等状态。
+  - 配置项写入 `settings.json`：`hotkeys_enabled`、`hotkey_ptt`、`hotkey_toggle`、`hotkeys_show_overlay`。
 - Prompt 调试脚本（用于手动判断输出好坏，不做自动评测）：`scripts/llm_prompt_lab.py`。
   - 会打印完整 request/response 到 stdout，并落盘 `request.json`、`response_raw.json` 等到 `tmp/llm_prompt_lab/...`（不写入个人绝对路径元信息）。
 - 质量闸门补强（避免“测试没覆盖到编译”）：

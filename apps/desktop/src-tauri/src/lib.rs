@@ -6,6 +6,7 @@ mod context_pack;
 mod data_dir;
 mod debug_log;
 mod history;
+mod hotkeys;
 mod llm;
 mod metrics;
 mod model;
@@ -25,9 +26,46 @@ use pipeline::TranscribeResult;
 use settings::Settings;
 use settings::SettingsPatch;
 use task_manager::TaskManager;
+use tauri::Emitter;
 use tauri::Manager;
 use templates::PromptTemplate;
 use trace::Span;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct OverlayState {
+    visible: bool,
+    status: String,
+    detail: Option<String>,
+    ts_ms: i64,
+}
+
+#[tauri::command]
+fn overlay_set_state(app: tauri::AppHandle, state: OverlayState) -> Result<(), String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(
+        &dir,
+        None,
+        "CMD.overlay_set_state",
+        Some(serde_json::json!({
+            "visible": state.visible,
+            "status": state.status,
+            "has_detail": state.detail.as_deref().map(|s| !s.is_empty()).unwrap_or(false),
+        })),
+    );
+
+    if let Some(w) = app.get_webview_window("overlay") {
+        if state.visible {
+            let _ = w.show();
+        } else {
+            let _ = w.hide();
+        }
+    }
+
+    // Broadcast: the overlay window listens and updates its UI.
+    let _ = app.emit("tv_overlay_state", state);
+    span.ok(None);
+    Ok(())
+}
 
 fn cmd_span(
     data_dir: &std::path::Path,
@@ -450,7 +488,9 @@ fn set_settings(s: Settings) -> Result<(), String> {
 
 #[tauri::command]
 fn update_settings(
+    app: tauri::AppHandle,
     state: tauri::State<TaskManager>,
+    hotkeys: tauri::State<hotkeys::HotkeyManager>,
     patch: SettingsPatch,
 ) -> Result<Settings, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
@@ -467,6 +507,10 @@ fn update_settings(
         "context_include_clipboard": patch.context_include_clipboard.is_some(),
         "context_include_prev_window_screenshot": patch.context_include_prev_window_screenshot.is_some(),
         "llm_supports_vision": patch.llm_supports_vision.is_some(),
+        "hotkeys_enabled": patch.hotkeys_enabled.is_some(),
+        "hotkey_ptt": patch.hotkey_ptt.is_some(),
+        "hotkey_toggle": patch.hotkey_toggle.is_some(),
+        "hotkeys_show_overlay": patch.hotkeys_show_overlay.is_some(),
     });
     let span = cmd_span(&dir, None, "CMD.update_settings", Some(patch_summary));
     let cur = settings::load_settings_or_recover(&dir);
@@ -481,6 +525,10 @@ fn update_settings(
     if asr_model_changed {
         state.restart_asr_best_effort("settings_changed");
     }
+
+    // Hotkeys are also best-effort; failures are traced and should not break settings.
+    hotkeys.apply_from_settings_best_effort(&app, &dir, &next);
+
     span.ok(None);
     Ok(next)
 }
@@ -557,16 +605,44 @@ pub fn run() {
     startup_trace::mark_best_effort("context_generated");
     tauri::Builder::default()
         .manage(TaskManager::new())
+        .manage(hotkeys::HotkeyManager::new())
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             startup_trace::mark_best_effort("setup_enter");
+
+            // Small always-on-top overlay window for hotkey-driven UX.
+            // Keep it hidden by default; the frontend will invoke overlay_set_state to show/hide.
+            let _overlay = tauri::WebviewWindowBuilder::new(
+                app,
+                "overlay",
+                tauri::WebviewUrl::App("index.html".into()),
+            )
+            .title("TypeVoice Overlay")
+            .inner_size(240.0, 64.0)
+            .resizable(false)
+            .decorations(false)
+            .always_on_top(true)
+            .visible(false)
+            .skip_taskbar(true)
+            .focused(false)
+            .build();
+
             // Warm up the ASR runner in background so first transcription is fast.
             let state = app.state::<TaskManager>();
             state.warmup_asr_best_effort();
             state.warmup_context_best_effort();
+
+            // Apply hotkeys from persisted settings.
+            if let Ok(dir) = data_dir::data_dir() {
+                let s = settings::load_settings_or_recover(&dir);
+                let hk = app.state::<hotkeys::HotkeyManager>();
+                hk.apply_from_settings_best_effort(&app.handle(), &dir, &s);
+            }
+
             startup_trace::mark_best_effort("setup_exit");
             Ok(())
         })
-        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             transcribe_fixture,
             transcribe_recording_base64,
@@ -588,6 +664,7 @@ pub fn run() {
             get_settings,
             set_settings,
             update_settings,
+            overlay_set_state,
             asr_model_status,
             download_asr_model
         ])

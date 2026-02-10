@@ -28,6 +28,12 @@ pub struct Settings {
     pub context_include_clipboard: Option<bool>,
     pub context_include_prev_window_screenshot: Option<bool>,
     pub llm_supports_vision: Option<bool>,
+
+    // Hotkeys / overlay (post-MVP)
+    pub hotkeys_enabled: Option<bool>,
+    pub hotkey_ptt: Option<String>,
+    pub hotkey_toggle: Option<String>,
+    pub hotkeys_show_overlay: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -49,6 +55,11 @@ pub struct SettingsPatch {
     pub context_include_clipboard: Option<Option<bool>>,
     pub context_include_prev_window_screenshot: Option<Option<bool>>,
     pub llm_supports_vision: Option<Option<bool>>,
+
+    pub hotkeys_enabled: Option<Option<bool>>,
+    pub hotkey_ptt: Option<Option<String>>,
+    pub hotkey_toggle: Option<Option<String>>,
+    pub hotkeys_show_overlay: Option<Option<bool>>,
 }
 
 pub fn apply_patch(mut s: Settings, p: SettingsPatch) -> Settings {
@@ -87,6 +98,18 @@ pub fn apply_patch(mut s: Settings, p: SettingsPatch) -> Settings {
     }
     if let Some(v) = p.llm_supports_vision {
         s.llm_supports_vision = v;
+    }
+    if let Some(v) = p.hotkeys_enabled {
+        s.hotkeys_enabled = v;
+    }
+    if let Some(v) = p.hotkey_ptt {
+        s.hotkey_ptt = v;
+    }
+    if let Some(v) = p.hotkey_toggle {
+        s.hotkey_toggle = v;
+    }
+    if let Some(v) = p.hotkeys_show_overlay {
+        s.hotkeys_show_overlay = v;
     }
     s
 }
@@ -194,6 +217,10 @@ mod tests {
             context_include_clipboard: None,
             context_include_prev_window_screenshot: None,
             llm_supports_vision: None,
+            hotkeys_enabled: None,
+            hotkey_ptt: None,
+            hotkey_toggle: None,
+            hotkeys_show_overlay: None,
         };
 
         let p = SettingsPatch {

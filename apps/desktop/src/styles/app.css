@@ -263,6 +263,43 @@ textarea {
   background: var(--muted);
 }
 
+/* Overlay window (hotkey UX) */
+body.isOverlay {
+  background: transparent;
+  overflow: hidden;
+}
+
+.overlayRoot {
+  height: 100%;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  border: var(--border-w) solid var(--border);
+  background: rgba(15, 16, 22, 0.92);
+  box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.85);
+  letter-spacing: 0.12em;
+}
+
+.overlayRoot.tone-ok {
+  border-color: rgba(46, 229, 157, 0.9);
+}
+
+.overlayRoot.tone-danger {
+  border-color: rgba(255, 59, 48, 0.9);
+}
+
+.overlayBadge {
+  font-size: 14px;
+}
+
+.overlayDetail {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.08em;
+}
+
 .pxToggle.isOn {
   border-color: rgba(46, 229, 157, 0.85);
 }

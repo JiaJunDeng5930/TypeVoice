@@ -37,6 +37,11 @@ export function SettingsScreen({
   const [rewriteEnabled, setRewriteEnabled] = useState(false);
   const [rewriteTemplateId, setRewriteTemplateId] = useState("");
 
+  const [hotkeysEnabled, setHotkeysEnabled] = useState(true);
+  const [hotkeyPtt, setHotkeyPtt] = useState("F9");
+  const [hotkeyToggle, setHotkeyToggle] = useState("F10");
+  const [hotkeysShowOverlay, setHotkeysShowOverlay] = useState(true);
+
   const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
 
   const [templates, setTemplates] = useState<PromptTemplate[]>([]);
@@ -55,6 +60,11 @@ export function SettingsScreen({
     setReasoning(String(settings?.llm_reasoning_effort || "default") || "default");
     setRewriteEnabled(settings?.rewrite_enabled === true);
     setRewriteTemplateId(String(settings?.rewrite_template_id || ""));
+
+    setHotkeysEnabled(settings?.hotkeys_enabled !== false);
+    setHotkeyPtt(String(settings?.hotkey_ptt || "F9"));
+    setHotkeyToggle(String(settings?.hotkey_toggle || "F10"));
+    setHotkeysShowOverlay(settings?.hotkeys_show_overlay !== false);
   }, [settings]);
 
   useEffect(() => {
@@ -143,6 +153,20 @@ export function SettingsScreen({
       await savePatch({
         rewrite_enabled: rewriteEnabled,
         rewrite_template_id: rewriteTemplateId.trim() ? rewriteTemplateId.trim() : null,
+      });
+      pushToast("SAVED", "ok");
+    } catch {
+      pushToast("SAVE FAILED", "danger");
+    }
+  }
+
+  async function saveHotkeys() {
+    try {
+      await savePatch({
+        hotkeys_enabled: hotkeysEnabled,
+        hotkey_ptt: hotkeyPtt.trim() ? hotkeyPtt.trim() : null,
+        hotkey_toggle: hotkeyToggle.trim() ? hotkeyToggle.trim() : null,
+        hotkeys_show_overlay: hotkeysShowOverlay,
       });
       pushToast("SAVED", "ok");
     } catch {
@@ -319,6 +343,44 @@ export function SettingsScreen({
           />
           <div className="row" style={{ justifyContent: "flex-end" }}>
             <PixelButton onClick={saveRewrite} tone="accent">
+              SAVE
+            </PixelButton>
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="sectionTitle">HOTKEYS</div>
+        <div className="row" style={{ justifyContent: "space-between" }}>
+          <div className="muted">
+            {hotkeysEnabled ? "ON" : "OFF"}
+            {hotkeysEnabled ? `  /  PTT ${hotkeyPtt || "-"}  /  TOGGLE ${hotkeyToggle || "-"}` : ""}
+          </div>
+          <PixelToggle value={hotkeysEnabled} onChange={setHotkeysEnabled} label="hotkeys" />
+        </div>
+        <div style={{ marginTop: 12 }} className="stack">
+          <PixelInput
+            value={hotkeyPtt}
+            onChange={setHotkeyPtt}
+            placeholder="PTT (press to talk) e.g. F9"
+            disabled={!hotkeysEnabled}
+          />
+          <PixelInput
+            value={hotkeyToggle}
+            onChange={setHotkeyToggle}
+            placeholder="TOGGLE e.g. F10"
+            disabled={!hotkeysEnabled}
+          />
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <div className="muted">{hotkeysShowOverlay ? "OVERLAY ON" : "OVERLAY OFF"}</div>
+            <PixelToggle
+              value={hotkeysShowOverlay}
+              onChange={setHotkeysShowOverlay}
+              label="overlay"
+            />
+          </div>
+          <div className="row" style={{ justifyContent: "flex-end" }}>
+            <PixelButton onClick={saveHotkeys} tone="accent">
               SAVE
             </PixelButton>
           </div>

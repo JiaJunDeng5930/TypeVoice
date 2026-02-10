@@ -120,3 +120,16 @@ VERIFIED（2026-02-10）
   - stdout 打印完整 request/response（便于直接粘贴对比）
   - 输出目录默认落在 repo 的 `tmp/` 下
   - 元信息展示避免泄漏个人绝对路径（仅显示 repo 相对路径或文件名）
+
+## 全局快捷键输入：使用后端全局热键 + 前端 MediaRecorder + overlay 悬浮指示窗
+
+VERIFIED（2026-02-10）
+
+- 背景：用户反馈“每次都要切换到 UI 才能开始/结束录音”操作成本高，希望在任何地方都能快捷触发录音输入，且不能破坏现有功能（尤其是上一外部窗口截图链路）。
+- 决策：
+  - 后端使用 `tauri-plugin-global-shortcut` 注册系统级全局快捷键，并通过事件 `tv_hotkey_record` 通知前端；
+  - 前端继续复用现有 `getUserMedia + MediaRecorder` 录音实现，避免引入新的平台录音依赖与大范围重构；
+  - 增加一个小型 overlay window，用于在不切换主 UI 的情况下提示 `REC/TRANSCRIBING/COPIED/ERROR` 状态。
+- 取舍：
+  - 录音仍在前端，后端只负责全局热键与 pipeline，因此需要主应用处于运行状态（不做“未启动也能热键唤起/托盘常驻”）。
+  - overlay 窗口的出现不会破坏“上一外部窗口截图”：选窗逻辑会排除本进程窗口（见 `apps/desktop/src-tauri/src/context_capture_windows.rs` 的 PID 过滤）。

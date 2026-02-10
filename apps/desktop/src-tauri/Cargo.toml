@@ -21,6 +21,7 @@ tauri-build = { version = "2", features = [] }
 # Required for production builds to load the bundled frontend (tauri://localhost)
 tauri = { version = "2", features = ["custom-protocol"] }
 tauri-plugin-opener = "2"
+tauri-plugin-global-shortcut = "2"
 uuid = { version = "1", features = ["v4"] }
 anyhow = "1"
 base64 = "0.22"
