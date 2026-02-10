@@ -65,6 +65,14 @@ fn config_from_settings(s: &settings::Settings) -> ContextConfig {
     cfg
 }
 
+#[cfg(windows)]
+fn env_u32(key: &str, default: u32) -> u32 {
+    match std::env::var(key) {
+        Ok(v) => v.trim().parse::<u32>().ok().filter(|n| *n > 0).unwrap_or(default),
+        Err(_) => default,
+    }
+}
+
 #[derive(Clone)]
 pub struct ContextService {
     #[cfg(windows)]
@@ -231,9 +239,13 @@ impl ContextService {
                     Some(task_id),
                     "ContextCapture",
                     "CTX.prev_window.screenshot",
-                    Some(serde_json::json!({"max_side": 1024})),
+                    {
+                        let max_side = env_u32("TYPEVOICE_CONTEXT_SCREENSHOT_MAX_SIDE", 1600);
+                        Some(serde_json::json!({"max_side": max_side}))
+                    },
                 );
-                let sc = g.win.capture_last_external_window_png_diag_best_effort(1024);
+                let max_side = env_u32("TYPEVOICE_CONTEXT_SCREENSHOT_MAX_SIDE", 1600);
+                let sc = g.win.capture_last_external_window_png_diag_best_effort(max_side);
                 if let Some(raw) = sc.raw {
                     let sha = crate::context_pack::sha256_hex(&raw.png_bytes);
                     snap.screenshot = Some(crate::context_pack::ScreenshotPng {
@@ -247,6 +259,7 @@ impl ContextService {
                         "h": snap.screenshot.as_ref().unwrap().height,
                         "bytes": snap.screenshot.as_ref().unwrap().png_bytes.len(),
                         "sha256": snap.screenshot.as_ref().unwrap().sha256_hex,
+                        "max_side": max_side,
                     })));
 
                     // Optional debug artifact: persist the screenshot PNG for manual inspection.

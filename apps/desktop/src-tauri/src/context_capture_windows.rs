@@ -515,21 +515,92 @@ fn resize_convert_bgra_to_rgba(
     dst_w: u32,
     dst_h: u32,
 ) {
-    // Nearest-neighbor resize + BGRA -> RGBA conversion.
+    if src_w == dst_w && src_h == dst_h {
+        // Fast path: just convert BGRA -> RGBA.
+        for y in 0..dst_h {
+            for x in 0..dst_w {
+                let sidx = ((y * src_w + x) as usize) * 4;
+                let didx = ((y * dst_w + x) as usize) * 4;
+                let b = src_bgra.get(sidx).copied().unwrap_or(0);
+                let g = src_bgra.get(sidx + 1).copied().unwrap_or(0);
+                let r = src_bgra.get(sidx + 2).copied().unwrap_or(0);
+                let a = src_bgra.get(sidx + 3).copied().unwrap_or(255);
+                dst_rgba[didx] = r;
+                dst_rgba[didx + 1] = g;
+                dst_rgba[didx + 2] = b;
+                dst_rgba[didx + 3] = a;
+            }
+        }
+        return;
+    }
+
+    // Bilinear resize + BGRA -> RGBA conversion.
+    // This improves readability for downscaled UI screenshots compared to nearest-neighbor.
+    let src_w_f = (src_w as f32).max(1.0);
+    let src_h_f = (src_h as f32).max(1.0);
+    let dst_w_f = (dst_w as f32).max(1.0);
+    let dst_h_f = (dst_h as f32).max(1.0);
+
     for y in 0..dst_h {
-        let sy = (y as u64 * src_h as u64 / dst_h as u64) as u32;
+        // Center-sampling mapping (reduces aliasing compared to edge mapping).
+        let fy = ((y as f32) + 0.5) * (src_h_f / dst_h_f) - 0.5;
+        let fy = fy.clamp(0.0, src_h_f - 1.0);
+        let y0 = fy.floor() as u32;
+        let y1 = (y0 + 1).min(src_h.saturating_sub(1));
+        let wy = fy - (y0 as f32);
+
         for x in 0..dst_w {
-            let sx = (x as u64 * src_w as u64 / dst_w as u64) as u32;
-            let sidx = ((sy * src_w + sx) as usize) * 4;
+            let fx = ((x as f32) + 0.5) * (src_w_f / dst_w_f) - 0.5;
+            let fx = fx.clamp(0.0, src_w_f - 1.0);
+            let x0 = fx.floor() as u32;
+            let x1 = (x0 + 1).min(src_w.saturating_sub(1));
+            let wx = fx - (x0 as f32);
+
+            let p00 = ((y0 * src_w + x0) as usize) * 4;
+            let p10 = ((y0 * src_w + x1) as usize) * 4;
+            let p01 = ((y1 * src_w + x0) as usize) * 4;
+            let p11 = ((y1 * src_w + x1) as usize) * 4;
+
+            let b00 = src_bgra.get(p00).copied().unwrap_or(0) as f32;
+            let g00 = src_bgra.get(p00 + 1).copied().unwrap_or(0) as f32;
+            let r00 = src_bgra.get(p00 + 2).copied().unwrap_or(0) as f32;
+            let a00 = src_bgra.get(p00 + 3).copied().unwrap_or(255) as f32;
+
+            let b10 = src_bgra.get(p10).copied().unwrap_or(0) as f32;
+            let g10 = src_bgra.get(p10 + 1).copied().unwrap_or(0) as f32;
+            let r10 = src_bgra.get(p10 + 2).copied().unwrap_or(0) as f32;
+            let a10 = src_bgra.get(p10 + 3).copied().unwrap_or(255) as f32;
+
+            let b01 = src_bgra.get(p01).copied().unwrap_or(0) as f32;
+            let g01 = src_bgra.get(p01 + 1).copied().unwrap_or(0) as f32;
+            let r01 = src_bgra.get(p01 + 2).copied().unwrap_or(0) as f32;
+            let a01 = src_bgra.get(p01 + 3).copied().unwrap_or(255) as f32;
+
+            let b11 = src_bgra.get(p11).copied().unwrap_or(0) as f32;
+            let g11 = src_bgra.get(p11 + 1).copied().unwrap_or(0) as f32;
+            let r11 = src_bgra.get(p11 + 2).copied().unwrap_or(0) as f32;
+            let a11 = src_bgra.get(p11 + 3).copied().unwrap_or(255) as f32;
+
+            let b0 = b00 * (1.0 - wx) + b10 * wx;
+            let g0 = g00 * (1.0 - wx) + g10 * wx;
+            let r0 = r00 * (1.0 - wx) + r10 * wx;
+            let a0 = a00 * (1.0 - wx) + a10 * wx;
+
+            let b1 = b01 * (1.0 - wx) + b11 * wx;
+            let g1 = g01 * (1.0 - wx) + g11 * wx;
+            let r1 = r01 * (1.0 - wx) + r11 * wx;
+            let a1 = a01 * (1.0 - wx) + a11 * wx;
+
+            let b = b0 * (1.0 - wy) + b1 * wy;
+            let g = g0 * (1.0 - wy) + g1 * wy;
+            let r = r0 * (1.0 - wy) + r1 * wy;
+            let a = a0 * (1.0 - wy) + a1 * wy;
+
             let didx = ((y * dst_w + x) as usize) * 4;
-            let b = src_bgra.get(sidx).copied().unwrap_or(0);
-            let g = src_bgra.get(sidx + 1).copied().unwrap_or(0);
-            let r = src_bgra.get(sidx + 2).copied().unwrap_or(0);
-            let a = src_bgra.get(sidx + 3).copied().unwrap_or(255);
-            dst_rgba[didx] = r;
-            dst_rgba[didx + 1] = g;
-            dst_rgba[didx + 2] = b;
-            dst_rgba[didx + 3] = a;
+            dst_rgba[didx] = r.round().clamp(0.0, 255.0) as u8;
+            dst_rgba[didx + 1] = g.round().clamp(0.0, 255.0) as u8;
+            dst_rgba[didx + 2] = b.round().clamp(0.0, 255.0) as u8;
+            dst_rgba[didx + 3] = a.round().clamp(0.0, 255.0) as u8;
         }
     }
 }
