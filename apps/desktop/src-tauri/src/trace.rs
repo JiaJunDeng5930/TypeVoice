@@ -79,6 +79,12 @@ fn rotate_if_needed_best_effort(data_dir: &Path) {
         return;
     }
 
+    // Remove the oldest first so Windows renames won't fail due to existing dest files.
+    let oldest = data_dir.join(format!("trace.jsonl.{max_f}"));
+    if oldest.exists() {
+        let _ = std::fs::remove_file(&oldest);
+    }
+
     // Shift: trace.jsonl.(n-1) -> trace.jsonl.n, then trace.jsonl -> trace.jsonl.1
     for i in (1..max_f).rev() {
         let src = data_dir.join(format!("trace.jsonl.{i}"));
@@ -89,12 +95,6 @@ fn rotate_if_needed_best_effort(data_dir: &Path) {
     }
     let first = data_dir.join("trace.jsonl.1");
     let _ = std::fs::rename(&p, &first);
-
-    // Best-effort trim: remove the oldest if it exists.
-    let oldest = data_dir.join(format!("trace.jsonl.{max_f}"));
-    if oldest.exists() {
-        let _ = std::fs::remove_file(oldest);
-    }
 }
 
 pub fn emit_best_effort(data_dir: &Path, ev: &TraceEvent) {
