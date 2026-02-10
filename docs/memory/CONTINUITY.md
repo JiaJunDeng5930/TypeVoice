@@ -51,6 +51,8 @@ VERIFIED（已合并到 main，且可在本机复核）
   - `cargo build`（sccache 空缓存，clean target）：约 157s（写缓存开销）
   - `cargo build`（sccache 缓存命中，删除 target 后重建）：约 68s（`sccache --show-stats` 可见 hits）
   - 增量（对 `src-tauri/src/main.rs` 加一行触发重建）：无 sccache 约 2.26s；sccache 约 1.85s
+- 默认内置提示词模板已更新：
+  - `apps/desktop/src-tauri/src/templates.rs` 中模板 `id="clarify"`（表达澄清）的 `system_prompt` 替换为“面向转录文本的严格重写”版本，以减少跑题/细化/省略与解释性输出。
 
 ### Now
 
