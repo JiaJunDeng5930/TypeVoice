@@ -55,6 +55,12 @@ pub fn include_asr_segments() -> bool {
     }
 }
 
+#[allow(dead_code)]
+pub fn include_screenshots() -> bool {
+    // Default: disabled. Screenshots are sensitive and should only be persisted when explicitly enabled.
+    env_bool("TYPEVOICE_DEBUG_INCLUDE_SCREENSHOT")
+}
+
 pub fn max_payload_bytes() -> usize {
     env_usize(
         "TYPEVOICE_DEBUG_MAX_PAYLOAD_BYTES",
@@ -131,6 +137,51 @@ pub fn write_payload_best_effort(
         path,
         bytes_written: out.len(),
         truncated,
+        sha256,
+    })
+}
+
+#[allow(dead_code)]
+pub fn write_payload_binary_no_truncate_best_effort(
+    data_dir: &Path,
+    task_id: &str,
+    filename: &str,
+    bytes: Vec<u8>,
+) -> Option<PayloadInfo> {
+    if !verbose_enabled() {
+        return None;
+    }
+
+    // For binary payloads (e.g. screenshots), truncation would corrupt the file.
+    // We enforce the same size limit but skip writing if it's too large.
+    let max_bytes = max_payload_bytes();
+    if bytes.len() > max_bytes {
+        crate::safe_eprintln!(
+            "debug_log: skip binary payload (too large): file={filename} bytes={} max={}",
+            bytes.len(),
+            max_bytes
+        );
+        return None;
+    }
+    let sha256 = sha256_hex(&bytes);
+
+    let dir = debug_task_dir(data_dir, task_id);
+    if let Err(e) = fs::create_dir_all(&dir) {
+        crate::safe_eprintln!("debug_log: create_dir_all failed: {}: {e}", dir.display());
+        return None;
+    }
+    let path = dir.join(filename);
+    if let Err(e) = fs::write(&path, &bytes) {
+        crate::safe_eprintln!("debug_log: write failed: {}: {e}", path.display());
+        return None;
+    }
+
+    prune_debug_dir_best_effort(data_dir);
+
+    Some(PayloadInfo {
+        path,
+        bytes_written: bytes.len(),
+        truncated: false,
         sha256,
     })
 }

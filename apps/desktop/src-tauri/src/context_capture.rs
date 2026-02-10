@@ -4,6 +4,9 @@ use crate::context_pack::{ContextBudget, ContextSnapshot, HistorySnippet};
 use crate::{history, settings};
 use crate::{trace, trace::Span};
 
+#[cfg(windows)]
+use crate::debug_log;
+
 #[derive(Debug, Clone)]
 pub struct ContextConfig {
     pub include_history: bool,
@@ -245,6 +248,33 @@ impl ContextService {
                         "bytes": snap.screenshot.as_ref().unwrap().png_bytes.len(),
                         "sha256": snap.screenshot.as_ref().unwrap().sha256_hex,
                     })));
+
+                    // Optional debug artifact: persist the screenshot PNG for manual inspection.
+                    // This is OFF by default because screenshots are sensitive.
+                    if debug_log::verbose_enabled() && debug_log::include_screenshots() {
+                        if let Some(sc) = snap.screenshot.as_ref() {
+                            if let Some(info) = debug_log::write_payload_binary_no_truncate_best_effort(
+                                data_dir,
+                                task_id,
+                                "prev_window.png",
+                                sc.png_bytes.clone(),
+                            ) {
+                                debug_log::emit_debug_event_best_effort(
+                                    data_dir,
+                                    "debug_prev_window_png",
+                                    task_id,
+                                    &info,
+                                    Some(format!(
+                                        "w={} h={} bytes={} sha256={}",
+                                        sc.width,
+                                        sc.height,
+                                        sc.png_bytes.len(),
+                                        sc.sha256_hex
+                                    )),
+                                );
+                            }
+                        }
+                    }
                 } else if let Some(err) = sc.error {
                     shot_span.err(
                         "winapi",
