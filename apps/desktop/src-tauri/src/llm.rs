@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use base64::Engine;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::context_pack::PreparedContext;
 use crate::debug_log;
 use crate::settings;
+use crate::trace::Span;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ApiKeyStatus {
@@ -220,8 +221,25 @@ pub async fn rewrite_with_context(
     asr_text: &str,
     ctx: Option<&PreparedContext>,
 ) -> Result<String> {
+    let span = Span::start(
+        data_dir,
+        Some(task_id),
+        "Rewrite",
+        "LLM.rewrite",
+        Some(serde_json::json!({
+            "has_context": ctx.is_some(),
+            "has_screenshot": ctx.and_then(|c| c.screenshot.as_ref()).is_some(),
+        })),
+    );
+
     let cfg = load_config(data_dir);
-    let key = load_api_key()?;
+    let key = match load_api_key() {
+        Ok(k) => k,
+        Err(e) => {
+            span.err("auth", "E_LLM_API_KEY", &e.to_string(), None);
+            return Err(e);
+        }
+    };
     let client = Client::new();
     let url = format!("{}/chat/completions", cfg.base_url);
 
@@ -280,13 +298,24 @@ pub async fn rewrite_with_context(
         }
     }
 
-    let resp = client
-        .post(url)
+    let resp = match client
+        .post(url.clone())
         .bearer_auth(key)
         .json(&req_send)
         .send()
         .await
-        .context("llm http request failed")?;
+    {
+        Ok(r) => r,
+        Err(e) => {
+            span.err(
+                "http",
+                "E_LLM_HTTP_SEND",
+                &format!("llm http request failed: {e}"),
+                Some(serde_json::json!({"url": url, "model": cfg.model})),
+            );
+            return Err(anyhow!("llm http request failed: {e}"));
+        }
+    };
 
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
@@ -314,21 +343,44 @@ pub async fn rewrite_with_context(
         } else {
             body
         };
+        span.err(
+            "http",
+            &format!("HTTP_{}", status.as_u16()),
+            &format!("llm http {status}: {msg}"),
+            Some(serde_json::json!({"status": status.as_u16()})),
+        );
         return Err(anyhow!("llm http {status}: {msg}"));
     }
 
-    let r: ChatResp = serde_json::from_str(&body).context("llm response parse failed")?;
-    let content = r
-        .choices
-        .get(0)
-        .ok_or_else(|| anyhow!("llm missing choices[0]"))?
-        .message
-        .content
-        .trim()
-        .to_string();
+    let r: ChatResp = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            span.err(
+                "parse",
+                "E_LLM_PARSE",
+                &format!("llm response parse failed: {e}"),
+                Some(serde_json::json!({"body_len": body.len()})),
+            );
+            return Err(anyhow!("llm response parse failed: {e}"));
+        }
+    };
+    let choice0 = match r.choices.get(0) {
+        Some(c) => c,
+        None => {
+            span.err("parse", "E_LLM_MISSING_CHOICES", "llm missing choices[0]", None);
+            return Err(anyhow!("llm missing choices[0]"));
+        }
+    };
+    let content = choice0.message.content.trim().to_string();
     if content.is_empty() {
+        span.err("logic", "E_LLM_EMPTY", "llm returned empty content", None);
         return Err(anyhow!("llm returned empty content"));
     }
+    span.ok(Some(serde_json::json!({
+        "status": status.as_u16(),
+        "content_chars": content.len(),
+        "model": cfg.model,
+    })));
     Ok(content)
 }
 

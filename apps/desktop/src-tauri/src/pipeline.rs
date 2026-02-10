@@ -11,6 +11,9 @@ use serde::Serialize;
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::debug_log;
+use crate::trace::Span;
+
 const MAX_TOOL_STDERR_BYTES: usize = 4096;
 
 #[derive(Debug, Clone, Serialize)]
@@ -401,42 +404,74 @@ pub fn transcribe_with_python_runner_cancellable(
 }
 
 pub fn preprocess_ffmpeg_cancellable(
+    data_dir: &Path,
+    task_id: &str,
     input: &Path,
     output: &Path,
     token: &tokio_util::sync::CancellationToken,
     pid_slot: &std::sync::Arc<std::sync::Mutex<Option<u32>>>,
 ) -> Result<u128> {
+    let span = Span::start(
+        data_dir,
+        Some(task_id),
+        "Preprocess",
+        "FFMPEG.preprocess",
+        Some(serde_json::json!({
+            "cmd": ffmpeg_cmd(),
+        })),
+    );
+
     let t0 = Instant::now();
     let cmd = ffmpeg_cmd();
-    let mut child = Command::new(&cmd)
+    let input_s = match input.to_str() {
+        Some(s) => s,
+        None => {
+            span.err("io", "E_PATH_UTF8", "non-utf8 input path", None);
+            return Err(anyhow!("non-utf8 input path"));
+        }
+    };
+    let output_s = match output.to_str() {
+        Some(s) => s,
+        None => {
+            span.err("io", "E_PATH_UTF8", "non-utf8 output path", None);
+            return Err(anyhow!("non-utf8 output path"));
+        }
+    };
+
+    let mut child = match Command::new(&cmd)
         .args([
             "-y",
             "-hide_banner",
             "-loglevel",
             "error",
             "-i",
-            input
-                .to_str()
-                .ok_or_else(|| anyhow!("non-utf8 input path"))?,
+            input_s,
             "-ac",
             "1",
             "-ar",
             "16000",
             "-vn",
-            output
-                .to_str()
-                .ok_or_else(|| anyhow!("non-utf8 output path"))?,
+            output_s,
         ])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| {
+    {
+        Ok(c) => c,
+        Err(e) => {
             if e.kind() == std::io::ErrorKind::NotFound {
-                anyhow!("E_FFMPEG_NOT_FOUND: ffmpeg not found (cmd={cmd})")
-            } else {
-                anyhow!("E_FFMPEG_FAILED: failed to start ffmpeg (cmd={cmd}): {e}")
+                span.err("process", "E_FFMPEG_NOT_FOUND", &format!("ffmpeg not found (cmd={cmd})"), None);
+                return Err(anyhow!("E_FFMPEG_NOT_FOUND: ffmpeg not found (cmd={cmd})"));
             }
-        })?;
+            span.err(
+                "process",
+                "E_FFMPEG_FAILED",
+                &format!("failed to start ffmpeg (cmd={cmd}): {e}"),
+                None,
+            );
+            return Err(anyhow!("E_FFMPEG_FAILED: failed to start ffmpeg (cmd={cmd}): {e}"));
+        }
+    };
 
     *pid_slot.lock().unwrap() = Some(child.id());
 
@@ -445,12 +480,43 @@ pub fn preprocess_ffmpeg_cancellable(
             let _ = child.kill();
             let _ = child.wait();
             *pid_slot.lock().unwrap() = None;
+            span.err("logic", "E_CANCELLED", "cancelled", None);
             return Err(anyhow!("cancelled"));
         }
-        if let Some(status) = child.try_wait().context("ffmpeg try_wait failed")? {
+        let status_opt = match child.try_wait() {
+            Ok(s) => s,
+            Err(e) => {
+                span.err(
+                    "io",
+                    "E_FFMPEG_TRYWAIT",
+                    &format!("ffmpeg try_wait failed: {e}"),
+                    None,
+                );
+                *pid_slot.lock().unwrap() = None;
+                return Err(anyhow!("ffmpeg try_wait failed: {e}"));
+            }
+        };
+        if let Some(status) = status_opt {
             if !status.success() {
                 let excerpt = stderr_excerpt_from_child(child.stderr.take());
                 *pid_slot.lock().unwrap() = None;
+                if debug_log::verbose_enabled() {
+                    let _ = debug_log::write_payload_best_effort(
+                        data_dir,
+                        task_id,
+                        "ffmpeg_stderr.txt",
+                        excerpt.as_bytes().to_vec(),
+                    );
+                }
+                span.err(
+                    "process",
+                    "E_FFMPEG_FAILED",
+                    &format!("ffmpeg preprocess failed: exit={status}"),
+                    Some(serde_json::json!({
+                        "exit": status.to_string(),
+                        "stderr_chars": excerpt.len(),
+                    })),
+                );
                 return Err(anyhow!(
                     "E_FFMPEG_FAILED: ffmpeg preprocess failed: exit={} stderr={}",
                     status,
@@ -464,7 +530,9 @@ pub fn preprocess_ffmpeg_cancellable(
     // Drain stderr on success too, to avoid holding OS pipes unnecessarily.
     let _ = stderr_excerpt_from_child(child.stderr.take());
     *pid_slot.lock().unwrap() = None;
-    Ok(t0.elapsed().as_millis())
+    let ms = t0.elapsed().as_millis();
+    span.ok(Some(serde_json::json!({ "elapsed_ms": ms })));
+    Ok(ms)
 }
 
 pub fn run_audio_pipeline_with_task_id(

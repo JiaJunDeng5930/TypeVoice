@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use crate::{debug_log, pipeline};
+use crate::trace::Span;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AsrError {
@@ -122,8 +123,20 @@ impl AsrService {
         let root = repo_root()?;
         let py = default_python_path(&root);
 
+        let span = Span::start(
+            data_dir,
+            None,
+            "ASR",
+            "ASR.restart",
+            Some(serde_json::json!({
+                "reason": reason,
+                "model_id": model_id,
+                "chunk_sec": chunk_sec,
+            })),
+        );
+
         let t0 = Instant::now();
-        let mut child = Command::new(py)
+        let mut child = match Command::new(py)
             .current_dir(&root)
             .env("PYTHONPATH", &root)
             .env("TYPEVOICE_FFPROBE", pipeline::ffprobe_cmd())
@@ -131,8 +144,7 @@ impl AsrService {
                 "-m",
                 "asr_runner.runner",
                 "--daemon",
-                "--model",
-                &model_id,
+                "--model", &model_id,
                 "--chunk-sec",
                 &format!("{chunk_sec}"),
             ])
@@ -140,7 +152,18 @@ impl AsrService {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .context("failed to spawn asr runner daemon")?;
+        {
+            Ok(c) => c,
+            Err(e) => {
+                span.err(
+                    "process",
+                    "E_ASR_SPAWN",
+                    &format!("failed to spawn asr runner daemon: {e}"),
+                    None,
+                );
+                return Err(anyhow!("failed to spawn asr runner daemon: {e}"));
+            }
+        };
 
         let pid = child.id();
         // Ensure we never hang forever waiting for a ready line.
@@ -153,41 +176,94 @@ impl AsrService {
             }
         });
 
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| anyhow!("runner stdin missing"))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| anyhow!("runner stdout missing"))?;
+        let stdin = match child.stdin.take() {
+            Some(s) => s,
+            None => {
+                span.err("logic", "E_ASR_STDIN_MISSING", "runner stdin missing", None);
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(anyhow!("runner stdin missing"));
+            }
+        };
+        let stdout = match child.stdout.take() {
+            Some(s) => s,
+            None => {
+                span.err("logic", "E_ASR_STDOUT_MISSING", "runner stdout missing", None);
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(anyhow!("runner stdout missing"));
+            }
+        };
         let mut reader = BufReader::new(stdout);
 
         // Read one ready line.
         let mut line = String::new();
         loop {
             line.clear();
-            let n = reader
-                .read_line(&mut line)
-                .context("failed to read asr_ready line")?;
+            let n = match reader.read_line(&mut line) {
+                Ok(n) => n,
+                Err(e) => {
+                    span.err(
+                        "io",
+                        "E_ASR_READY_READ",
+                        &format!("failed to read asr_ready line: {e}"),
+                        None,
+                    );
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(anyhow!("failed to read asr_ready line: {e}"));
+                }
+            };
             if n == 0 {
                 let _ = child.kill();
                 let _ = child.wait();
+                span.err(
+                    "io",
+                    "E_ASR_READY_EOF",
+                    "asr runner daemon stdout EOF before ready",
+                    None,
+                );
                 return Err(anyhow!("asr runner daemon stdout EOF before ready"));
             }
-            let v: serde_json::Value = serde_json::from_str(line.trim())
-                .context("invalid json from asr runner during ready")?;
+            let v: serde_json::Value = match serde_json::from_str(line.trim()) {
+                Ok(v) => v,
+                Err(e) => {
+                    span.err(
+                        "parse",
+                        "E_ASR_READY_PARSE",
+                        &format!("invalid json from asr runner during ready: {e}"),
+                        Some(serde_json::json!({"line_len": line.len()})),
+                    );
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(anyhow!("invalid json from asr runner during ready: {e}"));
+                }
+            };
             if v.get("type").and_then(|x| x.as_str()) == Some("asr_ready") {
-                let ready: AsrReady =
-                    serde_json::from_value(v).context("parse asr_ready failed")?;
+                let ready: AsrReady = match serde_json::from_value(v) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        span.err("parse", "E_ASR_READY_SCHEMA", &format!("parse asr_ready failed: {e}"), None);
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(anyhow!("parse asr_ready failed: {e}"));
+                    }
+                };
                 if !ready.ok {
                     let _ = child.kill();
                     let _ = child.wait();
+                    span.err("process", "E_ASR_READY_NOT_OK", "asr runner ready not ok", None);
                     return Err(anyhow!("asr runner ready not ok"));
                 }
                 if ready.device_used != "cuda" {
                     let _ = child.kill();
                     let _ = child.wait();
+                    span.err(
+                        "process",
+                        "E_ASR_DEVICE",
+                        &format!("asr runner ready not cuda: {}", ready.device_used),
+                        None,
+                    );
                     return Err(anyhow!("asr runner ready not cuda: {}", ready.device_used));
                 }
 
@@ -201,6 +277,11 @@ impl AsrService {
                 g.stdin = Some(stdin);
                 g.stdout = Some(reader);
                 g.child = Some(child);
+                span.ok(Some(serde_json::json!({
+                    "model_id": g.model_id,
+                    "device_used": "cuda",
+                    "warmup_ms": g.warmup_ms,
+                })));
                 return Ok(());
             }
             // Ignore any other unexpected lines (should not happen).
@@ -220,35 +301,58 @@ impl AsrService {
             return Err(anyhow!("cancelled"));
         }
 
-        self.ensure_started(data_dir)?;
+        let span = Span::start(
+            data_dir,
+            Some(task_id),
+            "Transcribe",
+            "ASR.transcribe",
+            Some(serde_json::json!({
+                "language": language,
+            })),
+        );
+
+        if let Err(e) = self.ensure_started(data_dir) {
+            span.err("process", "E_ASR_START", &e.to_string(), None);
+            return Err(e);
+        }
 
         let t0 = Instant::now();
         let mut g = self.inner.lock().unwrap();
-        let child = g
-            .child
-            .as_mut()
-            .ok_or_else(|| anyhow!("asr runner not started"))?;
+        let child = match g.child.as_mut() {
+            Some(c) => c,
+            None => {
+                span.err("process", "E_ASR_NOT_STARTED", "asr runner not started", None);
+                return Err(anyhow!("asr runner not started"));
+            }
+        };
         let pid = child.id();
         *pid_slot.lock().unwrap() = Some(pid);
 
-        let stdin = g
-            .stdin
-            .as_mut()
-            .ok_or_else(|| anyhow!("runner stdin missing"))?;
+        let stdin = match g.stdin.as_mut() {
+            Some(s) => s,
+            None => {
+                span.err("logic", "E_ASR_STDIN_MISSING", "runner stdin missing", None);
+                return Err(anyhow!("runner stdin missing"));
+            }
+        };
         let req = serde_json::json!({
             "audio_path": audio_path,
             "language": language,
             "device": "cuda",
         });
-        stdin
-            .write_all(format!("{}\n", req).as_bytes())
-            .context("failed to write runner request")?;
+        if let Err(e) = stdin.write_all(format!("{}\n", req).as_bytes()) {
+            span.err("io", "E_ASR_WRITE", &format!("failed to write runner request: {e}"), None);
+            return Err(anyhow!("failed to write runner request: {e}"));
+        }
         stdin.flush().ok();
 
-        let stdout = g
-            .stdout
-            .as_mut()
-            .ok_or_else(|| anyhow!("runner stdout missing"))?;
+        let stdout = match g.stdout.as_mut() {
+            Some(s) => s,
+            None => {
+                span.err("logic", "E_ASR_STDOUT_MISSING", "runner stdout missing", None);
+                return Err(anyhow!("runner stdout missing"));
+            }
+        };
         let mut line = String::new();
         let read_res = stdout.read_line(&mut line);
         let wall_ms = t0.elapsed().as_millis();
@@ -266,8 +370,18 @@ impl AsrService {
                 return Err(anyhow!("asr runner stdout EOF"));
             }
             Ok(_) => {
-                let resp: AsrResponse =
-                    serde_json::from_str(line.trim()).context("runner returned invalid json")?;
+                let resp: AsrResponse = match serde_json::from_str(line.trim()) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        span.err(
+                            "parse",
+                            "E_ASR_PARSE",
+                            &format!("runner returned invalid json: {e}"),
+                            Some(serde_json::json!({"line_len": line.len()})),
+                        );
+                        return Err(anyhow!("runner returned invalid json: {e}"));
+                    }
+                };
 
                 if debug_log::verbose_enabled() && debug_log::include_asr_segments() {
                     if let Some(segments) = resp.segments.clone() {
@@ -308,6 +422,12 @@ impl AsrService {
                     }
                 }
 
+                span.ok(Some(serde_json::json!({
+                    "wall_ms": wall_ms,
+                    "ok": resp.ok,
+                    "has_segments": resp.segments.as_ref().map(|s| s.len()).unwrap_or(0),
+                    "has_metrics": resp.metrics.is_some(),
+                })));
                 Ok((resp, wall_ms))
             }
             Err(e) => {
@@ -316,6 +436,12 @@ impl AsrService {
                 if token.is_cancelled() {
                     return Err(anyhow!("cancelled"));
                 }
+                span.err(
+                    "io",
+                    "E_ASR_READ",
+                    &format!("failed to read runner output: {e}"),
+                    None,
+                );
                 Err(anyhow!("failed to read runner output: {e}"))
             }
         }

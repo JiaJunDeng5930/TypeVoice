@@ -8,7 +8,8 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use windows_sys::Win32::Foundation::{CloseHandle, HWND, RECT};
+use serde::Serialize;
+use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HWND, RECT};
 use windows_sys::Win32::Graphics::Gdi::{
     CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits,
     ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, RGBQUAD,
@@ -32,6 +33,38 @@ pub struct ScreenshotRaw {
     pub png_bytes: Vec<u8>,
     pub width: u32,
     pub height: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ScreenshotDiagError {
+    pub step: String,
+    pub api: String,
+    pub api_ret: String,
+    pub last_error: u32,
+    pub note: Option<String>,
+    pub window_w: u32,
+    pub window_h: u32,
+    pub max_side: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScreenshotDiagResult {
+    pub raw: Option<ScreenshotRaw>,
+    pub error: Option<ScreenshotDiagError>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ClipboardDiag {
+    pub status: String, // ok|skipped|err
+    pub step: Option<String>,
+    pub last_error: Option<u32>,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClipboardRead {
+    pub text: Option<String>,
+    pub diag: ClipboardDiag,
 }
 
 #[derive(Clone)]
@@ -69,17 +102,75 @@ impl WindowsContext {
         &self,
         max_side: u32,
     ) -> Option<ScreenshotRaw> {
+        self.capture_last_external_window_png_diag_best_effort(max_side)
+            .raw
+    }
+
+    pub fn capture_last_external_window_png_diag_best_effort(
+        &self,
+        max_side: u32,
+    ) -> ScreenshotDiagResult {
         self.tracker.ensure_started();
         let snap = self.tracker.last_external_snapshot();
-        let hwnd = snap.hwnd? as HWND;
+        let Some(hwnd_i) = snap.hwnd else {
+            return ScreenshotDiagResult {
+                raw: None,
+                error: None,
+            };
+        };
+        let hwnd = hwnd_i as HWND;
         if unsafe { IsWindow(hwnd) } == 0 {
-            return None;
+            return ScreenshotDiagResult {
+                raw: None,
+                error: None,
+            };
         }
-        capture_window_png_best_effort(hwnd, max_side)
+        match capture_window_png_diagnose(hwnd, max_side) {
+            Ok(raw) => ScreenshotDiagResult {
+                raw: Some(raw),
+                error: None,
+            },
+            Err(e) => ScreenshotDiagResult {
+                raw: None,
+                error: Some(e),
+            },
+        }
     }
 
     pub fn read_clipboard_text_best_effort(&self) -> Option<String> {
-        read_clipboard_text_best_effort()
+        self.read_clipboard_text_diag_best_effort().text
+    }
+
+    pub fn read_clipboard_text_diag_best_effort(&self) -> ClipboardRead {
+        match read_clipboard_text_diagnose() {
+            Ok(Some(s)) => ClipboardRead {
+                text: Some(s),
+                diag: ClipboardDiag {
+                    status: "ok".to_string(),
+                    step: None,
+                    last_error: None,
+                    note: None,
+                },
+            },
+            Ok(None) => ClipboardRead {
+                text: None,
+                diag: ClipboardDiag {
+                    status: "skipped".to_string(),
+                    step: None,
+                    last_error: None,
+                    note: Some("empty_or_unavailable".to_string()),
+                },
+            },
+            Err(e) => ClipboardRead {
+                text: None,
+                diag: ClipboardDiag {
+                    status: "err".to_string(),
+                    step: Some(e.step),
+                    last_error: Some(e.last_error),
+                    note: Some(e.note),
+                },
+            },
+        }
     }
 }
 
@@ -181,7 +272,32 @@ fn get_process_image_best_effort(pid: u32) -> Option<String> {
     }
 }
 
-fn capture_window_png_best_effort(hwnd: HWND, max_side: u32) -> Option<ScreenshotRaw> {
+fn last_error_u32() -> u32 {
+    unsafe { GetLastError() }
+}
+
+fn screenshot_err(
+    step: &str,
+    api: &str,
+    api_ret: String,
+    note: Option<String>,
+    window_w: u32,
+    window_h: u32,
+    max_side: u32,
+) -> ScreenshotDiagError {
+    ScreenshotDiagError {
+        step: step.to_string(),
+        api: api.to_string(),
+        api_ret,
+        last_error: last_error_u32(),
+        note,
+        window_w,
+        window_h,
+        max_side,
+    }
+}
+
+fn capture_window_png_diagnose(hwnd: HWND, max_side: u32) -> Result<ScreenshotRaw, ScreenshotDiagError> {
     let mut rect = RECT {
         left: 0,
         top: 0,
@@ -190,35 +306,91 @@ fn capture_window_png_best_effort(hwnd: HWND, max_side: u32) -> Option<Screensho
     };
     let ok = unsafe { GetWindowRect(hwnd, &mut rect) };
     if ok == 0 {
-        return None;
+        return Err(screenshot_err(
+            "get_window_rect",
+            "GetWindowRect",
+            "0".to_string(),
+            None,
+            0,
+            0,
+            max_side,
+        ));
     }
     let w = (rect.right - rect.left).max(0) as u32;
     let h = (rect.bottom - rect.top).max(0) as u32;
     if w == 0 || h == 0 {
-        return None;
+        // Not a WinAPI failure; still record as a diagnosable step.
+        return Err(ScreenshotDiagError {
+            step: "window_size".to_string(),
+            api: "GetWindowRect".to_string(),
+            api_ret: format!("w={w} h={h}"),
+            last_error: 0,
+            note: Some("window has zero size".to_string()),
+            window_w: w,
+            window_h: h,
+            max_side,
+        });
     }
 
     // Create a memory DC + bitmap and use PrintWindow.
     unsafe {
         let screen_dc = GetDC(std::ptr::null_mut());
         if screen_dc.is_null() {
-            return None;
+            return Err(screenshot_err(
+                "get_dc",
+                "GetDC",
+                "NULL".to_string(),
+                None,
+                w,
+                h,
+                max_side,
+            ));
         }
 
         let mem_dc = CreateCompatibleDC(screen_dc);
         if mem_dc.is_null() {
             ReleaseDC(std::ptr::null_mut(), screen_dc);
-            return None;
+            return Err(screenshot_err(
+                "create_compatible_dc",
+                "CreateCompatibleDC",
+                "NULL".to_string(),
+                None,
+                w,
+                h,
+                max_side,
+            ));
         }
 
         let bmp = CreateCompatibleBitmap(screen_dc, w as i32, h as i32);
         if bmp.is_null() {
             DeleteDC(mem_dc);
             ReleaseDC(std::ptr::null_mut(), screen_dc);
-            return None;
+            return Err(screenshot_err(
+                "create_compatible_bitmap",
+                "CreateCompatibleBitmap",
+                "NULL".to_string(),
+                None,
+                w,
+                h,
+                max_side,
+            ));
         }
 
         let old = SelectObject(mem_dc, bmp as _);
+        if old == 0 || old == -1 {
+            let _ = DeleteObject(bmp as _);
+            let _ = DeleteDC(mem_dc);
+            let _ = ReleaseDC(std::ptr::null_mut(), screen_dc);
+            return Err(screenshot_err(
+                "select_object",
+                "SelectObject",
+                format!("{old}"),
+                Some("SelectObject failed".to_string()),
+                w,
+                h,
+                max_side,
+            ));
+        }
         let pw_ok = PrintWindow(hwnd, mem_dc, 0);
         ReleaseDC(std::ptr::null_mut(), screen_dc);
 
@@ -226,7 +398,15 @@ fn capture_window_png_best_effort(hwnd: HWND, max_side: u32) -> Option<Screensho
             let _ = SelectObject(mem_dc, old);
             let _ = DeleteObject(bmp as _);
             let _ = DeleteDC(mem_dc);
-            return None;
+            return Err(screenshot_err(
+                "print_window",
+                "PrintWindow",
+                "0".to_string(),
+                None,
+                w,
+                h,
+                max_side,
+            ));
         }
 
         let (out_w, out_h) = clamp_size(w, h, max_side);
@@ -270,12 +450,29 @@ fn capture_window_png_best_effort(hwnd: HWND, max_side: u32) -> Option<Screensho
         let _ = DeleteObject(bmp as _);
         let _ = DeleteDC(mem_dc);
         if got == 0 {
-            return None;
+            return Err(screenshot_err(
+                "get_dibits",
+                "GetDIBits",
+                "0".to_string(),
+                None,
+                w,
+                h,
+                max_side,
+            ));
         }
 
         resize_convert_bgra_to_rgba(&src_bgra, w, h, &mut rgba, out_w, out_h);
-        let png_bytes = encode_png_rgba(&rgba, out_w, out_h)?;
-        Some(ScreenshotRaw {
+        let png_bytes = encode_png_rgba(&rgba, out_w, out_h).ok_or_else(|| ScreenshotDiagError {
+            step: "encode_png".to_string(),
+            api: "png::Encoder".to_string(),
+            api_ret: "None".to_string(),
+            last_error: 0,
+            note: Some("encode_png_rgba returned None".to_string()),
+            window_w: w,
+            window_h: h,
+            max_side,
+        })?;
+        Ok(ScreenshotRaw {
             png_bytes,
             width: out_w,
             height: out_h,
@@ -336,7 +533,14 @@ fn encode_png_rgba(rgba: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
     Some(out)
 }
 
-fn read_clipboard_text_best_effort() -> Option<String> {
+#[derive(Debug, Clone)]
+struct ClipboardDiagError {
+    step: String,
+    last_error: u32,
+    note: String,
+}
+
+fn read_clipboard_text_diagnose() -> Result<Option<String>, ClipboardDiagError> {
     use windows_sys::Win32::System::DataExchange::{
         CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
     };
@@ -344,20 +548,32 @@ fn read_clipboard_text_best_effort() -> Option<String> {
 
     unsafe {
         if IsClipboardFormatAvailable(CF_UNICODETEXT as u32) == 0 {
-            return None;
+            return Ok(None);
         }
         if OpenClipboard(std::ptr::null_mut()) == 0 {
-            return None;
+            return Err(ClipboardDiagError {
+                step: "open_clipboard".to_string(),
+                last_error: GetLastError(),
+                note: "OpenClipboard failed".to_string(),
+            });
         }
         let handle = GetClipboardData(CF_UNICODETEXT as u32);
         if handle.is_null() {
             let _ = CloseClipboard();
-            return None;
+            return Err(ClipboardDiagError {
+                step: "get_clipboard_data".to_string(),
+                last_error: GetLastError(),
+                note: "GetClipboardData returned NULL".to_string(),
+            });
         }
         let ptr = GlobalLock(handle) as *const u16;
         if ptr.is_null() {
             let _ = CloseClipboard();
-            return None;
+            return Err(ClipboardDiagError {
+                step: "global_lock".to_string(),
+                last_error: GetLastError(),
+                note: "GlobalLock returned NULL".to_string(),
+            });
         }
 
         // Find NUL terminator.
@@ -378,9 +594,9 @@ fn read_clipboard_text_best_effort() -> Option<String> {
         let _ = GlobalUnlock(handle);
         let _ = CloseClipboard();
         if s.is_empty() {
-            None
+            Ok(None)
         } else {
-            Some(s)
+            Ok(Some(s))
         }
     }
 }

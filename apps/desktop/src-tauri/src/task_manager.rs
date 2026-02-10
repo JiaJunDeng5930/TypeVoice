@@ -261,7 +261,7 @@ impl TaskManager {
     ) -> Result<()> {
         let data_dir = data_dir::data_dir()?;
         let (ctx_cfg, ctx_snap) = if opts.rewrite_enabled {
-            self.ctx.capture_snapshot_best_effort(&data_dir)
+            self.ctx.capture_snapshot_best_effort(&data_dir, &task_id)
         } else {
             (
                 context_capture::ContextConfig::default(),
@@ -292,6 +292,8 @@ impl TaskManager {
         let wav_path = pipeline::preprocess_to_temp_wav(&task_id, &input)?;
         let preprocess_ms = {
             let inner = self.inner.clone();
+            let data_dir2 = data_dir.clone();
+            let task_id2 = task_id.clone();
             let input2 = input.clone();
             let wav2 = wav_path.clone();
             let join = tokio::task::spawn_blocking(move || {
@@ -299,6 +301,8 @@ impl TaskManager {
                 let a = active.as_ref().ok_or_else(|| anyhow!("task missing"))?;
                 // launch ffmpeg inside helper so we can store pid
                 let ms = pipeline::preprocess_ffmpeg_cancellable(
+                    &data_dir2,
+                    &task_id2,
                     &input2,
                     &wav2,
                     &a.token,

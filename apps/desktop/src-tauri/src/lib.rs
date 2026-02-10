@@ -16,6 +16,7 @@ mod settings;
 mod startup_trace;
 mod task_manager;
 mod templates;
+mod trace;
 
 use history::HistoryItem;
 use llm::ApiKeyStatus;

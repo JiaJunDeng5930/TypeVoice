@@ -1,0 +1,302 @@
+use std::{
+    fs::OpenOptions,
+    io::Write,
+    path::{Path, PathBuf},
+    time::{Instant, SystemTime, UNIX_EPOCH},
+};
+
+use serde::Serialize;
+use serde_json::Value;
+
+const DEFAULT_TRACE_MAX_BYTES: u64 = 10_000_000; // 10MB
+const DEFAULT_TRACE_MAX_FILES: usize = 5;
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn env_bool_default_true(key: &str) -> bool {
+    match std::env::var(key) {
+        Ok(v) => {
+            let t = v.trim().to_ascii_lowercase();
+            !(t == "0" || t == "false" || t == "no" || t == "off")
+        }
+        Err(_) => true,
+    }
+}
+
+fn env_u64(key: &str, default: u64) -> u64 {
+    match std::env::var(key) {
+        Ok(v) => v.trim().parse::<u64>().unwrap_or(default),
+        Err(_) => default,
+    }
+}
+
+fn env_usize(key: &str, default: usize) -> usize {
+    match std::env::var(key) {
+        Ok(v) => v.trim().parse::<usize>().unwrap_or(default),
+        Err(_) => default,
+    }
+}
+
+pub fn enabled() -> bool {
+    // Default: enabled. Users can set TYPEVOICE_TRACE_ENABLED=0 to disable.
+    env_bool_default_true("TYPEVOICE_TRACE_ENABLED")
+}
+
+fn max_bytes() -> u64 {
+    env_u64("TYPEVOICE_TRACE_MAX_BYTES", DEFAULT_TRACE_MAX_BYTES)
+}
+
+fn max_files() -> usize {
+    env_usize("TYPEVOICE_TRACE_MAX_FILES", DEFAULT_TRACE_MAX_FILES)
+}
+
+pub fn trace_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("trace.jsonl")
+}
+
+fn rotate_if_needed_best_effort(data_dir: &Path) {
+    if !enabled() {
+        return;
+    }
+
+    let p = trace_path(data_dir);
+    let max_b = max_bytes();
+    let max_f = max_files();
+    if max_f == 0 {
+        return;
+    }
+
+    let len = match std::fs::metadata(&p) {
+        Ok(m) => m.len(),
+        Err(_) => return,
+    };
+    if len <= max_b {
+        return;
+    }
+
+    // Shift: trace.jsonl.(n-1) -> trace.jsonl.n, then trace.jsonl -> trace.jsonl.1
+    for i in (1..max_f).rev() {
+        let src = data_dir.join(format!("trace.jsonl.{i}"));
+        let dst = data_dir.join(format!("trace.jsonl.{}", i + 1));
+        if src.exists() {
+            let _ = std::fs::rename(&src, &dst);
+        }
+    }
+    let first = data_dir.join("trace.jsonl.1");
+    let _ = std::fs::rename(&p, &first);
+
+    // Best-effort trim: remove the oldest if it exists.
+    let oldest = data_dir.join(format!("trace.jsonl.{max_f}"));
+    if oldest.exists() {
+        let _ = std::fs::remove_file(oldest);
+    }
+}
+
+pub fn emit_best_effort(data_dir: &Path, ev: &TraceEvent) {
+    if !enabled() {
+        return;
+    }
+    let _ = std::fs::create_dir_all(data_dir);
+    rotate_if_needed_best_effort(data_dir);
+
+    let p = trace_path(data_dir);
+    let mut f = match OpenOptions::new().create(true).append(true).open(&p) {
+        Ok(f) => f,
+        Err(e) => {
+            crate::safe_eprintln!("trace: open failed: {}: {e}", p.display());
+            return;
+        }
+    };
+    let line = match serde_json::to_string(ev) {
+        Ok(s) => s,
+        Err(e) => {
+            crate::safe_eprintln!("trace: serialize failed: {e}");
+            return;
+        }
+    };
+    if let Err(e) = f.write_all(line.as_bytes()) {
+        crate::safe_eprintln!("trace: write failed: {e}");
+        return;
+    }
+    let _ = f.write_all(b"\n");
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TraceError {
+    pub kind: String,    // winapi|http|io|process|logic|parse|unknown
+    pub code: String,    // E_* | HTTP_401 | WIN_LAST_ERROR_...
+    pub message: String, // short
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TraceEvent {
+    pub ts_ms: i64,
+    pub task_id: Option<String>,
+    pub stage: String,
+    pub step_id: String,
+    pub op: String, // start|end|event
+    pub status: String, // ok|err|skipped|aborted
+    pub duration_ms: Option<u128>,
+    pub error: Option<TraceError>,
+    pub ctx: Option<Value>,
+}
+
+pub fn event(
+    data_dir: &Path,
+    task_id: Option<&str>,
+    stage: &str,
+    step_id: &str,
+    status: &str,
+    ctx: Option<Value>,
+) {
+    emit_best_effort(
+        data_dir,
+        &TraceEvent {
+            ts_ms: now_ms(),
+            task_id: task_id.map(|s| s.to_string()),
+            stage: stage.to_string(),
+            step_id: step_id.to_string(),
+            op: "event".to_string(),
+            status: status.to_string(),
+            duration_ms: None,
+            error: None,
+            ctx,
+        },
+    );
+}
+
+pub struct Span {
+    data_dir: PathBuf,
+    task_id: Option<String>,
+    stage: String,
+    step_id: String,
+    t0: Instant,
+    finished: bool,
+}
+
+impl Span {
+    pub fn start(
+        data_dir: &Path,
+        task_id: Option<&str>,
+        stage: &str,
+        step_id: &str,
+        ctx: Option<Value>,
+    ) -> Self {
+        emit_best_effort(
+            data_dir,
+            &TraceEvent {
+                ts_ms: now_ms(),
+                task_id: task_id.map(|s| s.to_string()),
+                stage: stage.to_string(),
+                step_id: step_id.to_string(),
+                op: "start".to_string(),
+                status: "ok".to_string(),
+                duration_ms: None,
+                error: None,
+                ctx,
+            },
+        );
+        Self {
+            data_dir: data_dir.to_path_buf(),
+            task_id: task_id.map(|s| s.to_string()),
+            stage: stage.to_string(),
+            step_id: step_id.to_string(),
+            t0: Instant::now(),
+            finished: false,
+        }
+    }
+
+    pub fn ok(mut self, ctx: Option<Value>) {
+        self.finished = true;
+        emit_best_effort(
+            &self.data_dir,
+            &TraceEvent {
+                ts_ms: now_ms(),
+                task_id: self.task_id.clone(),
+                stage: self.stage.clone(),
+                step_id: self.step_id.clone(),
+                op: "end".to_string(),
+                status: "ok".to_string(),
+                duration_ms: Some(self.t0.elapsed().as_millis()),
+                error: None,
+                ctx,
+            },
+        );
+    }
+
+    #[allow(dead_code)]
+    pub fn skipped(mut self, reason: &str, ctx: Option<Value>) {
+        self.finished = true;
+        emit_best_effort(
+            &self.data_dir,
+            &TraceEvent {
+                ts_ms: now_ms(),
+                task_id: self.task_id.clone(),
+                stage: self.stage.clone(),
+                step_id: self.step_id.clone(),
+                op: "end".to_string(),
+                status: "skipped".to_string(),
+                duration_ms: Some(self.t0.elapsed().as_millis()),
+                error: Some(TraceError {
+                    kind: "logic".to_string(),
+                    code: "SKIPPED".to_string(),
+                    message: reason.to_string(),
+                }),
+                ctx,
+            },
+        );
+    }
+
+    pub fn err(mut self, kind: &str, code: &str, message: &str, ctx: Option<Value>) {
+        self.finished = true;
+        emit_best_effort(
+            &self.data_dir,
+            &TraceEvent {
+                ts_ms: now_ms(),
+                task_id: self.task_id.clone(),
+                stage: self.stage.clone(),
+                step_id: self.step_id.clone(),
+                op: "end".to_string(),
+                status: "err".to_string(),
+                duration_ms: Some(self.t0.elapsed().as_millis()),
+                error: Some(TraceError {
+                    kind: kind.to_string(),
+                    code: code.to_string(),
+                    message: message.to_string(),
+                }),
+                ctx,
+            },
+        );
+    }
+}
+
+impl Drop for Span {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        emit_best_effort(
+            &self.data_dir,
+            &TraceEvent {
+                ts_ms: now_ms(),
+                task_id: self.task_id.clone(),
+                stage: self.stage.clone(),
+                step_id: self.step_id.clone(),
+                op: "end".to_string(),
+                status: "aborted".to_string(),
+                duration_ms: Some(self.t0.elapsed().as_millis()),
+                error: Some(TraceError {
+                    kind: "logic".to_string(),
+                    code: "ABORTED".to_string(),
+                    message: "span dropped without explicit ok/err".to_string(),
+                }),
+                ctx: None,
+            },
+        );
+    }
+}
