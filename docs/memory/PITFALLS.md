@@ -131,3 +131,24 @@ VERIFIED（2026-02-10）
 - 处理方式：
   - 先停止可能占用文件的进程（例如 `typevoice-desktop`、`node`）。
   - 基准测试时避免使用共享的默认 `target/`：改用独立的 `CARGO_TARGET_DIR`（例如 repo 下 `tmp/bench-*/target`），并用“带重试”的删除逻辑清理该目录。
+
+## Windows 上下文截图失败缺少可定位日志：无法确定失败根因
+
+VERIFIED（2026-02-10，日志与代码审阅）
+
+- 复现条件：
+  - Windows 上启用 Rewrite（LLM 改写）与 Context（默认开启上一窗口截图）。
+  - 触发一次任务后，`debug/` 落盘的 `llm_request.json` 中 `messages[].content` 未出现 `image_url`（仅为纯文本），或出现了无意义的极窄截图（例如任务栏条）。
+- 现象：
+  - 有时 LLM 请求未附带截图（`image_url` 缺失），导致无法验证“截图是否发送”；
+  - 进一步排查时，无法从落盘日志判断截图失败发生在 Windows 截图链路的哪一步（例如 `GetWindowRect/GetDC/CreateCompatibleDC/CreateCompatibleBitmap/PrintWindow/GetDIBits/encode_png`）。
+- 影响：
+  - 无法回答“截图失败的根本原因是什么”（只能停留在“返回 None”这种表面结论），导致 Debug 成本高、定位慢、且容易反复踩坑。
+- 根因（实现层面）：
+  - `apps/desktop/src-tauri/src/context_capture_windows.rs` 的 `capture_window_png_best_effort` 在任意一步失败时直接 `return None`，未记录失败步骤、未记录 WinAPI 错误码（例如 `GetLastError`），也未 emit 结构化 debug 事件。
+  - `apps/desktop/src-tauri/src/llm.rs` 只有在 `PreparedContext.screenshot.is_some()` 时才会在请求体中追加 `image_url`；因此截图采集链路的 silent failure 会直接变成“请求里没有图”，但日志无法解释“为何没有图”。
+- 处理方式（修复方向）：
+  - 在 debug verbose 开启时，为“上下文采集/截图采集”增加结构化 debug 事件，至少记录：
+    - 失败 step（如 `print_window|get_dibits|encode_png|...`）
+    - Windows 错误码（`GetLastError`）与窗口基础信息（尺寸等，避免隐私）
+  - 截图内容继续保持脱敏：不得落盘原始像素/base64，只记录 sha256/尺寸/字节数。
