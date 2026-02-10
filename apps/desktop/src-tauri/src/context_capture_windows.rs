@@ -29,10 +29,22 @@ pub struct WindowInfo {
     pub process_image: Option<String>,
 }
 
+#[derive(Clone)]
 pub struct ScreenshotRaw {
     pub png_bytes: Vec<u8>,
     pub width: u32,
     pub height: u32,
+}
+
+impl std::fmt::Debug for ScreenshotRaw {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Avoid dumping raw pixels into logs accidentally.
+        f.debug_struct("ScreenshotRaw")
+            .field("png_bytes_len", &self.png_bytes.len())
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -377,14 +389,15 @@ fn capture_window_png_diagnose(hwnd: HWND, max_side: u32) -> Result<ScreenshotRa
         }
 
         let old = SelectObject(mem_dc, bmp as _);
-        if old == 0 || old == -1 {
+        let hgdi_error = (-1isize) as *mut c_void;
+        if old.is_null() || old == hgdi_error {
             let _ = DeleteObject(bmp as _);
             let _ = DeleteDC(mem_dc);
             let _ = ReleaseDC(std::ptr::null_mut(), screen_dc);
             return Err(screenshot_err(
                 "select_object",
                 "SelectObject",
-                format!("{old}"),
+                format!("{old:?}"),
                 Some("SelectObject failed".to_string()),
                 w,
                 h,
