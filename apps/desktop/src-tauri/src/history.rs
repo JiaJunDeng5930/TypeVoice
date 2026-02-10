@@ -4,6 +4,8 @@ use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
+use crate::trace::Span;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryItem {
     pub task_id: String,
@@ -40,8 +42,27 @@ fn conn(db_path: &Path) -> Result<Connection> {
 }
 
 pub fn append(db_path: &Path, item: &HistoryItem) -> Result<()> {
-    let c = conn(db_path)?;
-    c.execute(
+    let data_dir = db_path.parent().unwrap_or_else(|| Path::new("."));
+    let span = Span::start(
+        data_dir,
+        Some(item.task_id.as_str()),
+        "History",
+        "HISTORY.append",
+        Some(serde_json::json!({
+            "template_id": item.template_id,
+            "asr_chars": item.asr_text.len(),
+            "final_chars": item.final_text.len(),
+        })),
+    );
+
+    let c = match conn(db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            span.err("db", "E_HISTORY_CONN", &e.to_string(), None);
+            return Err(e);
+        }
+    };
+    let r = c.execute(
         r#"
         INSERT OR REPLACE INTO history
         (task_id, created_at_ms, asr_text, final_text, template_id, rtf, device_used, preprocess_ms, asr_ms)
@@ -58,13 +79,36 @@ pub fn append(db_path: &Path, item: &HistoryItem) -> Result<()> {
             item.preprocess_ms,
             item.asr_ms,
         ],
-    )
-    .context("insert history failed")?;
-    Ok(())
+    );
+    match r {
+        Ok(_) => {
+            span.ok(None);
+            Ok(())
+        }
+        Err(e) => {
+            span.err("db", "E_HISTORY_INSERT", &format!("{e}"), None);
+            Err(anyhow::anyhow!(e).context("insert history failed"))
+        }
+    }
 }
 
 pub fn list(db_path: &Path, limit: i64, before_ms: Option<i64>) -> Result<Vec<HistoryItem>> {
-    let c = conn(db_path)?;
+    let data_dir = db_path.parent().unwrap_or_else(|| Path::new("."));
+    let span = Span::start(
+        data_dir,
+        None,
+        "History",
+        "HISTORY.list",
+        Some(serde_json::json!({"limit": limit, "before_ms": before_ms})),
+    );
+
+    let c = match conn(db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            span.err("db", "E_HISTORY_CONN", &e.to_string(), None);
+            return Err(e);
+        }
+    };
     let mut out = Vec::new();
     match before_ms {
         Some(ms) => {
@@ -129,12 +173,28 @@ pub fn list(db_path: &Path, limit: i64, before_ms: Option<i64>) -> Result<Vec<Hi
             }
         }
     }
+    span.ok(Some(serde_json::json!({"items": out.len()})));
     Ok(out)
 }
 
 pub fn clear(db_path: &Path) -> Result<()> {
-    let c = conn(db_path)?;
-    c.execute("DELETE FROM history", [])
-        .context("clear history failed")?;
-    Ok(())
+    let data_dir = db_path.parent().unwrap_or_else(|| Path::new("."));
+    let span = Span::start(data_dir, None, "History", "HISTORY.clear", None);
+    let c = match conn(db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            span.err("db", "E_HISTORY_CONN", &e.to_string(), None);
+            return Err(e);
+        }
+    };
+    match c.execute("DELETE FROM history", []) {
+        Ok(_) => {
+            span.ok(None);
+            Ok(())
+        }
+        Err(e) => {
+            span.err("db", "E_HISTORY_CLEAR", &format!("{e}"), None);
+            Err(anyhow::anyhow!(e).context("clear history failed"))
+        }
+    }
 }

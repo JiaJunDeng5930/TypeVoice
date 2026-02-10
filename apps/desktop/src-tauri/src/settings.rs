@@ -6,6 +6,8 @@ use std::{
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::trace::Span;
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
     pub asr_model: Option<String>, // local dir or HF repo id
@@ -112,11 +114,17 @@ fn now_ms() -> i64 {
 }
 
 pub fn load_settings_or_recover(data_dir: &Path) -> Settings {
+    let span = Span::start(data_dir, None, "Settings", "SETTINGS.load_or_recover", None);
     match load_settings(data_dir) {
-        Ok(s) => s,
+        Ok(s) => {
+            span.ok(Some(serde_json::json!({"status": "ok"})));
+            s
+        }
         Err(e) => {
+            let mut backup_ok = false;
             let p = settings_path(data_dir);
-            if p.exists() {
+            let had_file = p.exists();
+            if had_file {
                 let backup = data_dir.join(format!("settings.json.corrupt.{}", now_ms()));
                 if let Err(re) = fs::rename(&p, &backup) {
                     crate::safe_eprintln!(
@@ -125,6 +133,7 @@ pub fn load_settings_or_recover(data_dir: &Path) -> Settings {
                         backup.display()
                     );
                 } else {
+                    backup_ok = true;
                     crate::safe_eprintln!(
                         "settings.json corrupt; moved to {} (error: {:#})",
                         backup.display(),
@@ -134,16 +143,32 @@ pub fn load_settings_or_recover(data_dir: &Path) -> Settings {
             } else {
                 crate::safe_eprintln!("settings load failed (missing file): {e:#}");
             }
+
+            span.err(
+                "parse",
+                "E_SETTINGS_LOAD",
+                &e.to_string(),
+                Some(serde_json::json!({
+                    "had_file": had_file,
+                    "backup_ok": backup_ok,
+                })),
+            );
+
             Settings::default()
         }
     }
 }
 
 pub fn save_settings(data_dir: &Path, settings: &Settings) -> Result<()> {
+    let span = Span::start(data_dir, None, "Settings", "SETTINGS.save", None);
     std::fs::create_dir_all(data_dir).context("create data dir failed")?;
     let p = settings_path(data_dir);
     let s = serde_json::to_string_pretty(settings).context("serialize settings failed")?;
-    fs::write(&p, s).context("write settings.json failed")?;
+    if let Err(e) = fs::write(&p, s) {
+        span.err("io", "E_SETTINGS_WRITE", &format!("write settings.json failed: {e}"), None);
+        return Err(anyhow::anyhow!("write settings.json failed: {e}"));
+    }
+    span.ok(None);
     Ok(())
 }
 
