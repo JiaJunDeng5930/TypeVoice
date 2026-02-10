@@ -8,16 +8,19 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use windows_sys::Win32::Foundation::{CloseHandle, HWND};
+use windows_sys::Win32::Foundation::{CloseHandle, HWND, RECT};
 use windows_sys::Win32::Graphics::Gdi::{
     CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits,
     ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
 };
-use windows_sys::Win32::System::ProcessStatus::QueryFullProcessImageNameW;
-use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+use windows_sys::Win32::Storage::Xps::PrintWindow;
+use windows_sys::Win32::System::Ole::CF_UNICODETEXT;
+use windows_sys::Win32::System::Threading::{
+    OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
-    GetWindowThreadProcessId, IsWindow, PrintWindow, RECT,
+    GetWindowThreadProcessId, IsWindow,
 };
 
 pub struct WindowInfo {
@@ -50,7 +53,7 @@ impl WindowsContext {
     pub fn last_external_window_info_best_effort(&self) -> Option<WindowInfo> {
         self.tracker.ensure_started();
         let snap = self.tracker.last_external_snapshot();
-        let hwnd = snap.hwnd?;
+        let hwnd = snap.hwnd? as HWND;
         if unsafe { IsWindow(hwnd) } == 0 {
             return None;
         }
@@ -68,7 +71,7 @@ impl WindowsContext {
     ) -> Option<ScreenshotRaw> {
         self.tracker.ensure_started();
         let snap = self.tracker.last_external_snapshot();
-        let hwnd = snap.hwnd?;
+        let hwnd = snap.hwnd? as HWND;
         if unsafe { IsWindow(hwnd) } == 0 {
             return None;
         }
@@ -82,7 +85,9 @@ impl WindowsContext {
 
 #[derive(Debug, Clone)]
 struct ExternalSnapshot {
-    hwnd: Option<HWND>,
+    // HWND is a raw pointer type and is not Send/Sync. Store it as an integer so that
+    // the tracker can live inside Tauri managed state (which requires Send + Sync).
+    hwnd: Option<isize>,
     pid: u32,
     process_image: Option<String>,
 }
@@ -129,7 +134,7 @@ impl ForegroundTracker {
                     if pid != 0 && pid != this_pid {
                         let img = get_process_image_best_effort(pid);
                         let mut g = last_external.lock().unwrap();
-                        g.hwnd = Some(hwnd);
+                        g.hwnd = Some(hwnd as isize);
                         g.pid = pid;
                         g.process_image = img;
                     }
@@ -331,16 +336,15 @@ fn read_clipboard_text_best_effort() -> Option<String> {
         CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
     };
     use windows_sys::Win32::System::Memory::{GlobalLock, GlobalUnlock};
-    use windows_sys::Win32::UI::WindowsAndMessaging::CF_UNICODETEXT;
 
     unsafe {
-        if IsClipboardFormatAvailable(CF_UNICODETEXT) == 0 {
+        if IsClipboardFormatAvailable(CF_UNICODETEXT as u32) == 0 {
             return None;
         }
         if OpenClipboard(0) == 0 {
             return None;
         }
-        let handle = GetClipboardData(CF_UNICODETEXT);
+        let handle = GetClipboardData(CF_UNICODETEXT as u32);
         if handle == 0 {
             let _ = CloseClipboard();
             return None;
