@@ -25,7 +25,7 @@ VERIFIED
 - 交互：非流式（不是边说边出字），录完再处理。来源：`docs/base-spec-v0.1.md`。
 - 核心流水线阶段：Record -> Preprocess(FFmpeg) -> Transcribe(ASR) -> Rewrite(LLM，可选) -> Persist(历史文本) -> Export(复制)。来源：`docs/tech-spec-v0.1.md`。
 - 本地 ASR：模型 `Qwen/Qwen3-ASR-0.6B`；推理后端 PyTorch CUDA；不允许 CPU 降级。来源：`docs/base-spec-v0.1.md`、`docs/tech-spec-v0.1.md`、`docs/verification-v0.1.md`。
-- LLM 改写：仅上传文本，不上传音频；失败必须回退保留 ASR 原文可复制；配置需可在 UI 内设置。来源：`docs/base-spec-v0.1.md`、`docs/tech-spec-v0.1.md`。
+- LLM 改写：仅在启用时上传“转录文本 + 相关上下文”（例如剪贴板/最近历史/上一外部窗口截图等），不上传音频；失败必须回退保留 ASR 原文可复制；配置需可在 UI 内设置。来源：`docs/base-spec-v0.1.md`、`docs/tech-spec-v0.1.md`。
 - 历史记录：仅保存文本与元信息，不保存音频。来源：`docs/base-spec-v0.1.md`、`docs/tech-spec-v0.1.md`。
 
 ## 3. 明确不做（MVP Out Of Scope）
@@ -54,4 +54,3 @@ UNCONFIRMED
 - 模型版本升级策略（多版本共存/回滚）。来源：`docs/base-spec-v0.1.md`。
 - FFmpeg 版本、构建选项与许可证声明写法。来源：`docs/tech-spec-v0.1.md`。
 - PyTorch CUDA 打包策略与 ASR Runner 分发形式。来源：`docs/tech-spec-v0.1.md`。
-
