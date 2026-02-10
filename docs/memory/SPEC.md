@@ -42,6 +42,19 @@ VERIFIED
 - 关键硬约束：`device_used == cuda`；取消 <= 300ms；`full` 覆盖 RTF 阈值与轻压测；默认不跑真实 LLM。来源：`docs/verification-v0.1.md`、`docs/base-spec-v0.1.md`。
 - 里程碑与 Gate：见 `docs/roadmap-v0.1.md`、`docs/tasks-v0.1.md`。
 
+## 4.1 可诊断性（Observability / Debuggability）
+
+VERIFIED（2026-02-10，用户要求）
+
+- 对于所有错误路径（包括 best-effort 分支与跨线程任务），必须落盘可定位的诊断信息，而不是仅在少数 event 打日志。
+- 每个失败必须至少包含：
+  - 稳定的步骤标识（`step_id`）
+  - 稳定的错误码（`code`）
+  - 错误链（error chain，能看到从外层到根因的层级）
+  - 调用栈/回溯（backtrace 或等价机制），用于定位到具体出错位置（无需手工维护 `file:line` 常量）
+  - 与根因定位相关的上下文信息（需脱敏；不得包含 API key；不得写入截图像素/base64）
+- Windows release 无控制台：不得依赖 stdout/stderr；诊断日志必须写入数据目录（例如 `TYPEVOICE_DATA_DIR/trace.jsonl` 与 `TYPEVOICE_DATA_DIR/debug/`）。
+
 UNCONFIRMED
 
 - Windows 原生验收 Gate（M12）当前是否已在目标 Windows 机器上跑通并记录结果（`docs/tasks-v0.1.md` 里仍未勾选）。

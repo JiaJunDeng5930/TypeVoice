@@ -152,3 +152,25 @@ VERIFIED（2026-02-10，日志与代码审阅）
     - 失败 step（如 `print_window|get_dibits|encode_png|...`）
     - Windows 错误码（`GetLastError`）与窗口基础信息（尺寸等，避免隐私）
   - 截图内容继续保持脱敏：不得落盘原始像素/base64，只记录 sha256/尺寸/字节数。
+
+## 通用：日志不足导致无法定位根本原因（缺少 error chain / backtrace / 稳定 step_id）
+
+VERIFIED（2026-02-10，问题复盘）
+
+- 复现条件：
+  - 任意模块发生错误（IO/WinAPI/HTTP/DB/外部进程等），但错误路径没有统一的“开始/结束 span + 错误细节”。
+  - 或者在 span 创建后使用 `?`/提前 `return` 直接退出，导致没有明确的 `ok/err` 终止事件。
+- 现象：
+  - 只能看到表面错误（例如 “返回 None/空字符串/失败”），看不到失败发生在什么步骤，也看不到 root cause 的错误链。
+  - Windows release 上由于无控制台，stderr/stdout 不可用时更难排查。
+- 影响：
+  - 无法回答“失败的根本原因是什么”，只能靠猜测或反复加临时日志，Debug 成本极高。
+- 根因（结构性）：
+  - 日志体系未覆盖所有边界：命令入口、跨线程任务、best-effort 分支、外部进程/WinAPI 调用点。
+  - 错误经常被 `to_string()` 抹平（丢失 error chain），且没有统一 backtrace 机制。
+  - 缺少稳定的步骤 ID 规范（导致日志无法聚合/检索）。
+- 处理方式（修复方向）：
+  - 引入常开、结构化的 `trace.jsonl`，并要求所有错误路径必须写入：
+    - `step_id`（稳定）、`code`（稳定）、error chain、backtrace（运行时捕获，无需手工维护）
+  - 禁止在 span 开始后直接 `?` 退出而不记录：所有失败必须显式 `span.err(...)`/`span.err_anyhow(...)`。
+  - 脱敏约束：不记录 API key；不记录截图像素/base64；避免在 trace 中泄漏个人绝对路径。
