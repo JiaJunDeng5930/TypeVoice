@@ -27,18 +27,65 @@ use settings::SettingsPatch;
 use task_manager::TaskManager;
 use tauri::Manager;
 use templates::PromptTemplate;
+use trace::Span;
+
+fn cmd_span(
+    data_dir: &std::path::Path,
+    task_id: Option<&str>,
+    step_id: &str,
+    ctx: Option<serde_json::Value>,
+) -> Span {
+    Span::start(data_dir, task_id, "Cmd", step_id, ctx)
+}
 
 #[tauri::command]
 fn transcribe_fixture(fixture_name: &str) -> Result<TranscribeResult, String> {
-    pipeline::run_fixture_pipeline(fixture_name).map_err(|e| e.to_string())
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(
+        &dir,
+        None,
+        "CMD.transcribe_fixture",
+        Some(serde_json::json!({"fixture_name": fixture_name})),
+    );
+    match pipeline::run_fixture_pipeline(fixture_name) {
+        Ok(r) => {
+            span.ok(None);
+            Ok(r)
+        }
+        Err(e) => {
+            span.err_anyhow("pipeline", "E_CMD_TRANSCRIBE_FIXTURE", &e, None);
+            Err(e.to_string())
+        }
+    }
 }
 
 #[tauri::command]
 fn transcribe_recording_base64(b64: &str, ext: &str) -> Result<TranscribeResult, String> {
     let task_id = uuid::Uuid::new_v4().to_string();
-    let input = pipeline::save_base64_file(&task_id, b64, ext).map_err(|e| e.to_string())?;
-    pipeline::run_audio_pipeline_with_task_id(task_id, &input, "Qwen/Qwen3-ASR-0.6B")
-        .map_err(|e| e.to_string())
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(
+        &dir,
+        Some(&task_id),
+        "CMD.transcribe_recording_base64",
+        Some(serde_json::json!({"ext": ext, "b64_chars": b64.len()})),
+    );
+    let input = match pipeline::save_base64_file(&task_id, b64, ext) {
+        Ok(p) => p,
+        Err(e) => {
+            span.err_anyhow("io", "E_CMD_SAVE_B64", &e, None);
+            return Err(e.to_string());
+        }
+    };
+    match pipeline::run_audio_pipeline_with_task_id(task_id, &input, "Qwen/Qwen3-ASR-0.6B") {
+        Ok(r) => {
+            span.ok(None);
+            Ok(r)
+        }
+        Err(e) => {
+            span.err_anyhow("pipeline", "E_CMD_TRANSCRIBE_B64", &e, None);
+            Err(e.to_string())
+        }
+    }
 }
 
 #[tauri::command]
@@ -49,7 +96,18 @@ async fn start_transcribe_fixture(
     rewrite_enabled: bool,
     template_id: Option<String>,
 ) -> Result<String, String> {
-    state
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(
+        &dir,
+        None,
+        "CMD.start_transcribe_fixture",
+        Some(serde_json::json!({
+            "fixture_name": fixture_name,
+            "rewrite_enabled": rewrite_enabled,
+            "template_id": template_id.as_deref(),
+        })),
+    );
+    match state
         .start_fixture(
             app,
             fixture_name.to_string(),
@@ -58,7 +116,16 @@ async fn start_transcribe_fixture(
                 template_id,
             },
         )
-        .map_err(|e| e.to_string())
+    {
+        Ok(task_id) => {
+            span.ok(Some(serde_json::json!({"task_id": task_id})));
+            Ok(task_id)
+        }
+        Err(e) => {
+            span.err_anyhow("task", "E_CMD_START_FIXTURE", &e, None);
+            Err(e.to_string())
+        }
+    }
 }
 
 #[tauri::command]
@@ -70,7 +137,19 @@ async fn start_transcribe_recording_base64(
     rewrite_enabled: bool,
     template_id: Option<String>,
 ) -> Result<String, String> {
-    state
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(
+        &dir,
+        None,
+        "CMD.start_transcribe_recording_base64",
+        Some(serde_json::json!({
+            "ext": ext,
+            "b64_chars": b64.len(),
+            "rewrite_enabled": rewrite_enabled,
+            "template_id": template_id.as_deref(),
+        })),
+    );
+    match state
         .start_recording_base64(
             app,
             b64.to_string(),
@@ -80,67 +159,206 @@ async fn start_transcribe_recording_base64(
                 template_id,
             },
         )
-        .map_err(|e| e.to_string())
+    {
+        Ok(task_id) => {
+            span.ok(Some(serde_json::json!({"task_id": task_id})));
+            Ok(task_id)
+        }
+        Err(e) => {
+            span.err_anyhow("task", "E_CMD_START_B64", &e, None);
+            Err(e.to_string())
+        }
+    }
 }
 
 #[tauri::command]
 fn cancel_task(state: tauri::State<TaskManager>, task_id: &str) -> Result<(), String> {
-    state.cancel(task_id).map_err(|e| e.to_string())
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(
+        &dir,
+        Some(task_id),
+        "CMD.cancel_task",
+        Some(serde_json::json!({"task_id": task_id})),
+    );
+    match state.cancel(task_id) {
+        Ok(()) => {
+            span.ok(None);
+            Ok(())
+        }
+        Err(e) => {
+            span.err_anyhow("task", "E_CMD_CANCEL", &e, None);
+            Err(e.to_string())
+        }
+    }
 }
 
 #[tauri::command]
 fn list_templates() -> Result<Vec<PromptTemplate>, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    templates::load_templates(&dir).map_err(|e| e.to_string())
+    let span = cmd_span(&dir, None, "CMD.list_templates", None);
+    match templates::load_templates(&dir) {
+        Ok(v) => {
+            span.ok(Some(serde_json::json!({"count": v.len()})));
+            Ok(v)
+        }
+        Err(e) => {
+            span.err_anyhow("templates", "E_CMD_TPL_LIST", &e, None);
+            Err(e.to_string())
+        }
+    }
 }
 
 #[tauri::command]
 fn upsert_template(tpl: PromptTemplate) -> Result<PromptTemplate, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    templates::upsert_template(&dir, tpl).map_err(|e| e.to_string())
+    let tpl_id = tpl.id.clone();
+    let has_id = !tpl_id.trim().is_empty();
+    let name_chars = tpl.name.len();
+    let prompt_chars = tpl.system_prompt.len();
+    let span = cmd_span(
+        &dir,
+        None,
+        "CMD.upsert_template",
+        Some(serde_json::json!({"has_id": has_id, "id": tpl_id, "name_chars": name_chars, "prompt_chars": prompt_chars})),
+    );
+    match templates::upsert_template(&dir, tpl) {
+        Ok(v) => {
+            span.ok(Some(serde_json::json!({"id": v.id})));
+            Ok(v)
+        }
+        Err(e) => {
+            span.err_anyhow("templates", "E_CMD_TPL_UPSERT", &e, None);
+            Err(e.to_string())
+        }
+    }
 }
 
 #[tauri::command]
 fn delete_template(id: &str) -> Result<(), String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    templates::delete_template(&dir, id).map_err(|e| e.to_string())
+    let span = cmd_span(&dir, None, "CMD.delete_template", Some(serde_json::json!({"id": id})));
+    match templates::delete_template(&dir, id) {
+        Ok(()) => {
+            span.ok(None);
+            Ok(())
+        }
+        Err(e) => {
+            span.err_anyhow("templates", "E_CMD_TPL_DELETE", &e, None);
+            Err(e.to_string())
+        }
+    }
 }
 
 #[tauri::command]
 fn templates_export_json() -> Result<String, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    templates::export_templates_json(&dir).map_err(|e| e.to_string())
+    let span = cmd_span(&dir, None, "CMD.templates_export_json", None);
+    match templates::export_templates_json(&dir) {
+        Ok(s) => {
+            span.ok(Some(serde_json::json!({"bytes": s.len()})));
+            Ok(s)
+        }
+        Err(e) => {
+            span.err_anyhow("templates", "E_CMD_TPL_EXPORT", &e, None);
+            Err(e.to_string())
+        }
+    }
 }
 
 #[tauri::command]
 fn templates_import_json(json: &str, mode: &str) -> Result<usize, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    templates::import_templates_json(&dir, json, mode).map_err(|e| e.to_string())
+    let span = cmd_span(
+        &dir,
+        None,
+        "CMD.templates_import_json",
+        Some(serde_json::json!({"mode": mode, "json_chars": json.len()})),
+    );
+    match templates::import_templates_json(&dir, json, mode) {
+        Ok(n) => {
+            span.ok(Some(serde_json::json!({"count": n})));
+            Ok(n)
+        }
+        Err(e) => {
+            span.err_anyhow("templates", "E_CMD_TPL_IMPORT", &e, None);
+            Err(e.to_string())
+        }
+    }
 }
 
 #[tauri::command]
 async fn rewrite_text(template_id: &str, asr_text: &str) -> Result<String, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let tpl = templates::get_template(&dir, template_id).map_err(|e| e.to_string())?;
     let task_id = uuid::Uuid::new_v4().to_string();
-    llm::rewrite(&dir, &task_id, &tpl.system_prompt, asr_text)
-        .await
-        .map_err(|e| e.to_string())
+    let span = cmd_span(
+        &dir,
+        Some(&task_id),
+        "CMD.rewrite_text",
+        Some(serde_json::json!({"template_id": template_id, "asr_chars": asr_text.len()})),
+    );
+    let tpl = match templates::get_template(&dir, template_id) {
+        Ok(t) => t,
+        Err(e) => {
+            span.err_anyhow("templates", "E_CMD_TPL_GET", &e, None);
+            return Err(e.to_string());
+        }
+    };
+    match llm::rewrite(&dir, &task_id, &tpl.system_prompt, asr_text).await {
+        Ok(s) => {
+            span.ok(Some(serde_json::json!({"out_chars": s.len()})));
+            Ok(s)
+        }
+        Err(e) => {
+            span.err_anyhow("llm", "E_CMD_REWRITE", &e, None);
+            Err(e.to_string())
+        }
+    }
 }
 
 #[tauri::command]
 fn set_llm_api_key(api_key: &str) -> Result<(), String> {
-    llm::set_api_key(api_key).map_err(|e| e.to_string())
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(
+        &dir,
+        None,
+        "CMD.set_llm_api_key",
+        Some(serde_json::json!({"api_key_chars": api_key.len()})),
+    );
+    match llm::set_api_key(api_key) {
+        Ok(()) => {
+            span.ok(None);
+            Ok(())
+        }
+        Err(e) => {
+            span.err_anyhow("auth", "E_CMD_SET_KEY", &e, None);
+            Err(e.to_string())
+        }
+    }
 }
 
 #[tauri::command]
 fn clear_llm_api_key() -> Result<(), String> {
-    llm::clear_api_key().map_err(|e| e.to_string())
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(&dir, None, "CMD.clear_llm_api_key", None);
+    match llm::clear_api_key() {
+        Ok(()) => {
+            span.ok(None);
+            Ok(())
+        }
+        Err(e) => {
+            span.err_anyhow("auth", "E_CMD_CLEAR_KEY", &e, None);
+            Err(e.to_string())
+        }
+    }
 }
 
 #[tauri::command]
 fn llm_api_key_status() -> Result<ApiKeyStatus, String> {
-    Ok(llm::api_key_status())
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(&dir, None, "CMD.llm_api_key_status", None);
+    let st = llm::api_key_status();
+    span.ok(Some(serde_json::json!({"configured": st.configured, "source": st.source, "reason": st.reason})));
+    Ok(st)
 }
 
 fn history_db_path() -> Result<std::path::PathBuf, String> {
@@ -152,31 +370,82 @@ fn history_db_path() -> Result<std::path::PathBuf, String> {
 #[tauri::command]
 fn history_append(item: HistoryItem) -> Result<(), String> {
     let db = history_db_path()?;
-    history::append(&db, &item).map_err(|e| e.to_string())
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(&dir, Some(item.task_id.as_str()), "CMD.history_append", None);
+    match history::append(&db, &item) {
+        Ok(()) => {
+            span.ok(None);
+            Ok(())
+        }
+        Err(e) => {
+            span.err_anyhow("history", "E_CMD_HISTORY_APPEND", &e, None);
+            Err(e.to_string())
+        }
+    }
 }
 
 #[tauri::command]
 fn history_list(limit: i64, before_ms: Option<i64>) -> Result<Vec<HistoryItem>, String> {
     let db = history_db_path()?;
-    history::list(&db, limit, before_ms).map_err(|e| e.to_string())
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(
+        &dir,
+        None,
+        "CMD.history_list",
+        Some(serde_json::json!({"limit": limit, "before_ms": before_ms})),
+    );
+    match history::list(&db, limit, before_ms) {
+        Ok(v) => {
+            span.ok(Some(serde_json::json!({"count": v.len()})));
+            Ok(v)
+        }
+        Err(e) => {
+            span.err_anyhow("history", "E_CMD_HISTORY_LIST", &e, None);
+            Err(e.to_string())
+        }
+    }
 }
 
 #[tauri::command]
 fn history_clear() -> Result<(), String> {
     let db = history_db_path()?;
-    history::clear(&db).map_err(|e| e.to_string())
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(&dir, None, "CMD.history_clear", None);
+    match history::clear(&db) {
+        Ok(()) => {
+            span.ok(None);
+            Ok(())
+        }
+        Err(e) => {
+            span.err_anyhow("history", "E_CMD_HISTORY_CLEAR", &e, None);
+            Err(e.to_string())
+        }
+    }
 }
 
 #[tauri::command]
 fn get_settings() -> Result<Settings, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    Ok(settings::load_settings_or_recover(&dir))
+    let span = cmd_span(&dir, None, "CMD.get_settings", None);
+    let s = settings::load_settings_or_recover(&dir);
+    span.ok(Some(serde_json::json!({"rewrite_enabled": s.rewrite_enabled, "template_id": s.rewrite_template_id})));
+    Ok(s)
 }
 
 #[tauri::command]
 fn set_settings(s: Settings) -> Result<(), String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    settings::save_settings(&dir, &s).map_err(|e| e.to_string())
+    let span = cmd_span(&dir, None, "CMD.set_settings", None);
+    match settings::save_settings(&dir, &s) {
+        Ok(()) => {
+            span.ok(None);
+            Ok(())
+        }
+        Err(e) => {
+            span.err_anyhow("settings", "E_CMD_SET_SETTINGS", &e, None);
+            Err(e.to_string())
+        }
+    }
 }
 
 #[tauri::command]
@@ -185,15 +454,34 @@ fn update_settings(
     patch: SettingsPatch,
 ) -> Result<Settings, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let patch_summary = serde_json::json!({
+        "asr_model": patch.asr_model.is_some(),
+        "llm_base_url": patch.llm_base_url.is_some(),
+        "llm_model": patch.llm_model.is_some(),
+        "llm_reasoning_effort": patch.llm_reasoning_effort.is_some(),
+        "rewrite_enabled": patch.rewrite_enabled.is_some(),
+        "rewrite_template_id": patch.rewrite_template_id.is_some(),
+        "context_include_history": patch.context_include_history.is_some(),
+        "context_history_n": patch.context_history_n.is_some(),
+        "context_history_window_ms": patch.context_history_window_ms.is_some(),
+        "context_include_clipboard": patch.context_include_clipboard.is_some(),
+        "context_include_prev_window_screenshot": patch.context_include_prev_window_screenshot.is_some(),
+        "llm_supports_vision": patch.llm_supports_vision.is_some(),
+    });
+    let span = cmd_span(&dir, None, "CMD.update_settings", Some(patch_summary));
     let cur = settings::load_settings_or_recover(&dir);
     let asr_model_changed = patch.asr_model.is_some();
     let next = settings::apply_patch(cur, patch);
-    settings::save_settings(&dir, &next).map_err(|e| e.to_string())?;
+    if let Err(e) = settings::save_settings(&dir, &next) {
+        span.err_anyhow("settings", "E_CMD_UPDATE_SETTINGS", &e, None);
+        return Err(e.to_string());
+    }
     // If ASR model changed, restart the resident ASR runner.
     // We do this best-effort; errors are surfaced later via task events.
     if asr_model_changed {
         state.restart_asr_best_effort("settings_changed");
     }
+    span.ok(None);
     Ok(next)
 }
 
@@ -205,12 +493,24 @@ fn asr_model_status() -> Result<ModelStatus, String> {
         .ok_or_else(|| "repo root not found".to_string())?
         .to_path_buf();
     let model_dir = model::default_model_dir(&root);
-    model::verify_model_dir(&model_dir).map_err(|e| e.to_string())
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(&dir, None, "CMD.asr_model_status", None);
+    match model::verify_model_dir(&model_dir) {
+        Ok(st) => {
+            span.ok(Some(serde_json::json!({"ok": st.ok, "reason": st.reason, "model_version": st.model_version})));
+            Ok(st)
+        }
+        Err(e) => {
+            span.err_anyhow("model", "E_CMD_MODEL_STATUS", &e, None);
+            Err(e.to_string())
+        }
+    }
 }
 
 #[tauri::command]
 async fn download_asr_model() -> Result<ModelStatus, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(&dir, None, "CMD.download_asr_model", None);
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(3)
@@ -225,18 +525,26 @@ async fn download_asr_model() -> Result<ModelStatus, String> {
     let root2 = root.clone();
     let py2 = py.clone();
     let model_dir2 = model_dir.clone();
-    let st = tauri::async_runtime::spawn_blocking(move || {
-        model::download_model(&root2, &py2, &model_dir2)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-    .map_err(|e| e.to_string())?;
+    let st_res = tauri::async_runtime::spawn_blocking(move || model::download_model(&root2, &py2, &model_dir2)).await;
+    let st = match st_res {
+        Ok(Ok(st)) => st,
+        Ok(Err(e)) => {
+            span.err_anyhow("model", "E_CMD_MODEL_DOWNLOAD", &e, None);
+            return Err(e.to_string());
+        }
+        Err(e) => {
+            let ae = anyhow::anyhow!("spawn_blocking failed: {e}");
+            span.err_anyhow("runtime", "E_CMD_JOIN", &ae, None);
+            return Err(ae.to_string());
+        }
+    };
     // Set settings.asr_model to local dir if ok.
     if st.ok {
         let mut s = settings::load_settings_or_recover(&dir);
         s.asr_model = Some(model_dir.display().to_string());
         let _ = settings::save_settings(&dir, &s);
     }
+    span.ok(Some(serde_json::json!({"ok": st.ok, "reason": st.reason, "model_version": st.model_version})));
     Ok(st)
 }
 

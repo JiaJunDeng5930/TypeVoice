@@ -8,6 +8,8 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::trace::Span;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromptTemplate {
     pub id: String,
@@ -91,70 +93,213 @@ pub fn templates_path(data_dir: &Path) -> PathBuf {
 
 pub fn load_templates(data_dir: &Path) -> Result<Vec<PromptTemplate>> {
     let p = templates_path(data_dir);
+    let span = Span::start(
+        data_dir,
+        None,
+        "Templates",
+        "TPL.load",
+        Some(serde_json::json!({"has_file": p.exists()})),
+    );
     if !p.exists() {
-        return Ok(default_templates());
+        let out = default_templates();
+        span.ok(Some(serde_json::json!({"source": "builtin", "count": out.len()})));
+        return Ok(out);
     }
-    let s = fs::read_to_string(&p).context("read templates.json failed")?;
-    let t: Vec<PromptTemplate> = serde_json::from_str(&s).context("parse templates.json failed")?;
-    Ok(t)
+    let r: Result<Vec<PromptTemplate>> = (|| {
+        let s = fs::read_to_string(&p).context("read templates.json failed")?;
+        let t: Vec<PromptTemplate> =
+            serde_json::from_str(&s).context("parse templates.json failed")?;
+        Ok(t)
+    })();
+    match r {
+        Ok(t) => {
+            span.ok(Some(serde_json::json!({"source": "file", "count": t.len()})));
+            Ok(t)
+        }
+        Err(e) => {
+            span.err_anyhow("io", "E_TPL_LOAD", &e, None);
+            Err(e)
+        }
+    }
 }
 
 pub fn save_templates(data_dir: &Path, templates: &[PromptTemplate]) -> Result<()> {
-    fs::create_dir_all(data_dir).ok();
     let p = templates_path(data_dir);
-    let s = serde_json::to_string_pretty(templates).context("serialize templates failed")?;
-    fs::write(&p, s).context("write templates.json failed")?;
-    Ok(())
+    let span = Span::start(
+        data_dir,
+        None,
+        "Templates",
+        "TPL.save",
+        Some(serde_json::json!({"count": templates.len()})),
+    );
+    let r: Result<()> = (|| {
+        fs::create_dir_all(data_dir).ok();
+        let s = serde_json::to_string_pretty(templates).context("serialize templates failed")?;
+        fs::write(&p, s).context("write templates.json failed")?;
+        Ok(())
+    })();
+    match r {
+        Ok(()) => {
+            span.ok(None);
+            Ok(())
+        }
+        Err(e) => {
+            span.err_anyhow("io", "E_TPL_SAVE", &e, None);
+            Err(e)
+        }
+    }
 }
 
 pub fn upsert_template(data_dir: &Path, mut tpl: PromptTemplate) -> Result<PromptTemplate> {
+    let span = Span::start(
+        data_dir,
+        None,
+        "Templates",
+        "TPL.upsert",
+        Some(serde_json::json!({
+            "has_id": !tpl.id.trim().is_empty(),
+            "name_chars": tpl.name.len(),
+            "system_prompt_chars": tpl.system_prompt.len(),
+        })),
+    );
     if tpl.name.trim().is_empty() {
+        span.err("logic", "E_TPL_NAME_REQUIRED", "template name is required", None);
         return Err(anyhow!("template name is required"));
     }
     if tpl.system_prompt.trim().is_empty() {
+        span.err(
+            "logic",
+            "E_TPL_PROMPT_REQUIRED",
+            "system_prompt is required",
+            None,
+        );
         return Err(anyhow!("system_prompt is required"));
     }
     if tpl.id.trim().is_empty() {
         tpl.id = Uuid::new_v4().to_string();
     }
-    let mut all = load_templates(data_dir)?;
+    let mut all = match load_templates(data_dir) {
+        Ok(v) => v,
+        Err(e) => {
+            span.err_anyhow("io", "E_TPL_LOAD", &e, None);
+            return Err(e);
+        }
+    };
     if let Some(i) = all.iter().position(|x| x.id == tpl.id) {
         all[i] = tpl.clone();
     } else {
         all.push(tpl.clone());
     }
-    save_templates(data_dir, &all)?;
+    if let Err(e) = save_templates(data_dir, &all) {
+        span.err_anyhow("io", "E_TPL_SAVE", &e, None);
+        return Err(e);
+    }
+    span.ok(Some(serde_json::json!({"id": tpl.id})));
     Ok(tpl)
 }
 
 pub fn delete_template(data_dir: &Path, id: &str) -> Result<()> {
-    let mut all = load_templates(data_dir)?;
+    let span = Span::start(
+        data_dir,
+        None,
+        "Templates",
+        "TPL.delete",
+        Some(serde_json::json!({"id": id})),
+    );
+    let mut all = match load_templates(data_dir) {
+        Ok(v) => v,
+        Err(e) => {
+            span.err_anyhow("io", "E_TPL_LOAD", &e, None);
+            return Err(e);
+        }
+    };
     all.retain(|x| x.id != id);
-    save_templates(data_dir, &all)?;
+    if let Err(e) = save_templates(data_dir, &all) {
+        span.err_anyhow("io", "E_TPL_SAVE", &e, None);
+        return Err(e);
+    }
+    span.ok(None);
     Ok(())
 }
 
 pub fn get_template(data_dir: &Path, id: &str) -> Result<PromptTemplate> {
-    let all = load_templates(data_dir)?;
-    all.into_iter()
+    let span = Span::start(
+        data_dir,
+        None,
+        "Templates",
+        "TPL.get",
+        Some(serde_json::json!({"id": id})),
+    );
+    let all = match load_templates(data_dir) {
+        Ok(v) => v,
+        Err(e) => {
+            span.err_anyhow("io", "E_TPL_LOAD", &e, None);
+            return Err(e);
+        }
+    };
+    let out = all
+        .into_iter()
         .find(|x| x.id == id)
-        .ok_or_else(|| anyhow!("template not found: {id}"))
+        .ok_or_else(|| anyhow!("template not found: {id}"));
+    match out {
+        Ok(t) => {
+            span.ok(Some(serde_json::json!({"name_chars": t.name.len(), "system_prompt_chars": t.system_prompt.len()})));
+            Ok(t)
+        }
+        Err(e) => {
+            span.err_anyhow("logic", "E_TPL_NOT_FOUND", &e, None);
+            Err(e)
+        }
+    }
 }
 
 pub fn export_templates_json(data_dir: &Path) -> Result<String> {
-    let all = load_templates(data_dir)?;
-    serde_json::to_string_pretty(&all).context("serialize templates export failed")
+    let span = Span::start(data_dir, None, "Templates", "TPL.export", None);
+    let r: Result<String> = (|| {
+        let all = load_templates(data_dir)?;
+        serde_json::to_string_pretty(&all).context("serialize templates export failed")
+    })();
+    match r {
+        Ok(s) => {
+            span.ok(Some(serde_json::json!({"bytes": s.len()})));
+            Ok(s)
+        }
+        Err(e) => {
+            span.err_anyhow("io", "E_TPL_EXPORT", &e, None);
+            Err(e)
+        }
+    }
 }
 
 pub fn import_templates_json(data_dir: &Path, json_str: &str, mode: &str) -> Result<usize> {
+    let span = Span::start(
+        data_dir,
+        None,
+        "Templates",
+        "TPL.import",
+        Some(serde_json::json!({"mode": mode, "json_chars": json_str.len()})),
+    );
     let incoming: Vec<PromptTemplate> =
-        serde_json::from_str(json_str).context("parse templates json failed")?;
+        match serde_json::from_str(json_str).context("parse templates json failed") {
+            Ok(v) => v,
+            Err(e) => {
+                span.err_anyhow("parse", "E_TPL_IMPORT_PARSE", &e, None);
+                return Err(e);
+            }
+        };
     let mut normalized = Vec::with_capacity(incoming.len());
     for mut t in incoming {
         if t.name.trim().is_empty() {
+            span.err("logic", "E_TPL_NAME_REQUIRED", "template name is required", None);
             return Err(anyhow!("template name is required"));
         }
         if t.system_prompt.trim().is_empty() {
+            span.err(
+                "logic",
+                "E_TPL_PROMPT_REQUIRED",
+                "system_prompt is required",
+                None,
+            );
             return Err(anyhow!("system_prompt is required"));
         }
         if t.id.trim().is_empty() {
@@ -165,11 +310,25 @@ pub fn import_templates_json(data_dir: &Path, json_str: &str, mode: &str) -> Res
 
     match mode {
         "replace" => {
-            save_templates(data_dir, &normalized)?;
-            Ok(normalized.len())
+            match save_templates(data_dir, &normalized) {
+                Ok(()) => {
+                    span.ok(Some(serde_json::json!({"mode": "replace", "count": normalized.len()})));
+                    Ok(normalized.len())
+                }
+                Err(e) => {
+                    span.err_anyhow("io", "E_TPL_SAVE", &e, None);
+                    Err(e)
+                }
+            }
         }
         "merge" => {
-            let existing = load_templates(data_dir)?;
+            let existing = match load_templates(data_dir) {
+                Ok(v) => v,
+                Err(e) => {
+                    span.err_anyhow("io", "E_TPL_LOAD", &e, None);
+                    return Err(e);
+                }
+            };
             let mut merged: HashMap<String, PromptTemplate> =
                 existing.into_iter().map(|t| (t.id.clone(), t)).collect();
             for t in normalized.into_iter() {
@@ -177,11 +336,21 @@ pub fn import_templates_json(data_dir: &Path, json_str: &str, mode: &str) -> Res
             }
             let mut out: Vec<PromptTemplate> = merged.into_values().collect();
             out.sort_by(|a, b| a.id.cmp(&b.id));
-            save_templates(data_dir, &out)?;
-            Ok(out.len())
+            match save_templates(data_dir, &out) {
+                Ok(()) => {
+                    span.ok(Some(serde_json::json!({"mode": "merge", "count": out.len()})));
+                    Ok(out.len())
+                }
+                Err(e) => {
+                    span.err_anyhow("io", "E_TPL_SAVE", &e, None);
+                    Err(e)
+                }
+            }
         }
-        _ => Err(anyhow!(
-            "invalid import mode (expected 'merge' or 'replace')"
-        )),
+        _ => {
+            let e = anyhow!("invalid import mode (expected 'merge' or 'replace')");
+            span.err_anyhow("logic", "E_TPL_IMPORT_MODE", &e, Some(serde_json::json!({"mode": mode})));
+            Err(e)
+        }
     }
 }
