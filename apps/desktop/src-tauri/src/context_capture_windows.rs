@@ -11,7 +11,7 @@ use std::time::Duration;
 use windows_sys::Win32::Foundation::{CloseHandle, HWND, RECT};
 use windows_sys::Win32::Graphics::Gdi::{
     CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits,
-    ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+    ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, RGBQUAD,
 };
 use windows_sys::Win32::Storage::Xps::PrintWindow;
 use windows_sys::Win32::System::Ole::CF_UNICODETEXT;
@@ -128,7 +128,7 @@ impl ForegroundTracker {
             .name("foreground_tracker".to_string())
             .spawn(move || loop {
                 let hwnd = unsafe { GetForegroundWindow() };
-                if hwnd != 0 {
+                if !hwnd.is_null() {
                     let mut pid: u32 = 0;
                     unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
                     if pid != 0 && pid != this_pid {
@@ -166,7 +166,7 @@ fn get_window_title_best_effort(hwnd: HWND) -> Option<String> {
 fn get_process_image_best_effort(pid: u32) -> Option<String> {
     unsafe {
         let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if h == 0 {
+        if h.is_null() {
             return None;
         }
         let mut buf = vec![0u16; 260];
@@ -200,27 +200,27 @@ fn capture_window_png_best_effort(hwnd: HWND, max_side: u32) -> Option<Screensho
 
     // Create a memory DC + bitmap and use PrintWindow.
     unsafe {
-        let screen_dc = GetDC(0);
-        if screen_dc == 0 {
+        let screen_dc = GetDC(std::ptr::null_mut());
+        if screen_dc.is_null() {
             return None;
         }
 
         let mem_dc = CreateCompatibleDC(screen_dc);
-        if mem_dc == 0 {
-            ReleaseDC(0, screen_dc);
+        if mem_dc.is_null() {
+            ReleaseDC(std::ptr::null_mut(), screen_dc);
             return None;
         }
 
         let bmp = CreateCompatibleBitmap(screen_dc, w as i32, h as i32);
-        if bmp == 0 {
+        if bmp.is_null() {
             DeleteDC(mem_dc);
-            ReleaseDC(0, screen_dc);
+            ReleaseDC(std::ptr::null_mut(), screen_dc);
             return None;
         }
 
         let old = SelectObject(mem_dc, bmp as _);
         let pw_ok = PrintWindow(hwnd, mem_dc, 0);
-        ReleaseDC(0, screen_dc);
+        ReleaseDC(std::ptr::null_mut(), screen_dc);
 
         if pw_ok == 0 {
             let _ = SelectObject(mem_dc, old);
@@ -249,7 +249,12 @@ fn capture_window_png_best_effort(hwnd: HWND, max_side: u32) -> Option<Screensho
                 biClrUsed: 0,
                 biClrImportant: 0,
             },
-            bmiColors: [0; 1],
+            bmiColors: [RGBQUAD {
+                rgbBlue: 0,
+                rgbGreen: 0,
+                rgbRed: 0,
+                rgbReserved: 0,
+            }; 1],
         };
 
         let got = GetDIBits(
@@ -341,11 +346,11 @@ fn read_clipboard_text_best_effort() -> Option<String> {
         if IsClipboardFormatAvailable(CF_UNICODETEXT as u32) == 0 {
             return None;
         }
-        if OpenClipboard(0) == 0 {
+        if OpenClipboard(std::ptr::null_mut()) == 0 {
             return None;
         }
         let handle = GetClipboardData(CF_UNICODETEXT as u32);
-        if handle == 0 {
+        if handle.is_null() {
             let _ = CloseClipboard();
             return None;
         }
