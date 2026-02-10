@@ -37,6 +37,14 @@ def main() -> int:
     started_ms = now_ms()
     model_id = resolve_asr_model_id_or_exit()
 
+    # Compile gate (fast fail): make sure the Rust backend builds.
+    tauri_dir = os.path.join(REPO_ROOT, "apps", "desktop", "src-tauri")
+    try:
+        subprocess.check_call(["cargo", "check", "--locked"], cwd=tauri_dir)
+    except Exception:
+        print("FAIL: cargo check failed (backend compile gate)")
+        return 1
+
     # Unit tests (fast subset)
     try:
         subprocess.check_call(
