@@ -56,7 +56,10 @@ pub fn include_asr_segments() -> bool {
 }
 
 pub fn max_payload_bytes() -> usize {
-    env_usize("TYPEVOICE_DEBUG_MAX_PAYLOAD_BYTES", DEFAULT_MAX_PAYLOAD_BYTES)
+    env_usize(
+        "TYPEVOICE_DEBUG_MAX_PAYLOAD_BYTES",
+        DEFAULT_MAX_PAYLOAD_BYTES,
+    )
 }
 
 pub fn max_tasks() -> usize {
@@ -112,10 +115,7 @@ pub fn write_payload_best_effort(
 
     let dir = debug_task_dir(data_dir, task_id);
     if let Err(e) = fs::create_dir_all(&dir) {
-        crate::safe_eprintln!(
-            "debug_log: create_dir_all failed: {}: {e}",
-            dir.display()
-        );
+        crate::safe_eprintln!("debug_log: create_dir_all failed: {}: {e}", dir.display());
         return None;
     }
     let path = dir.join(filename);

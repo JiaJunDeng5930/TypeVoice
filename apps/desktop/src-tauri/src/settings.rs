@@ -18,6 +18,14 @@ pub struct Settings {
     // UX settings
     pub rewrite_enabled: Option<bool>,
     pub rewrite_template_id: Option<String>,
+
+    // Context settings (for LLM rewrite)
+    pub context_include_history: Option<bool>,
+    pub context_history_n: Option<i64>,
+    pub context_history_window_ms: Option<i64>,
+    pub context_include_clipboard: Option<bool>,
+    pub context_include_prev_window_screenshot: Option<bool>,
+    pub llm_supports_vision: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -32,6 +40,13 @@ pub struct SettingsPatch {
 
     pub rewrite_enabled: Option<Option<bool>>,
     pub rewrite_template_id: Option<Option<String>>,
+
+    pub context_include_history: Option<Option<bool>>,
+    pub context_history_n: Option<Option<i64>>,
+    pub context_history_window_ms: Option<Option<i64>>,
+    pub context_include_clipboard: Option<Option<bool>>,
+    pub context_include_prev_window_screenshot: Option<Option<bool>>,
+    pub llm_supports_vision: Option<Option<bool>>,
 }
 
 pub fn apply_patch(mut s: Settings, p: SettingsPatch) -> Settings {
@@ -52,6 +67,24 @@ pub fn apply_patch(mut s: Settings, p: SettingsPatch) -> Settings {
     }
     if let Some(v) = p.rewrite_template_id {
         s.rewrite_template_id = v;
+    }
+    if let Some(v) = p.context_include_history {
+        s.context_include_history = v;
+    }
+    if let Some(v) = p.context_history_n {
+        s.context_history_n = v;
+    }
+    if let Some(v) = p.context_history_window_ms {
+        s.context_history_window_ms = v;
+    }
+    if let Some(v) = p.context_include_clipboard {
+        s.context_include_clipboard = v;
+    }
+    if let Some(v) = p.context_include_prev_window_screenshot {
+        s.context_include_prev_window_screenshot = v;
+    }
+    if let Some(v) = p.llm_supports_vision {
+        s.llm_supports_vision = v;
     }
     s
 }
@@ -129,6 +162,12 @@ mod tests {
             llm_reasoning_effort: Some("low".to_string()),
             rewrite_enabled: Some(false),
             rewrite_template_id: Some("t1".to_string()),
+            context_include_history: None,
+            context_history_n: None,
+            context_history_window_ms: None,
+            context_include_clipboard: None,
+            context_include_prev_window_screenshot: None,
+            llm_supports_vision: None,
         };
 
         let p = SettingsPatch {
@@ -136,6 +175,7 @@ mod tests {
             llm_reasoning_effort: Some(None),
             rewrite_enabled: Some(Some(true)),
             rewrite_template_id: Some(None),
+            context_history_n: Some(Some(5)),
             ..Default::default()
         };
 
@@ -146,6 +186,7 @@ mod tests {
         assert_eq!(next.llm_reasoning_effort, None);
         assert_eq!(next.rewrite_enabled, Some(true));
         assert_eq!(next.rewrite_template_id, None);
+        assert_eq!(next.context_history_n, Some(5));
     }
 
     #[test]
@@ -163,6 +204,8 @@ mod tests {
             .expect("read_dir")
             .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
             .collect();
-        assert!(entries.iter().any(|n| n.starts_with("settings.json.corrupt.")));
+        assert!(entries
+            .iter()
+            .any(|n| n.starts_with("settings.json.corrupt.")));
     }
 }

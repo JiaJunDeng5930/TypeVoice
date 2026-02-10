@@ -27,6 +27,15 @@ VERIFIED（2026-02-09）
   - 在 Windows repo `git pull` 后执行 `git status`，不应出现大面积“仅行尾变化”的改动；
   - 在 WSL repo `git status` 保持干净。
 
+## Rewrite 上下文（ContextPack）：自动附带历史/剪贴板/上一外部窗口截图
+
+VERIFIED（2026-02-10）
+
+- 背景：仅发送 `asr_text` 给 LLM 容易缺少语境；且目标产品形态为“快捷键按下即录、松开即发送”，不希望引入需要用户确认的 UI 预览/勾选。
+- 决策：Rewrite 阶段默认自动拼装上下文（最近 N 条历史 + 剪贴板文本 + “TypeVoice 之前的外部前台窗口”截图），无需 UI 操作。
+- 截图实现：Windows 上使用 Win32 `GetForegroundWindow` 追踪“上一外部前台窗口”，并使用 `PrintWindow` 抓取窗口像素后编码为 PNG（见 `apps/desktop/src-tauri/src/context_capture_windows.rs`）。
+- 调试取舍：开启 debug verbose 时落盘 `llm_request.json` 仍保留结构化请求，但对截图 base64 做脱敏，仅保留 sha/尺寸/字节数，避免敏感像素落盘与文件爆炸（见 `apps/desktop/src-tauri/src/llm.rs`）。
+
 ## 减少 dev profile 调试信息以缩短链接时间
 
 VERIFIED（2026-02-09）

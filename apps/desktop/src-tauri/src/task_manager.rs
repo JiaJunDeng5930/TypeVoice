@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{asr_service, data_dir, history, llm, metrics, pipeline, templates};
+use crate::{context_capture, context_pack};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskEvent {
@@ -48,6 +49,7 @@ pub struct StartOpts {
 pub struct TaskManager {
     inner: Arc<Mutex<Option<ActiveTask>>>,
     asr: asr_service::AsrService,
+    ctx: context_capture::ContextService,
 }
 
 struct ActiveTask {
@@ -62,6 +64,7 @@ impl TaskManager {
         Self {
             inner: Arc::new(Mutex::new(None)),
             asr: asr_service::AsrService::new(),
+            ctx: context_capture::ContextService::new(),
         }
     }
 
@@ -86,11 +89,15 @@ impl TaskManager {
         let _ = std::thread::Builder::new()
             .name("asr_warmup".to_string())
             .spawn(move || {
-            // ASR warmup is synchronous; do not create nested Tokio runtimes here.
-            if let Ok(dir) = data_dir::data_dir() {
-                let _ = this.asr.ensure_started(&dir);
-            }
-        });
+                // ASR warmup is synchronous; do not create nested Tokio runtimes here.
+                if let Ok(dir) = data_dir::data_dir() {
+                    let _ = this.asr.ensure_started(&dir);
+                }
+            });
+    }
+
+    pub fn warmup_context_best_effort(&self) {
+        self.ctx.warmup_best_effort();
     }
 
     pub fn restart_asr_best_effort(&self, reason: &str) {
@@ -103,10 +110,10 @@ impl TaskManager {
         let _ = std::thread::Builder::new()
             .name("asr_restart".to_string())
             .spawn(move || {
-            if let Ok(dir) = data_dir::data_dir() {
-                let _ = this.asr.restart(&dir, &reason);
-            }
-        });
+                if let Ok(dir) = data_dir::data_dir() {
+                    let _ = this.asr.restart(&dir, &reason);
+                }
+            });
     }
 
     pub fn start_fixture(
@@ -253,6 +260,14 @@ impl TaskManager {
         record_msg: &str,
     ) -> Result<()> {
         let data_dir = data_dir::data_dir()?;
+        let (ctx_cfg, ctx_snap) = if opts.rewrite_enabled {
+            self.ctx.capture_snapshot_best_effort(&data_dir)
+        } else {
+            (
+                context_capture::ContextConfig::default(),
+                context_pack::ContextSnapshot::default(),
+            )
+        };
 
         emit_event(
             &app,
@@ -308,15 +323,7 @@ impl TaskManager {
                     } else {
                         "E_PREPROCESS_FAILED"
                     };
-                    emit_failed(
-                        &app,
-                        &data_dir,
-                        &task_id,
-                        "Preprocess",
-                        None,
-                        code,
-                        &msg,
-                    );
+                    emit_failed(&app, &data_dir, &task_id, "Preprocess", None, code, &msg);
                     let _ = pipeline::cleanup_audio_artifacts(&input, &wav_path);
                     return Ok(());
                 }
@@ -364,12 +371,7 @@ impl TaskManager {
                 let active = inner.lock().unwrap();
                 let a = active.as_ref().ok_or_else(|| anyhow!("task missing"))?;
                 let (resp, wall_ms) = asr.transcribe(
-                    &data_dir2,
-                    &task_id2,
-                    &wav_path2,
-                    "Chinese",
-                    &a.token,
-                    &a.asr_pid,
+                    &data_dir2, &task_id2, &wav_path2, "Chinese", &a.token, &a.asr_pid,
                 )?;
                 if !resp.ok {
                     let code = resp
@@ -391,7 +393,10 @@ impl TaskManager {
                 if text.trim().is_empty() {
                     return Err(anyhow!("empty_text"));
                 }
-                let m = resp.metrics.clone().ok_or_else(|| anyhow!("missing_metrics"))?;
+                let m = resp
+                    .metrics
+                    .clone()
+                    .ok_or_else(|| anyhow!("missing_metrics"))?;
                 if m.device_used != "cuda" {
                     return Err(anyhow!("device_not_cuda:{}", m.device_used));
                 }
@@ -486,14 +491,18 @@ impl TaskManager {
                     }
                 };
                 if let Some(tpl) = tpl {
+                    let mut prepared = context_pack::prepare(&asr_text, &ctx_snap, &ctx_cfg.budget);
+                    if !ctx_cfg.llm_supports_vision {
+                        prepared.screenshot = None;
+                    }
                     let token = {
                         let g = self.inner.lock().unwrap();
                         g.as_ref().unwrap().token.clone()
                     };
                     let rewrite_res = tokio::select! {
-                        _ = token.cancelled() => Err(anyhow!("cancelled")),
-                    r = llm::rewrite(&data_dir, &task_id, &tpl.system_prompt, &asr_text) => r,
-                };
+                            _ = token.cancelled() => Err(anyhow!("cancelled")),
+                        r = llm::rewrite_with_context(&data_dir, &task_id, &tpl.system_prompt, &asr_text, Some(&prepared)) => r,
+                    };
                     match rewrite_res {
                         Ok(txt) => {
                             final_text = txt;

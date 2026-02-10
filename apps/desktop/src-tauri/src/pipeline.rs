@@ -197,13 +197,11 @@ pub fn transcribe_with_python_runner(
         .ok_or_else(|| anyhow!("runner stdout missing"))?;
     let mut reader = BufReader::new(stdout);
     let mut line = String::new();
-    reader
-        .read_line(&mut line)
-        .map_err(|e| {
-            let _ = child.kill();
-            let _ = child.wait();
-            anyhow!("failed to read runner output: {e}")
-        })?;
+    reader.read_line(&mut line).map_err(|e| {
+        let _ = child.kill();
+        let _ = child.wait();
+        anyhow!("failed to read runner output: {e}")
+    })?;
 
     // Try to exit quickly.
     let _ = child.kill();
@@ -360,14 +358,12 @@ pub fn transcribe_with_python_runner_cancellable(
         break;
     }
 
-    reader
-        .read_line(&mut line)
-        .map_err(|e| {
-            let _ = child.kill();
-            let _ = child.wait();
-            *pid_slot.lock().unwrap() = None;
-            anyhow!("failed to read runner output: {e}")
-        })?;
+    reader.read_line(&mut line).map_err(|e| {
+        let _ = child.kill();
+        let _ = child.wait();
+        *pid_slot.lock().unwrap() = None;
+        anyhow!("failed to read runner output: {e}")
+    })?;
 
     // Ensure process stops.
     let _ = child.kill();

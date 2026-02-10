@@ -33,6 +33,13 @@ export type Settings = {
   llm_reasoning_effort?: string | null;
   rewrite_enabled?: boolean | null;
   rewrite_template_id?: string | null;
+
+  context_include_history?: boolean | null;
+  context_history_n?: number | null;
+  context_history_window_ms?: number | null;
+  context_include_clipboard?: boolean | null;
+  context_include_prev_window_screenshot?: boolean | null;
+  llm_supports_vision?: boolean | null;
 };
 
 export type ModelStatus = {

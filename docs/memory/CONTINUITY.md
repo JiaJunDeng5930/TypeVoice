@@ -53,6 +53,10 @@ VERIFIED（已合并到 main，且可在本机复核）
 - 增量（对 `src-tauri/src/main.rs` 加一行触发重建）：无 sccache 约 2.26s；sccache 约 1.85s
 - 默认内置提示词模板已更新：
   - `apps/desktop/src-tauri/src/templates.rs` 中模板 `id="clarify"`（表达澄清）的 `system_prompt` 替换为“面向转录文本的严格重写”版本，以减少跑题/细化/省略与解释性输出（commit：`a6aa04a`）。
+- Rewrite 上下文（ContextPack）已接入到后端流水线（best-effort）：
+  - Rewrite 请求会自动附带：最近 N 条历史文本 + 剪贴板文本 + “TypeVoice 之前的外部前台窗口”截图（Windows-only），无需 UI 勾选或预览（见 `apps/desktop/src-tauri/src/context_capture.rs`、`apps/desktop/src-tauri/src/context_pack.rs`、`apps/desktop/src-tauri/src/task_manager.rs`）。
+  - LLM 请求支持多模态 `messages[].content`（text + image_url）；且 debug verbose 落盘的 `llm_request.json` 会对截图 base64 做脱敏（不落真实像素，仅保留 sha/尺寸/字节数；见 `apps/desktop/src-tauri/src/llm.rs`）。
+  - UNCONFIRMED：Windows 上对“指定窗口截图（PrintWindow + PNG 编码）”的兼容性需在目标机器上验证（不同应用窗口可能失败或空白）。
 
 ### Now
 

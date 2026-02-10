@@ -11,4 +11,3 @@ macro_rules! safe_eprintln {
         let _ = writeln!(std::io::stderr(), $($arg)*);
     }};
 }
-

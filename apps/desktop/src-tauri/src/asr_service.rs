@@ -101,7 +101,10 @@ impl AsrService {
 
         {
             let g = self.inner.lock().unwrap();
-            if g.child.is_some() && g.model_id.as_deref() == Some(desired_model.as_str()) && (g.chunk_sec - desired_chunk).abs() < 1e-6 {
+            if g.child.is_some()
+                && g.model_id.as_deref() == Some(desired_model.as_str())
+                && (g.chunk_sec - desired_chunk).abs() < 1e-6
+            {
                 return Ok(());
             }
         }
@@ -150,8 +153,14 @@ impl AsrService {
             }
         });
 
-        let stdin = child.stdin.take().ok_or_else(|| anyhow!("runner stdin missing"))?;
-        let stdout = child.stdout.take().ok_or_else(|| anyhow!("runner stdout missing"))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow!("runner stdin missing"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow!("runner stdout missing"))?;
         let mut reader = BufReader::new(stdout);
 
         // Read one ready line.
@@ -169,8 +178,8 @@ impl AsrService {
             let v: serde_json::Value = serde_json::from_str(line.trim())
                 .context("invalid json from asr runner during ready")?;
             if v.get("type").and_then(|x| x.as_str()) == Some("asr_ready") {
-                let ready: AsrReady = serde_json::from_value(v)
-                    .context("parse asr_ready failed")?;
+                let ready: AsrReady =
+                    serde_json::from_value(v).context("parse asr_ready failed")?;
                 if !ready.ok {
                     let _ = child.kill();
                     let _ = child.wait();
@@ -215,11 +224,17 @@ impl AsrService {
 
         let t0 = Instant::now();
         let mut g = self.inner.lock().unwrap();
-        let child = g.child.as_mut().ok_or_else(|| anyhow!("asr runner not started"))?;
+        let child = g
+            .child
+            .as_mut()
+            .ok_or_else(|| anyhow!("asr runner not started"))?;
         let pid = child.id();
         *pid_slot.lock().unwrap() = Some(pid);
 
-        let stdin = g.stdin.as_mut().ok_or_else(|| anyhow!("runner stdin missing"))?;
+        let stdin = g
+            .stdin
+            .as_mut()
+            .ok_or_else(|| anyhow!("runner stdin missing"))?;
         let req = serde_json::json!({
             "audio_path": audio_path,
             "language": language,
@@ -230,7 +245,10 @@ impl AsrService {
             .context("failed to write runner request")?;
         stdin.flush().ok();
 
-        let stdout = g.stdout.as_mut().ok_or_else(|| anyhow!("runner stdout missing"))?;
+        let stdout = g
+            .stdout
+            .as_mut()
+            .ok_or_else(|| anyhow!("runner stdout missing"))?;
         let mut line = String::new();
         let read_res = stdout.read_line(&mut line);
         let wall_ms = t0.elapsed().as_millis();

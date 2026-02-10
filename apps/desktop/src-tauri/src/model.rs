@@ -49,7 +49,8 @@ fn read_model_version(model_dir: &Path) -> Option<String> {
 }
 
 fn sha256_file_hex(path: &Path) -> Result<String> {
-    let mut f = fs::File::open(path).with_context(|| format!("open file failed: {}", path.display()))?;
+    let mut f =
+        fs::File::open(path).with_context(|| format!("open file failed: {}", path.display()))?;
     let mut h = Sha256::new();
     let mut buf = [0u8; 1024 * 1024];
     loop {

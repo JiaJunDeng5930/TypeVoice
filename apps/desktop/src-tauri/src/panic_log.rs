@@ -36,4 +36,3 @@ pub fn install_best_effort() {
         }
     }));
 }
-

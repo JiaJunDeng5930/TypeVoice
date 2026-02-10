@@ -1,15 +1,19 @@
 mod asr_service;
+mod context_capture;
+#[cfg(windows)]
+mod context_capture_windows;
+mod context_pack;
 mod data_dir;
 mod debug_log;
 mod history;
 mod llm;
 mod metrics;
 mod model;
+mod panic_log;
 mod pipeline;
 mod safe_print;
-mod panic_log;
-mod startup_trace;
 mod settings;
+mod startup_trace;
 mod task_manager;
 mod templates;
 
@@ -20,8 +24,8 @@ use pipeline::TranscribeResult;
 use settings::Settings;
 use settings::SettingsPatch;
 use task_manager::TaskManager;
-use templates::PromptTemplate;
 use tauri::Manager;
+use templates::PromptTemplate;
 
 #[tauri::command]
 fn transcribe_fixture(fixture_name: &str) -> Result<TranscribeResult, String> {
@@ -175,7 +179,10 @@ fn set_settings(s: Settings) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn update_settings(state: tauri::State<TaskManager>, patch: SettingsPatch) -> Result<Settings, String> {
+fn update_settings(
+    state: tauri::State<TaskManager>,
+    patch: SettingsPatch,
+) -> Result<Settings, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let cur = settings::load_settings_or_recover(&dir);
     let asr_model_changed = patch.asr_model.is_some();
@@ -246,6 +253,7 @@ pub fn run() {
             // Warm up the ASR runner in background so first transcription is fast.
             let state = app.state::<TaskManager>();
             state.warmup_asr_best_effort();
+            state.warmup_context_best_effort();
             startup_trace::mark_best_effort("setup_exit");
             Ok(())
         })

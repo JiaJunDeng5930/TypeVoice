@@ -1,7 +1,9 @@
 use anyhow::{anyhow, Context, Result};
+use base64::Engine;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
+use crate::context_pack::PreparedContext;
 use crate::debug_log;
 use crate::settings;
 
@@ -19,20 +21,39 @@ pub struct LlmConfig {
     pub reasoning_effort: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-struct ChatReq<'a> {
-    model: &'a str,
-    messages: Vec<Message<'a>>,
+#[derive(Debug, Clone, Serialize)]
+struct ChatReq {
+    model: String,
+    messages: Vec<Message>,
     temperature: f32,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    reasoning_effort: Option<&'a str>,
+    reasoning_effort: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-struct Message<'a> {
-    role: &'a str,
-    content: &'a str,
+#[derive(Debug, Clone, Serialize)]
+struct Message {
+    role: String,
+    content: MessageContent,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+enum MessageContent {
+    Text(String),
+    Parts(Vec<ContentPart>),
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ContentPart {
+    Text { text: String },
+    ImageUrl { image_url: ImageUrl },
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ImageUrl {
+    url: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -189,29 +210,56 @@ pub async fn rewrite(
     system_prompt: &str,
     asr_text: &str,
 ) -> Result<String> {
+    rewrite_with_context(data_dir, task_id, system_prompt, asr_text, None).await
+}
+
+pub async fn rewrite_with_context(
+    data_dir: &std::path::Path,
+    task_id: &str,
+    system_prompt: &str,
+    asr_text: &str,
+    ctx: Option<&PreparedContext>,
+) -> Result<String> {
     let cfg = load_config(data_dir);
     let key = load_api_key()?;
     let client = Client::new();
     let url = format!("{}/chat/completions", cfg.base_url);
 
-    let req = ChatReq {
-        model: &cfg.model,
+    let (user_content_send, user_content_debug) = build_user_content(asr_text, ctx);
+    let req_send = ChatReq {
+        model: cfg.model.clone(),
         messages: vec![
             Message {
-                role: "system",
-                content: system_prompt,
+                role: "system".to_string(),
+                content: MessageContent::Text(system_prompt.to_string()),
             },
             Message {
-                role: "user",
-                content: asr_text,
+                role: "user".to_string(),
+                content: user_content_send,
             },
         ],
         temperature: 0.2,
-        reasoning_effort: cfg.reasoning_effort.as_deref(),
+        reasoning_effort: cfg.reasoning_effort.clone(),
+    };
+
+    let req_debug = ChatReq {
+        model: cfg.model.clone(),
+        messages: vec![
+            Message {
+                role: "system".to_string(),
+                content: MessageContent::Text(system_prompt.to_string()),
+            },
+            Message {
+                role: "user".to_string(),
+                content: user_content_debug,
+            },
+        ],
+        temperature: 0.2,
+        reasoning_effort: cfg.reasoning_effort.clone(),
     };
 
     if debug_log::verbose_enabled() && debug_log::include_llm() {
-        if let Ok(req_value) = serde_json::to_value(&req) {
+        if let Ok(req_value) = serde_json::to_value(&req_debug) {
             let url2 = url.clone();
             let wrapper = serde_json::json!({
                 "url": url2,
@@ -235,7 +283,7 @@ pub async fn rewrite(
     let resp = client
         .post(url)
         .bearer_auth(key)
-        .json(&req)
+        .json(&req_send)
         .send()
         .await
         .context("llm http request failed")?;
@@ -282,6 +330,54 @@ pub async fn rewrite(
         return Err(anyhow!("llm returned empty content"));
     }
     Ok(content)
+}
+
+fn build_user_content(
+    asr_text: &str,
+    ctx: Option<&PreparedContext>,
+) -> (MessageContent, MessageContent) {
+    let Some(c) = ctx else {
+        return (
+            MessageContent::Text(asr_text.to_string()),
+            MessageContent::Text(asr_text.to_string()),
+        );
+    };
+
+    // Prefer the prepared text (it already includes transcript + context).
+    let text = c.user_text.clone();
+    let Some(sc) = &c.screenshot else {
+        return (
+            MessageContent::Text(text.clone()),
+            MessageContent::Text(text),
+        );
+    };
+
+    let mut parts_send = vec![ContentPart::Text { text: text.clone() }];
+    let mut parts_debug = vec![ContentPart::Text { text }];
+
+    // Send the real data URL, but redact in debug payload.
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&sc.png_bytes);
+    let url_send = format!("data:image/png;base64,{}", b64);
+
+    let url_debug = format!(
+        "data:image/png;base64,<redacted sha256={} bytes={} w={} h={}>",
+        sc.sha256_hex,
+        sc.png_bytes.len(),
+        sc.width,
+        sc.height
+    );
+
+    parts_send.push(ContentPart::ImageUrl {
+        image_url: ImageUrl { url: url_send },
+    });
+    parts_debug.push(ContentPart::ImageUrl {
+        image_url: ImageUrl { url: url_debug },
+    });
+
+    (
+        MessageContent::Parts(parts_send),
+        MessageContent::Parts(parts_debug),
+    )
 }
 
 #[cfg(test)]

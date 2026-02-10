@@ -20,7 +20,8 @@ pub fn append_jsonl<T: Serialize>(data_dir: &Path, obj: &T) -> Result<()> {
         .open(&p)
         .with_context(|| format!("open metrics jsonl failed: {}", p.display()))?;
     let line = serde_json::to_string(obj).context("serialize metrics json failed")?;
-    f.write_all(line.as_bytes()).context("write metrics line failed")?;
+    f.write_all(line.as_bytes())
+        .context("write metrics line failed")?;
     f.write_all(b"\n").context("write metrics newline failed")?;
     Ok(())
 }

@@ -22,4 +22,3 @@ pub fn mark_best_effort(stage: &str) {
     };
     let _ = writeln!(f, "ts_ms={ts_ms} stage={stage}");
 }
-
