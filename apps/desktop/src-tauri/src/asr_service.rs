@@ -13,6 +13,19 @@ use tokio_util::sync::CancellationToken;
 use crate::{debug_log, pipeline};
 use crate::trace::Span;
 
+fn model_id_hint_for_trace(model_id: &str) -> String {
+    let t = model_id.trim();
+    if t.is_empty() {
+        return "".to_string();
+    }
+    // If it's a filesystem path, keep only the last component to avoid leaking personal paths.
+    if t.contains('\\') || t.contains(':') || t.starts_with('/') {
+        return t.rsplit(['\\', '/']).next().unwrap_or(t).to_string();
+    }
+    // Otherwise assume it's a repo-like id and keep as-is.
+    t.to_string()
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct AsrError {
     pub code: String,
@@ -130,7 +143,7 @@ impl AsrService {
             "ASR.restart",
             Some(serde_json::json!({
                 "reason": reason,
-                "model_id": model_id,
+                "model_id_hint": model_id_hint_for_trace(&model_id),
                 "chunk_sec": chunk_sec,
             })),
         );
@@ -278,7 +291,7 @@ impl AsrService {
                 g.stdout = Some(reader);
                 g.child = Some(child);
                 span.ok(Some(serde_json::json!({
-                    "model_id": g.model_id,
+                    "model_id_hint": g.model_id.as_deref().map(model_id_hint_for_trace),
                     "device_used": "cuda",
                     "warmup_ms": g.warmup_ms,
                 })));

@@ -16,6 +16,14 @@ use crate::trace::Span;
 
 const MAX_TOOL_STDERR_BYTES: usize = 4096;
 
+fn cmd_hint_for_trace(cmd: &str) -> String {
+    let t = cmd.trim();
+    if t.is_empty() {
+        return "".to_string();
+    }
+    t.rsplit(['\\', '/']).next().unwrap_or(t).to_string()
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct TranscribeResult {
     pub task_id: String,
@@ -417,7 +425,7 @@ pub fn preprocess_ffmpeg_cancellable(
         "Preprocess",
         "FFMPEG.preprocess",
         Some(serde_json::json!({
-            "cmd": ffmpeg_cmd(),
+            "cmd_hint": cmd_hint_for_trace(&ffmpeg_cmd()),
         })),
     );
 
