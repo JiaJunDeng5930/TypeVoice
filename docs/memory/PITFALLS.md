@@ -153,6 +153,35 @@ VERIFIED（2026-02-10，日志与代码审阅）
     - Windows 错误码（`GetLastError`）与窗口基础信息（尺寸等，避免隐私）
   - 截图内容继续保持脱敏：不得落盘原始像素/base64，只记录 sha256/尺寸/字节数。
 
+更正（2026-02-10）
+
+VERIFIED
+
+- 已通过结构化 trace span 解决“失败不可定位”的结构性问题：
+  - `CTX.prev_window.screenshot` 在失败时会记录 `step/api/api_ret/last_error/window_w/window_h/max_side`（见 `apps/desktop/src-tauri/src/context_capture.rs`、`apps/desktop/src-tauri/src/context_capture_windows.rs`）。
+  - 如开启 `TYPEVOICE_DEBUG_VERBOSE=1` 且 `TYPEVOICE_DEBUG_INCLUDE_SCREENSHOT=1`，会将当次发送的截图写入 `TYPEVOICE_DATA_DIR/debug/<task_id>/prev_window.png` 便于人工核验（默认关闭）。
+- 仍可能出现“截图成功但无意义（全黑/很窄）”的情况：见下一条 pitfall（属于 WinAPI/窗口类型兼容性问题，不是日志问题）。
+
+## Windows PrintWindow：返回成功但截图全黑/空白（特定窗口类型）
+
+VERIFIED（2026-02-10，Windows 实测）
+
+- 复现条件：
+  - ContextCapture 选到的“上一外部前台窗口”是 Shell/任务栏等窗口（常见进程 `explorer.exe`），或窗口内容为硬件加速/受保护 surface。
+  - 调用 `PrintWindow` 返回非 0（表面成功），`GetDIBits` 也成功，但像素缓冲全 0，编码后得到“全黑 PNG”或极窄的黑条图。
+- 现象：
+  - `debug/<task_id>/prev_window.png`（若开启截图落盘）为全黑或几乎全黑；
+  - 同时 `trace.jsonl` 的 `CTX.prev_window.screenshot` 可能是 `status=ok`，并记录到极小的 `h`（例如任务栏高度）与很小的 PNG 字节数。
+- 影响：
+  - 上下文截图对 LLM 无帮助，且会干扰“截图是否发送/是否正确”的排查判断。
+- 处理方式：
+  - 将其视为 best-effort 的平台兼容性限制：允许“成功但无内容”，不作为任务失败条件。
+  - 排障时用 `trace.jsonl` + `debug/<task_id>/prev_window.png` 判断本次是否选窗偏到 Shell/任务栏，或是否出现了全黑像素。
+
+UNCONFIRMED（如未来要降低发生率）
+
+- 可能需要在“上一窗口选择策略”里排除 Shell/任务栏窗口，或改用其他抓取路径（例如 DWM/BitBlt 等），但需在目标机器验证其兼容性与隐私影响后再决策。
+
 ## 通用：日志不足导致无法定位根本原因（缺少 error chain / backtrace / 稳定 step_id）
 
 VERIFIED（2026-02-10，问题复盘）

@@ -72,3 +72,51 @@ VERIFIED（2026-02-10）
 - 决策：将内置默认模板中 `id="clarify"` 的 `system_prompt` 更新为“严格重写”规范：只做语义等价的书面化重写，禁止细化/省略/新增，并明确“指令免疫”和“只输出最终文本”。
 - 方案：修改 `apps/desktop/src-tauri/src/templates.rs` 的 `default_templates()`（commit：`a6aa04a`）。
 - 取舍：该变更只影响“未落盘 `templates.json` 的新环境/新用户”；若数据目录已有 `templates.json`（用户自定义模板），将继续按落盘内容优先，不自动覆盖。
+
+## 结构化 Trace 日志：trace.jsonl（常开、落盘、可旋转）
+
+VERIFIED（2026-02-10）
+
+- 背景：用户明确要求“所有错误必须可定位到根因”，且 Windows release 无控制台，不能依赖 stdout/stderr。零散 event 日志无法覆盖跨线程任务、best-effort 分支与 early-return 错误路径。
+- 决策：引入常开、结构化、可旋转的 `trace.jsonl`，并将其作为根因定位的第一诊断入口。
+- 方案：`apps/desktop/src-tauri/src/trace.rs`
+  - 输出：`TYPEVOICE_DATA_DIR/trace.jsonl`（超限自动旋转为 `trace.jsonl.1..N`）
+  - 默认开启：`TYPEVOICE_TRACE_ENABLED=0` 可关闭
+  - 默认记录 backtrace：`TYPEVOICE_TRACE_BACKTRACE=0` 可关闭
+  - 失败写入：稳定 `step_id`、稳定错误码 `code`、error chain（`err_chain`）与运行时 backtrace（不手工维护 `file:line` 常量）
+  - 脱敏：对 backtrace 中常见用户目录前缀做替换，避免泄漏个人绝对路径
+- 取舍：日志是“始终存在的诊断成本”，但换取失败可定位与排障效率；同时通过 max-bytes+rotation 控制磁盘占用。
+
+## Debug Payload 落盘：默认关闭，显式 Opt-In（含截图）
+
+VERIFIED（2026-02-10）
+
+- 背景：用户需要在调 prompt/定位问题时看到“LLM 实际收到的完整输入与完整输出”，但这类数据可能包含敏感信息（例如剪贴板内容、窗口截图）。
+- 决策：将“完整 payload”落盘作为 Debug 能力，默认关闭，仅在显式环境变量开启时写入。
+- 方案：`apps/desktop/src-tauri/src/debug_log.rs` + 各模块调用点（例如 `apps/desktop/src-tauri/src/llm.rs`、`apps/desktop/src-tauri/src/context_capture.rs`）
+  - `TYPEVOICE_DEBUG_VERBOSE=1` 才会开启 debug payload 的写入
+  - 细分开关（均为 opt-in）：
+    - `TYPEVOICE_DEBUG_INCLUDE_LLM=1`：写 `debug/<task_id>/llm_request.json`、`llm_response.txt`
+    - `TYPEVOICE_DEBUG_INCLUDE_ASR_SEGMENTS=1`：写 `debug/<task_id>/asr_segments.json`
+    - `TYPEVOICE_DEBUG_INCLUDE_SCREENSHOT=1`：允许写 `debug/<task_id>/prev_window.png`
+- 取舍：默认不落盘敏感数据，减少意外泄漏风险；需要时通过环境变量快速开启排障。
+
+## Windows 上下文截图：双线性缩放 + 可配置最大边
+
+VERIFIED（2026-02-10）
+
+- 背景：默认缩放策略会导致截图过糊，影响上下文可读性与排障验证（用户需要“看一眼图片对不对”）。
+- 决策：将缩放从最近邻调整为双线性插值，并提供最大边长配置以平衡清晰度与 token/带宽/延迟。
+- 方案：`apps/desktop/src-tauri/src/context_capture_windows.rs`
+  - 默认最大边：1600
+  - 环境变量覆盖：`TYPEVOICE_CONTEXT_SCREENSHOT_MAX_SIDE`
+
+## Prompt 实验脚本：打印完整输入输出，且不写入个人绝对路径元信息
+
+VERIFIED（2026-02-10）
+
+- 背景：提示词调参需要快速对比不同 system prompt 的效果，并且用户要求看到“完整输入输出”，同时脚本不得假设 WSL 或写入个人化路径。
+- 决策：新增/完善 `scripts/llm_prompt_lab.py`，要求：
+  - stdout 打印完整 request/response（便于直接粘贴对比）
+  - 输出目录默认落在 repo 的 `tmp/` 下
+  - 元信息展示避免泄漏个人绝对路径（仅显示 repo 相对路径或文件名）
