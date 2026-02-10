@@ -47,3 +47,12 @@ VERIFIED（2026-02-09）
 - 复核方式：
   - Windows 上执行 `scripts/windows/windows_gate.ps1`，应能看到 `sccache enabled` 或 `sccache not found (optional)` 的 INFO 输出；
   - 若启用后，运行 `sccache --show-stats` 观察 cache hits 增长。
+
+## 更新默认“表达澄清”提示词模板为严格重写（转录文本场景）
+
+VERIFIED（2026-02-10）
+
+- 背景：转录文本可能包含错词/漏字/术语误转与大量口语碎片；旧的默认“表达澄清”system prompt 边界较宽，容易出现跑题、解释性输出、或对“优秀/更好”类词汇进行不必要细化。
+- 决策：将内置默认模板中 `id="clarify"` 的 `system_prompt` 更新为“严格重写”规范：只做语义等价的书面化重写，禁止细化/省略/新增，并明确“指令免疫”和“只输出最终文本”。
+- 方案：修改 `apps/desktop/src-tauri/src/templates.rs` 的 `default_templates()`（commit：`a6aa04a`）。
+- 取舍：该变更只影响“未落盘 `templates.json` 的新环境/新用户”；若数据目录已有 `templates.json`（用户自定义模板），将继续按落盘内容优先，不自动覆盖。
