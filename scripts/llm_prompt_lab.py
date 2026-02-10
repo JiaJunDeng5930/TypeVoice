@@ -31,6 +31,13 @@ def _sha256_hex(b: bytes) -> str:
 def _read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
+def _display_path_no_abs(path: Path) -> str:
+    try:
+        rel = path.resolve().relative_to(REPO_ROOT.resolve())
+        return rel.as_posix()
+    except Exception:
+        return path.name
+
 
 def _clamp_chars(s: str, max_chars: int) -> str:
     t = (s or "").strip()
@@ -209,6 +216,7 @@ def main() -> int:
     ap.add_argument("--timeout-s", type=float, default=60.0)
     ap.add_argument("--out-dir", type=str, default="", help="Output dir. Default: tmp/llm_prompt_lab/<ts>_<hash>/")
     ap.add_argument("--dry-run", action="store_true", help="Only write request.json (no network call).")
+    ap.add_argument("--print-out-dir", action="store_true", help="Print the output directory path.")
 
     args = ap.parse_args()
 
@@ -310,13 +318,16 @@ def main() -> int:
         "inputs_sha256": _sha256_hex(material),
     }
     if args.system_prompt_file:
-        meta["system_prompt_file"] = str(Path(args.system_prompt_file))
+        meta["system_prompt_file"] = _display_path_no_abs(Path(args.system_prompt_file))
     (out_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (out_dir / "request.json").write_text(json.dumps(req_body, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     if args.dry_run:
-        print(str(out_dir))
-        print("DRY_RUN: wrote meta.json + request.json")
+        print("=== REQUEST ===")
+        print(json.dumps({"url": f"{base_url}/chat/completions", "body": req_body}, ensure_ascii=False, indent=2))
+        if args.print_out_dir:
+            print("=== OUT_DIR ===")
+            print(str(out_dir))
         return 0
 
     status, raw = _http_post_json(
@@ -331,8 +342,15 @@ def main() -> int:
 
     if status < 200 or status >= 300:
         (out_dir / "error.txt").write_text(f"HTTP {status}\n", encoding="utf-8")
-        print(str(out_dir))
-        print(f"HTTP {status}")
+        print("=== REQUEST ===")
+        print(json.dumps({"url": f"{base_url}/chat/completions", "body": req_body}, ensure_ascii=False, indent=2))
+        print("=== RESPONSE_RAW ===")
+        print(raw)
+        print("=== HTTP_STATUS ===")
+        print(str(status))
+        if args.print_out_dir:
+            print("=== OUT_DIR ===")
+            print(str(out_dir))
         return 1
 
     try:
@@ -355,8 +373,15 @@ def main() -> int:
 
     (out_dir / "response.txt").write_text(content + "\n", encoding="utf-8")
 
+    print("=== REQUEST ===")
+    print(json.dumps({"url": f"{base_url}/chat/completions", "body": req_body}, ensure_ascii=False, indent=2))
+    print("=== RESPONSE_RAW ===")
+    print(raw)
+    print("=== PARSED_CONTENT ===")
     print(content)
-    print(str(out_dir))
+    if args.print_out_dir:
+        print("=== OUT_DIR ===")
+        print(str(out_dir))
     return 0
 
 
