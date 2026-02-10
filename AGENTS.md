@@ -102,13 +102,13 @@ Local-only artifacts (gitignored): `fixtures/` (audio), `models/` (downloaded mo
 |IMPORTANT: Prefer retrieval-led reasoning over pre-training-led reasoning for repository-specific behavior, structure, and APIs.
 |exclude_dirs:{.cache,.git,.mypy_cache,.next,.parcel-cache,.pnpm-store,.pytest_cache,.ruff_cache,.turbo,.venv,.yarn,__pycache__,build,coverage,dist,fixtures,metrics,models,node_modules,out,target,temp,tmp,venv}
 |exclude_files:{.env,.env.*,*.pem,*.key,*.p12,*.pfx,id_rsa*,id_ed25519*}
-|.:{apps/,asr_runner/,docs/,scripts/,tests/,.gitignore,AGENTS.md,pytest.ini,README.md}
+|.:{apps/,asr_runner/,docs/,scripts/,tests/,.gitattributes,.gitignore,AGENTS.md,pytest.ini,README.md}
 |apps:{desktop/}
 |asr_runner:{__init__.py,runner.py}
 |docs:{memory/,architecture-v0.1.md,base-spec-v0.1.md,fixtures-sources-v0.1.md,perf-spike-plan-v0.1.md,roadmap-v0.1.md,tasks-v0.1.md,tech-spec-v0.1.md,verification-v0.1.md,windows-dev-from-wsl-v0.1.md,windows-gate-v0.1.md}
 |scripts:{windows/,_verify_util.py,download_asr_model.py,verify_full.py,verify_quick.py}
 |tests:{test_asr_protocol.py}
-|apps/desktop:{.vscode/,public/,src-tauri/,src/,.gitignore,index.html,package-lock.json,package.json,README.md,tsconfig.json,tsconfig.node.json,vite.config.ts}
+|apps/desktop:{public/,src-tauri/,src/,.gitignore,index.html,package-lock.json,package.json,README.md,tsconfig.json,tsconfig.node.json,vite.config.ts}
 |docs/memory:{CONTINUITY.md,DECISIONS.md,PITFALLS.md,SPEC.md,USER_PREFS.md}
 |scripts/windows:{windows_gate.ps1}
 |apps/desktop/public:{fonts/,tauri.svg,vite.svg}
