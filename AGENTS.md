@@ -105,12 +105,12 @@ Local-only artifacts (gitignored): `fixtures/` (audio), `models/` (downloaded mo
 |.:{apps/,asr_runner/,docs/,scripts/,tests/,.gitattributes,.gitignore,AGENTS.md,pytest.ini,README.md}
 |apps:{desktop/}
 |asr_runner:{__init__.py,runner.py}
-|docs:{memory/,architecture-v0.1.md,base-spec-v0.1.md,fixtures-sources-v0.1.md,perf-spike-plan-v0.1.md,roadmap-v0.1.md,tasks-v0.1.md,tech-spec-v0.1.md,verification-v0.1.md,windows-dev-from-wsl-v0.1.md,windows-gate-v0.1.md}
-|scripts:{windows/,_verify_util.py,download_asr_model.py,verify_full.py,verify_quick.py}
+|docs:{memory/,architecture-v0.1.md,base-spec-v0.1.md,fixtures-sources-v0.1.md,llm-prompt-lab-v0.1.md,perf-spike-plan-v0.1.md,roadmap-v0.1.md,tasks-v0.1.md,tech-spec-v0.1.md,verification-v0.1.md,windows-dev-from-wsl-v0.1.md,windows-gate-v0.1.md}
+|scripts:{windows/,_verify_util.py,download_asr_model.py,llm_prompt_lab.py,verify_full.py,verify_quick.py}
 |tests:{test_asr_protocol.py}
 |apps/desktop:{public/,src-tauri/,src/,.gitignore,index.html,package-lock.json,package.json,README.md,tsconfig.json,tsconfig.node.json,vite.config.ts}
 |docs/memory:{CONTINUITY.md,DECISIONS.md,PITFALLS.md,SPEC.md,USER_PREFS.md}
-|scripts/windows:{windows_gate.ps1}
+|scripts/windows:{windows_compile_gate.ps1,windows_gate.ps1}
 |apps/desktop/public:{fonts/,tauri.svg,vite.svg}
 |apps/desktop/src:{assets/,lib/,screens/,styles/,ui/,App.tsx,main.tsx,types.ts,vite-env.d.ts}
 |apps/desktop/src-tauri:{.cargo/,capabilities/,gen/,icons/,src/,.gitignore,build.rs,Cargo.lock,Cargo.toml,tauri.conf.json}
@@ -119,7 +119,7 @@ Local-only artifacts (gitignored): `fixtures/` (audio), `models/` (downloaded mo
 |apps/desktop/src-tauri/capabilities:{default.json}
 |apps/desktop/src-tauri/gen:{schemas/}
 |apps/desktop/src-tauri/icons:{128x128.png,128x128@2x.png,32x32.png,icon.icns,icon.ico,icon.png,Square107x107Logo.png,Square142x142Logo.png,Square150x150Logo.png,Square284x284Logo.png,Square30x30Logo.png,Square310x310Logo.png,Square44x44Logo.png,Square71x71Logo.png,Square89x89Logo.png,StoreLogo.png}
-|apps/desktop/src-tauri/src:{asr_service.rs,data_dir.rs,debug_log.rs,history.rs,lib.rs,llm.rs,main.rs,metrics.rs,model.rs,panic_log.rs,pipeline.rs,safe_print.rs,settings.rs,startup_trace.rs,task_manager.rs,templates.rs}
+|apps/desktop/src-tauri/src:{asr_service.rs,context_capture.rs,context_capture_windows.rs,context_pack.rs,data_dir.rs,debug_log.rs,history.rs,lib.rs,llm.rs,main.rs,metrics.rs,model.rs,panic_log.rs,pipeline.rs,safe_print.rs,settings.rs,startup_trace.rs,task_manager.rs,templates.rs,trace.rs}
 |apps/desktop/src/assets:{react.svg}
 |apps/desktop/src/lib:{audio.ts,clipboard.ts}
 |apps/desktop/src/screens:{HistoryScreen.tsx,MainScreen.tsx,SettingsScreen.tsx}
