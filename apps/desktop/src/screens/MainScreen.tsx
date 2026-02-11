@@ -249,7 +249,9 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
         else if (cur === "transcribing") void cancelActiveTask();
       });
       trackUnlisten(unlistenHotkey);
-    })();
+    })().catch(() => {
+      // ignore
+    });
     return () => {
       cancelled = true;
       for (const fn of unlistenFns) {
@@ -307,7 +309,7 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
           activeTaskIdRef.current = "";
           setUi("idle");
           const hint = transcribeErrorHint(err);
-          pushToast(hint, "danger");
+          pushToastRef.current(hint, "danger");
           if (hotkeySessionRef.current) {
             overlayFlash("ERROR", 1200, hint);
             hotkeySessionRef.current = false;
@@ -319,7 +321,7 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
       setUi("recording");
     } catch {
       setUi("idle");
-      pushToast("MIC PERMISSION NEEDED", "danger");
+      pushToastRef.current("MIC PERMISSION NEEDED", "danger");
       if (hotkeySessionRef.current) {
         overlayFlash("MIC DENIED", 1400);
         hotkeySessionRef.current = false;
@@ -335,7 +337,7 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
       r.stop();
     } catch {
       setUi("idle");
-      pushToast("STOP FAILED", "danger");
+      pushToastRef.current("STOP FAILED", "danger");
       if (hotkeySessionRef.current) {
         overlayFlash("ERROR", 1200, "STOP FAILED");
         hotkeySessionRef.current = false;
@@ -349,11 +351,11 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
     setUi("cancelling");
     try {
       await invoke("cancel_task", { taskId: id });
-      pushToast("CANCELLING...", "default");
+      pushToastRef.current("CANCELLING...", "default");
       if (hotkeySessionRef.current) void overlaySet(true, "CANCELLING");
     } catch {
       setUi("transcribing");
-      pushToast("CANCEL FAILED", "danger");
+      pushToastRef.current("CANCEL FAILED", "danger");
       if (hotkeySessionRef.current) {
         overlayFlash("ERROR", 1200, "CANCEL FAILED");
         hotkeySessionRef.current = false;
@@ -371,9 +373,9 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
     if (!lastText.trim()) return;
     try {
       await copyText(lastText);
-      pushToast("COPIED", "ok");
+      pushToastRef.current("COPIED", "ok");
     } catch {
-      pushToast("COPY FAILED", "danger");
+      pushToastRef.current("COPY FAILED", "danger");
     }
   }
 
