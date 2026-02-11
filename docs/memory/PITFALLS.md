@@ -216,4 +216,27 @@ VERIFIED（2026-02-10，问题复盘）
   - 引入常开、结构化的 `trace.jsonl`，并要求所有错误路径必须写入：
     - `step_id`（稳定）、`code`（稳定）、error chain、backtrace（运行时捕获，无需手工维护）
   - 禁止在 span 开始后直接 `?` 退出而不记录：所有失败必须显式 `span.err(...)`/`span.err_anyhow(...)`。
-  - 脱敏约束：不记录 API key；不记录截图像素/base64；避免在 trace 中泄漏个人绝对路径。
+- 脱敏约束：不记录 API key；不记录截图像素/base64；避免在 trace 中泄漏个人绝对路径。
+
+## Windows Debug 运行时报 `E_FFMPEG_NOT_FOUND`：预处理阶段直接失败并显示 ERROR
+
+VERIFIED（2026-02-11，Windows trace/metrics 复核）
+
+- 复现条件：
+  - Windows 端运行 `tauri dev`，触发一次录音转写。
+  - 系统 PATH 中没有可执行的 `ffmpeg`（`where ffmpeg` 找不到）。
+- 现象：
+  - UI/overlay 出现 `ERROR`。
+  - `trace.jsonl` 出现 `FFMPEG.preprocess` 失败：
+    - `status=err`
+    - `code=E_FFMPEG_NOT_FOUND`
+    - `message=ffmpeg not found (cmd=ffmpeg)`
+  - `metrics.jsonl` 对应 `task_event` 为：
+    - `stage=Preprocess`
+    - `status=failed`
+    - `error_code=E_FFMPEG_NOT_FOUND`
+- 影响：
+  - 任务在 Preprocess 阶段即终止，后续 `Transcribe/Rewrite` 都不会执行，容易被误解为 Rewrite 没生效。
+- 处理方式：
+  - 在 Windows 安装并加入 PATH：`ffmpeg` 与 `ffprobe`。
+  - 复核命令：`where ffmpeg`、`where ffprobe`（应能返回路径）。
