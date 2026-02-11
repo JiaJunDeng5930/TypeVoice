@@ -249,3 +249,15 @@ VERIFIED（2026-02-11，Windows trace/metrics 复核）
   - 解析顺序为：`TYPEVOICE_FFMPEG` 环境变量 -> `current_exe` 同目录 `ffmpeg.exe` -> fallback `ffmpeg`（PATH）。
 - 当前仓库的 Tauri 配置未声明 `externalBin`，且 Windows Debug 目录下不存在 `ffmpeg.exe/ffprobe.exe`，因此在未设置 `TYPEVOICE_FFMPEG` 且 PATH 无 ffmpeg 时会稳定回落并报 `E_FFMPEG_NOT_FOUND`。
 - `trace.jsonl` 的历史成功记录也显示 `FFMPEG.preprocess.ctx.cmd_hint=ffmpeg`（未出现 `ffmpeg.exe`），说明此前正常时同样主要依赖 PATH 中的 ffmpeg；本次失败是运行环境可执行路径变化，而不是 hotkey/rewrite 代码改动直接导致。
+
+根因补充（VERIFIED，2026-02-11，Windows 环境取证）
+
+- Windows 上 `ffmpeg/ffprobe` 实际存在于：
+  - `%LOCALAPPDATA%\\Microsoft\\WinGet\\Packages\\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\\ffmpeg-8.0.1-full_build\\bin\\`
+  - `%LOCALAPPDATA%\\Microsoft\\WinGet\\Links\\ffmpeg.exe` / `ffprobe.exe`
+- 但当前 User/Machine `PATH` 均不包含 `%LOCALAPPDATA%\\Microsoft\\WinGet\\Links`，因此 `where ffmpeg` 与 `where ffprobe` 失败，TypeVoice fallback 到 `cmd=ffmpeg` 时触发 `E_FFMPEG_NOT_FOUND`。
+- 临时在当前进程前置该目录后，`where ffmpeg` / `where ffprobe` 立即可解析，验证了“二进制存在但 PATH 丢失”是直接原因。
+
+UNCONFIRMED（待进一步人工确认）
+
+- `ConsoleHost_history.txt` 显示近期执行过 `setx PATH \"$env:PATH;$prefix\"`，这类操作可能改写/截断用户 PATH，并导致某些既有目录（如 WinGet Links）丢失；但目前无法从系统日志精确还原这次 PATH 丢失的唯一触发动作。

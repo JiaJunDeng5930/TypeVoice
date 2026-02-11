@@ -60,6 +60,10 @@ VERIFIED（截至 2026-02-10）
   - 最近 hotkeys/rewrite 提交未修改 FFmpeg 调用链；
   - FFmpeg 解析逻辑最近一次实质修改是 `d3de362`（引入 `resolve_tool_path`，优先 env/同目录，再 fallback PATH）；
   - 当前仓库 `tauri.conf.json` 未配置 `externalBin`，Windows Debug 目录也无 `ffmpeg.exe/ffprobe.exe`，因此 `tauri dev` 下在未配置 env 且 PATH 缺失时会报 `E_FFMPEG_NOT_FOUND`（属于环境/产物问题，不是 hotkey 改动回归）。
+- 已确认 Windows 侧“此前可用、现在不可用”的直接原因：
+  - `ffmpeg/ffprobe` 仍安装在 WinGet 目录（`%LOCALAPPDATA%\\Microsoft\\WinGet\\...`）；
+  - 但当前 User/Machine PATH 均缺失 `%LOCALAPPDATA%\\Microsoft\\WinGet\\Links`，导致 `where ffmpeg` 失败；
+  - 临时将该目录加到进程 PATH 后可立即解析，证明问题是 PATH 丢失而非二进制缺失。
 
 ### Next
 
