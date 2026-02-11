@@ -302,5 +302,19 @@ VERIFIED
 UNCONFIRMED
 
 - 本轮尚未完成“连续热键录音 + trace 对账”的专项回归（进程与编译均已就位，可直接执行）。
+
+## 更正与最新状态（2026-02-11，热键失效根因与修复）
+
+VERIFIED
+
+- 热键失效根因不是系统快捷键权限，而是配置与当前严格模式不匹配：
+  - `settings.json` 中 `hotkeys_enabled/hotkey_ptt/hotkey_toggle/hotkeys_show_overlay` 为 `null`；
+  - 启动时 `HK.apply` 报错 `E_HK_CONFIG`，错误链为 `E_SETTINGS_HOTKEYS_ENABLED_MISSING`。
+- 已完成修复：
+  - 路径：`D:\\Projects\\TypeVoice\\tmp\\typevoice-data\\settings.json`
+  - 变更：`hotkeys_enabled=true`、`hotkey_ptt=\"F9\"`、`hotkey_toggle=\"F10\"`、`hotkeys_show_overlay=true`
+  - 已重启 Windows `tauri dev` 会话并验证：
+    - `trace.jsonl` 出现 `HK.apply status=ok`（`ctx.enabled=true, ptt=F9, toggle=F10`）
+    - `http://localhost:1420` 返回 `200`
   - 检查 `App.reloadSettings` 的 `catch -> setSettings({})` 是否在某些时序下覆盖了有效设置；
   - 对比 UI 按钮路径与热键路径在同一会话下的启动参数差异，确认是否仅热键受影响。
