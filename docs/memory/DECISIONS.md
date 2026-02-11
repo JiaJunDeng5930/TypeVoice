@@ -146,3 +146,17 @@ VERIFIED（2026-02-11）
 - 复核方式：
   - 执行记录中不出现新的工作副本路径与安装命令。
   - 每一步都能对应到单一变更项与可验证日志结果。
+
+## WSL 触发 Windows 文档命令时的 PATH 同步策略（cargo 可见性）
+
+VERIFIED（2026-02-11）
+
+- 背景：用户要求“严格按文档命令执行”，但从 WSL 触发 Windows `npm run tauri dev` 时出现 `cargo metadata ... program not found`；根因是启动链路拿到旧 PATH。
+- 决策：
+  - 文档命令本体保持不变。
+  - 若从 WSL 触发 Windows 命令，调用链必须提供“纯 Windows PATH + cargo bin”，禁止把 WSL 路径混入 Windows PATH（避免 `npm` 命中 `\\wsl.localhost\...`）。
+- 复核方式：
+  - `where cargo` 返回 `C:\Users\micro\.cargo\bin\cargo.exe`。
+  - 执行文档命令后出现：
+    - `Running DevCommand (cargo run ...)`
+    - `Running target\\debug\\typevoice-desktop.exe`

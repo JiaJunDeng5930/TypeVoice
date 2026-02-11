@@ -52,7 +52,7 @@ VERIFIED（main 已包含，且可在本机复核）
 
 ### Now
 
-VERIFIED（截至 2026-02-10）
+VERIFIED（截至 2026-02-11）
 
 - 已确认“上一窗口截图可能全黑/很窄”的现象：属于 `PrintWindow` 对特定窗口（例如 Shell/任务栏/硬件加速/受保护 surface）返回空像素的已知兼容性问题；当前用户决定先忽略不修。详见 `docs/memory/PITFALLS.md`。
 - `templates.json` 覆盖内置默认模板：若 data dir 存在 `templates.json`，应用会优先使用落盘模板，而不是 `default_templates()`。实现：`apps/desktop/src-tauri/src/templates.rs`。
@@ -70,17 +70,21 @@ VERIFIED（截至 2026-02-10）
 - 已确认并处理“热键不触发”根因：
   - 根因是 Windows Debug 多实例并存导致 `HotKey already registered`（`HK.register.ptt/toggle` 报错）。
   - 清理旧会话后，最新 `HK.apply` 为成功且无 `HK.register.* err`，热键注册恢复。
+- 已确认并修复“文档命令下 `cargo metadata ... program not found`”：
+  - 根因不是 `tauri dev` 命令本身，而是 WSL -> Windows 启动链路继承旧 PATH，导致 `cargo` 不可见。
+  - `HKCU\Environment\Path` 已包含 `C:\Users\micro\.cargo\bin`，但当前调用链进程仍可能读取旧快照。
+  - 已验证可行修复：注入“纯 Windows PATH + cargo bin”后，再执行同一条文档命令，成功进入 `Running DevCommand (cargo run ...)` 并启动 `target\\debug\\typevoice-desktop.exe`。
 
 ### Next
 
 VERIFIED（零上下文新 agent 可直接继续的推进顺序）
 
-1. 固化“prompt 迭代闭环”：
-   - 用 `scripts/llm_prompt_lab.py` 复现线上一次 rewrite 的输入结构（`### TRANSCRIPT` + `### CONTEXT`），快速对比不同 system prompt 的效果。
-   - 当用户要求看“完整输入输出”，应直接粘贴脚本打印的完整 request/response（不要只给路径），同时保留落盘以便复查。
-2. 确认“模板实际生效路径”：
-   - 若想更新内置默认模板：改 `apps/desktop/src-tauri/src/templates.rs`。
-   - 若想让 Windows 机器上的实际运行用新模板：必须更新该机器 data dir 内的 `templates.json`（或删除它让其回退默认；此行为会影响用户自定义，需谨慎）。
+1. 稳定 Windows Debug 拉起路径（优先级最高）：
+   - 严格执行文档命令本体，不改写命令。
+   - 若从 WSL 触发，先注入纯 Windows PATH（含 `C:\Users\micro\.cargo\bin`）再执行文档命令，避免旧 PATH 快照。
+2. 继续业务回归验证（Linux + Windows 同步）：
+   - 在 Windows Debug 单会话下验证录音 -> Preprocess -> ASR -> Rewrite -> 历史记录完整链路。
+   - 同步跑 Linux 侧快速回归，避免“只测一边”。
 3. 如需继续追根因（可选）：
    - 对 ContextCapture 的“上一窗口选择”策略做更精细过滤（例如排除 Shell/任务栏窗口），并用 trace 对比选窗与截图成功率。
 
@@ -105,6 +109,12 @@ VERIFIED
 
 - repo root：`./.venv/bin/python scripts/verify_quick.py`
 - repo root：`./.venv/bin/python scripts/verify_full.py`
+- Windows 文档命令（在 Windows PowerShell 直接执行）：
+  - `Set-Location D:\Projects\TypeVoice\apps\desktop`
+  - `$env:RUST_BACKTRACE="1"; $env:RUST_LOG="debug"; npm run tauri dev`
+- 从 WSL 触发 Windows 文档命令（仅修复调用链环境，不改命令本体）：
+  - `WINPATH=$(/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "\$env:Path" | tr -d '\r')`
+  - `PATH="C:\\Users\\micro\\.cargo\\bin;$WINPATH" WSLENV=PATH/w /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -ExecutionPolicy Bypass -Command "Set-Location D:\Projects\TypeVoice\apps\desktop; \$env:RUST_BACKTRACE='1'; \$env:RUST_LOG='debug'; npm run tauri dev"`
 - prompt lab（示例，参数按环境填写）：
   - `python scripts/llm_prompt_lab.py --base-url "$TYPEVOICE_LLM_BASE_URL" --model "$TYPEVOICE_LLM_MODEL" --api-key "$TYPEVOICE_LLM_API_KEY" --system-prompt-file tmp/prompt.txt --transcript "..." --clipboard "..." --prev-process "C:\\\\Windows\\\\explorer.exe"`
 - 从 trace 中定位某次任务的错误：
@@ -119,6 +129,7 @@ VERIFIED
 - 禁止手工维护 `file:line` 常量；定位依赖运行时 backtrace + 稳定 `step_id`/`code`。
 - 对 bug 修复/功能更新后的验证流程，必须包含 Windows 侧“同步最新源码 -> 重新编译 -> Debug 模式拉起”，并与 Linux 侧验证一起执行（不可只测单侧）。
 - Windows 调试会话治理：同一时刻只保留一个最新有效 `tauri dev` 会话；拉起新会话前先清理旧会话，避免 `1420` 端口冲突与“多个 typevoice-desktop 进程”干扰排障。
+- 用户明确要求“严格按文档命令执行”时：禁止改写命令本体、禁止额外包裹脚本；如失败先修环境再执行同一条文档命令。
 
 ## 风险与坑（指向 PITFALLS）
 
@@ -127,6 +138,7 @@ VERIFIED
 - Windows release 无控制台：不要依赖 stdout/stderr；排障走 `trace.jsonl` 与 `debug/` 落盘。见 `docs/memory/PITFALLS.md`。
 - `templates.json` 覆盖内置默认模板：提示词“看起来没生效”时优先检查 data dir。见 `docs/memory/PITFALLS.md`。
 - 上一窗口截图可能全黑/空白：属于 WinAPI 兼容性与选窗策略交互，当前先忽略但会反复出现。见 `docs/memory/PITFALLS.md`。
+- WSL 触发 Windows 命令时可能继承旧 PATH，导致 `cargo` 缺失或工具解析异常。见 `docs/memory/PITFALLS.md` 的“WSL 启动 Windows `tauri dev` 时继承旧 PATH”。
 
 ## 未确认事项（UNCONFIRMED + 推荐验证动作）
 
@@ -136,6 +148,8 @@ UNCONFIRMED
   - 推荐验证：在目标机器 data dir 查看 `trace.jsonl` 是否产生新行；若没有，检查环境变量。
 - 选窗策略是否需要排除 Shell/任务栏窗口以降低“全黑/很窄截图”的概率。
   - 推荐验证：用 trace 对比 `CTX.prev_window.info` 记录的 `process_image` 与 `CTX.prev_window.screenshot` 的成功/尺寸分布，人工评估是否需要过滤。
+- 是否需要在用户的“全局登录会话”层面完成 PATH 刷新（避免每次从 WSL 触发都要注入 PATH）。
+  - 推荐验证：用户在全新 Windows Terminal 会话执行 `where cargo` 与文档命令，确认无需额外注入即可稳定拉起。
 
 ## 更正与最新状态（2026-02-11）
 
@@ -151,3 +165,13 @@ VERIFIED
   - 复核结果：上述路径均不存在，且 `NO_TYPEVOICE_PROCS`（无 TypeVoice 相关残留进程）。
 - 后续执行约束已落盘到 `USER_PREFS.md` 与 `DECISIONS.md`：
   - 修复类任务必须“原环境 + 最小闭环 + 单变量变更”，禁止未获授权的环境迁移和额外安装。
+
+## 更正与最新状态（2026-02-11，补充）
+
+VERIFIED
+
+- 本轮已完成 `AGENTS.md` 索引更新（使用 `agents-md-project-index` 技能脚本），并通过 `--check` 校验。
+- 本轮确认并修复了 Windows Debug 拉起失败的直接根因：
+  - 错误表现：`failed to run 'cargo metadata' ... program not found`
+  - 根因：从 WSL 调用 Windows 命令时继承旧 PATH，`cargo` 不可见。
+  - 修复结果：在调用链注入“纯 Windows PATH + cargo bin”后，文档命令成功拉起（出现 `Running DevCommand (cargo run ...)` 与 `Running target\\debug\\typevoice-desktop.exe`，并观测到 `typevoice-desktop` 进程存活）。

@@ -305,3 +305,25 @@ VERIFIED（2026-02-11，执行复盘）
   - 立即停止非必要动作并清理新增下载/残留进程。
   - 强制回到“原环境 + 最小闭环（只改一项 -> 重启单进程 -> 看日志）”。
   - 将该约束写入 `USER_PREFS.md` 与 `DECISIONS.md`，防止重复发生。
+
+## WSL 启动 Windows `tauri dev` 时继承旧 PATH：`cargo metadata` 报 `program not found`
+
+VERIFIED（2026-02-11，Windows/WSL 联合复核）
+
+- 复现条件：
+  - 在 WSL 会话里调用 `powershell.exe` 执行文档命令启动 `npm run tauri dev`。
+  - 注册表 `HKCU\Environment\Path` 已包含 `C:\Users\micro\.cargo\bin`，但当前 WSL 会话继承的 PATH 快照不包含该目录。
+- 现象：
+  - `npm run tauri dev` 直接失败：
+    - `failed to run 'cargo metadata' ... program not found`
+  - `where cargo` 在该启动链路中返回找不到。
+- 影响：
+  - 看起来像“文档命令失效”，实际是跨环境启动链路拿到旧 PATH；会反复阻塞 Windows Debug 拉起。
+- 根因：
+  - WSL -> Windows 进程启动时继承了旧的环境快照，未自动刷新到最新 User PATH。
+  - 若直接用 `WSLENV=PATH/lpw` 传递 PATH，可能混入 WSL 路径（如 `\\wsl.localhost\...\.nvm\...`），导致 `npm` 解析异常。
+- 处理方式：
+  - 先从 Windows 侧读取纯 Windows PATH，再在调用链中注入：
+    - `WINPATH=$(powershell.exe -Command "$env:Path")`
+    - `PATH="C:\\Users\\micro\\.cargo\\bin;$WINPATH" WSLENV=PATH/w`
+  - 保持文档命令本体不变，仅修复调用链环境变量。
