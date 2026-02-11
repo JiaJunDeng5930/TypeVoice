@@ -426,3 +426,21 @@ VERIFIED
   - 根因确认为前端监听器生命周期竞争与旧闭包泄漏（非后端二次读取设置）；
   - 修复已落在 `apps/desktop/src/screens/MainScreen.tsx`（提交：`6af17a9`、`1df910c`）。
 - 当前该条目保留为历史复盘，后续判断是否彻底关闭仅取决于最新 Windows 连续热键回归结果。
+
+更正（2026-02-11，本轮日志复核）
+
+VERIFIED
+
+- 在 Windows 最新会话（`D:\\Projects\\TypeVoice`，`HEAD=1df910c`）中，热键路径仍可稳定复现“未走 rewrite”：
+  - 样本任务：`42e17b7e-1be7-4f7b-a240-2e9ac495edda`、`405e4267-ad0d-4fc3-a56b-cbeff4a2e53f`、`ebf7132f-e2da-42e4-840a-514693697d7c`、`39569d4f-8763-4d97-a394-561fbe5c5dae`、`f1671bf0-ba45-40b8-abcb-9021add72240`。
+  - `CMD.start_transcribe_recording_base64.ctx` 均为 `rewrite_enabled=false`、`template_id=null`。
+  - 对应 `TASK.rewrite_effective` 均为 `status=skipped` 且 `rewrite_requested=false`。
+  - 同时这些任务前存在 `CMD.overlay_set_state` 的 `REC/TRANSCRIBING`，确认来自热键链路。
+- 同一会话中 `CMD.get_settings` 返回 `rewrite_enabled=true`、`template_id=\"correct\"`（`ts_ms=1770818689915`），与任务启动参数矛盾。
+
+UNCONFIRMED
+
+- 本轮可确认“现象仍存在”，但“最终根因”尚未收敛。
+- 当前高优先怀疑点：
+  - 前端运行态 settings 可能在某个时序分支回落为默认值（例如 `setSettings({})`）；
+  - 或存在未覆盖的事件链路仍绕过最新配置快照。

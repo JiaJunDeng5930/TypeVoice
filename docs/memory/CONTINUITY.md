@@ -242,3 +242,21 @@ VERIFIED
 UNCONFIRMED
 
 - 本次“更新到最新进程”完成后，尚未追加热键 rewrite 专项回归数据（trace 连续样本）；该验证仍需执行以关闭该问题。
+
+## 更正与最新状态（2026-02-11，热键 rewrite 回归结果）
+
+VERIFIED
+
+- 已在 Windows 最新会话完成连续样本复核，结论是问题仍存在：
+  - `CMD.get_settings`（`ts_ms=1770818689915`）返回 `rewrite_enabled=true`、`template_id=\"correct\"`；
+  - 但之后多次热键任务的 `CMD.start_transcribe_recording_base64.ctx` 仍为 `rewrite_enabled=false`、`template_id=null`；
+  - 对应 `TASK.rewrite_effective` 全部 `skipped`（`rewrite_requested=false`）。
+- 该现象发生在最新代码与最新进程下（Windows repo `HEAD=1df910c`），说明“现有修复尚未完全闭环”。
+
+UNCONFIRMED
+
+- 尚未定位到最终根因；当前只确认“设置读取结果”与“任务启动参数”之间仍有链路不一致。
+- 推荐下一步验证动作（按优先级）：
+  - 在 `MainScreen` 录音启动前后增加临时 trace（仅记录 `rewriteEnabledRef.current/templateIdRef.current`），与 `CMD.start_transcribe_recording_base64` 对齐；
+  - 检查 `App.reloadSettings` 的 `catch -> setSettings({})` 是否在某些时序下覆盖了有效设置；
+  - 对比 UI 按钮路径与热键路径在同一会话下的启动参数差异，确认是否仅热键受影响。
