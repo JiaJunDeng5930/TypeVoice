@@ -429,3 +429,94 @@ UNCONFIRMED
 
 - 若后续通过不同命令再次更新索引，存在“回退到默认排除集”的复发风险。
 - 推荐验证：每次更新后固定执行同参 `--check`，并人工抽查 `AGENTS.md` 中 `exclude_dirs` 行。
+
+## HANDOFF SNAPSHOT REFRESH（2026-02-12 01:18 CST，清上下文前）
+
+### 当前有效目标（与 SPEC 对齐）
+
+VERIFIED
+
+- 维持 Windows MVP 主链路稳定：`Record -> Preprocess -> Transcribe -> Rewrite(可选) -> Persist -> Copy`，并保持“单一状态源 + 去兜底”约束持续生效。
+- 维持可诊断性硬约束：所有失败必须可在落盘日志按 `step_id/code/task_id` 定位。
+
+### 当前状态（Done / Now / Next）
+
+#### Done
+
+VERIFIED
+
+- 已按 `agents-md-project-index` 技能重新执行索引更新，并使用项目完整排除目录集完成同参 `--check`。
+- `AGENTS.md` 当前 `exclude_dirs` 保持为完整项目集合（含 `fixtures/metrics/models/tmp/target` 等）。
+- 当前仓库在本次刷新后无新增代码改动，仅记忆文档会更新。
+
+#### Now
+
+VERIFIED
+
+- rewrite 消失/不生效主问题处于“已恢复”状态；最近成功样本已覆盖 hotkey + rewrite + task_done 完整链路。
+- 当前高频非阻断噪声仍是 `E_ASR_FAILED: Empty ASR text` 与偶发 `E_SCREENSHOT window has zero size`。
+
+#### Next
+
+VERIFIED（建议接班顺序）
+
+1. 用 5~10 次热键触发做稳定性回归，按 `task_id` 核对每次是否进入 rewrite。
+2. 对 `E_ASR_FAILED` 做分桶统计（静音/低音量/正常语音），确认主要根因占比。
+3. 若截图零尺寸频率持续升高，再进入选窗策略优化；否则维持 best-effort。
+
+### 当前工作集（关键文件路径、关键命令、关键约束）
+
+#### 关键文件路径
+
+VERIFIED
+
+- `apps/desktop/src-tauri/src/settings.rs`
+- `apps/desktop/src-tauri/src/hotkeys.rs`
+- `apps/desktop/src-tauri/src/lib.rs`
+- `apps/desktop/src/screens/MainScreen.tsx`
+- `apps/desktop/src-tauri/src/context_capture_windows.rs`
+- `apps/desktop/src-tauri/src/llm.rs`
+- `/mnt/d/Projects/TypeVoice/tmp/typevoice-data/settings.json`
+- `/mnt/d/Projects/TypeVoice/tmp/typevoice-data/trace.jsonl`
+- `/mnt/d/Projects/TypeVoice/tmp/typevoice-data/metrics.jsonl`
+
+#### 关键命令
+
+VERIFIED
+
+- 索引更新/校验（必须同参）：
+  - `python /home/atticusdeng/.agents/skills/agents-md-project-index/scripts/update_agents_md_project_index.py --exclude-dir ...`
+  - `python /home/atticusdeng/.agents/skills/agents-md-project-index/scripts/update_agents_md_project_index.py --check --exclude-dir ...`
+- 日志核对：
+  - `rg -n 'CMD.start_transcribe_recording_base64|TASK.rewrite_effective|LLM.rewrite|E_ASR_FAILED' /mnt/d/Projects/TypeVoice/tmp/typevoice-data/trace.jsonl`
+  - `rg -n 'task_done|Rewrite|E_ASR_FAILED' /mnt/d/Projects/TypeVoice/tmp/typevoice-data/metrics.jsonl`
+- 配置核对：
+  - `jq '{hotkeys_enabled,hotkey_ptt,hotkey_toggle,hotkeys_show_overlay,rewrite_enabled,rewrite_template_id}' /mnt/d/Projects/TypeVoice/tmp/typevoice-data/settings.json`
+
+#### 关键约束
+
+VERIFIED
+
+- 结论必须绑定单一 `task_id` 完整链路，禁止跨任务拼接证据。
+- 运行态配置问题优先排查 data dir 的 `settings.json`，不要先假设系统热键权限问题。
+- 索引维护必须使用完整排除目录集，禁止回退脚本默认排除。
+
+### 风险与坑（本阶段新增或高概率复发）
+
+VERIFIED
+
+- 见 `docs/memory/PITFALLS.md`：
+  - “热键配置字段为 null 导致 `E_HK_CONFIG`”
+  - “trace/metrics 多任务交织导致误判（需按 `task_id` 聚合）”
+  - “`E_ASR_FAILED: Empty ASR text` 易被误判为 rewrite 故障”
+
+### 未确认事项（UNCONFIRMED + 推荐验证动作）
+
+UNCONFIRMED
+
+- `rewrite_template_id` 与 `active_template_id` 的兼容字段策略是否需要统一收敛。
+  - 推荐验证：在 `settings.rs` 增加兼容优先级单测并固化行为。
+- `E_ASR_FAILED` 失败样本是否主要来自输入静音边界。
+  - 推荐验证：固定 20 次样本并记录失败分布。
+- `E_SCREENSHOT window has zero size` 是否需要升级为显式配置开关。
+  - 推荐验证：按周统计频率与对 rewrite 质量影响再决策。
