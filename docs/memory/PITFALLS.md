@@ -240,3 +240,11 @@ VERIFIED（2026-02-11，Windows trace/metrics 复核）
 - 处理方式：
   - 在 Windows 安装并加入 PATH：`ffmpeg` 与 `ffprobe`。
   - 复核命令：`where ffmpeg`、`where ffprobe`（应能返回路径）。
+
+补充复盘（VERIFIED，2026-02-11，git diff + 本地文件复核）
+
+- 最近 hotkeys/rewrite 相关提交（如 `4c26f34`、`7770c93`）未修改 `apps/desktop/src-tauri/src/pipeline.rs` 的 FFmpeg 调用链。
+- FFmpeg 调用链最近一次实质性修改来自 `d3de362`：
+  - 从固定 `Command::new("ffmpeg")` 调整为 `resolve_tool_path("TYPEVOICE_FFMPEG", "ffmpeg.exe", "ffmpeg")`。
+  - 解析顺序为：`TYPEVOICE_FFMPEG` 环境变量 -> `current_exe` 同目录 `ffmpeg.exe` -> fallback `ffmpeg`（PATH）。
+- 当前仓库的 Tauri 配置未声明 `externalBin`，且 Windows Debug 目录下不存在 `ffmpeg.exe/ffprobe.exe`，因此在未设置 `TYPEVOICE_FFMPEG` 且 PATH 无 ffmpeg 时会稳定回落并报 `E_FFMPEG_NOT_FOUND`。

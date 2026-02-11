@@ -8,7 +8,7 @@
 
 ## 当前有效目标（与 SPEC 对齐）
 
-VERIFIED（截至 2026-02-10）
+VERIFIED（截至 2026-02-11）
 
 - 产品目标：Windows 桌面端“录完再出稿”语音打字工具（录音结束 -> 本地 ASR -> 可选 LLM Rewrite -> 复制文本），MVP 优先可用性/稳定性/速度/可取消/可观测。真源：`docs/base-spec-v0.1.md`、`docs/tech-spec-v0.1.md`、`docs/verification-v0.1.md`。
 - 本阶段目标：把“上下文 + 提示词 + 可诊断日志”固化为可复用流程，能快速迭代 prompt 并定位根因：
@@ -56,6 +56,10 @@ VERIFIED（截至 2026-02-10）
 
 - 已确认“上一窗口截图可能全黑/很窄”的现象：属于 `PrintWindow` 对特定窗口（例如 Shell/任务栏/硬件加速/受保护 surface）返回空像素的已知兼容性问题；当前用户决定先忽略不修。详见 `docs/memory/PITFALLS.md`。
 - `templates.json` 覆盖内置默认模板：若 data dir 存在 `templates.json`，应用会优先使用落盘模板，而不是 `default_templates()`。实现：`apps/desktop/src-tauri/src/templates.rs`。
+- 已完成“FFmpeg 路径回退”代码级复盘：
+  - 最近 hotkeys/rewrite 提交未修改 FFmpeg 调用链；
+  - FFmpeg 解析逻辑最近一次实质修改是 `d3de362`（引入 `resolve_tool_path`，优先 env/同目录，再 fallback PATH）；
+  - 当前仓库 `tauri.conf.json` 未配置 `externalBin`，Windows Debug 目录也无 `ffmpeg.exe/ffprobe.exe`，因此 `tauri dev` 下在未配置 env 且 PATH 缺失时会报 `E_FFMPEG_NOT_FOUND`（属于环境/产物问题，不是 hotkey 改动回归）。
 
 ### Next
 
