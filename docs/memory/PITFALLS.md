@@ -355,3 +355,30 @@ VERIFIED（2026-02-11，trace + toolchain 目录复核）
     - `apps/desktop/src-tauri/toolchain/bin/windows-x86_64/ffmpeg.exe` 与 `ffprobe.exe` 存在；
     - SHA256 匹配 `ffmpeg_manifest.json`；
     - 重启后 `trace.jsonl` 出现 `TC.verify status=ok`（`expected_version=7.0.2`）。
+
+## 热键录音偶发“未走 Rewrite”：任务参数出现 `rewrite_requested=false`（尽管 settings.json 为 true）
+
+VERIFIED（2026-02-11，trace + metrics + settings 文件复核）
+
+- 复现条件：
+  - 使用热键路径触发录音（trace 中可见 `CMD.overlay_set_state` 的 `REC/TRANSCRIBING`）。
+  - `settings.json` 中 `rewrite_enabled=true`、`rewrite_template_id=\"correct\"`。
+- 现象：
+  - 最新任务（例如 `1fba242b-f6f3-4239-a523-ee78aa89121c`、`7780649a-6ccd-4ea8-9790-e0621a67684c`）在命令入口日志为：
+    - `CMD.start_transcribe_recording_base64.ctx.rewrite_enabled=false`
+    - `template_id=null`
+  - 随后 `TASK.rewrite_effective` 为：
+    - `status=skipped`
+    - `rewrite_requested=false`
+    - `has_template=false`
+  - `metrics.jsonl` 对应 `task_perf.rewrite_ms=null`，且无 `Rewrite started/completed` 事件。
+- 影响：
+  - 用户感知为“本次转录没有 rewrite”，但不是 LLM 调用失败，而是任务启动参数未请求 rewrite。
+
+UNCONFIRMED（待进一步验证）
+
+- 可能根因：
+  - 热键监听闭包与设置加载/重绑之间存在时序窗口，导致仍有旧闭包以 `rewrite=false` 触发 `startRecording`（尽管当前设置已为 true）。
+- 推荐验证：
+  - 在触发前后连续记录 `CMD.get_settings` 与 `CMD.start_transcribe_recording_base64` 的时间序列，确认是否出现“settings=true 但启动参数=false”的窗口；
+  - 若继续复现，可在前端改为通过 ref 读取最新 `rewrite_enabled/template_id`，避免闭包捕获旧值。

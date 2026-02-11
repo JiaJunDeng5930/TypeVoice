@@ -150,6 +150,9 @@ UNCONFIRMED
   - 推荐验证：用 trace 对比 `CTX.prev_window.info` 记录的 `process_image` 与 `CTX.prev_window.screenshot` 的成功/尺寸分布，人工评估是否需要过滤。
 - 是否需要在用户的“全局登录会话”层面完成 PATH 刷新（避免每次从 WSL 触发都要注入 PATH）。
   - 推荐验证：用户在全新 Windows Terminal 会话执行 `where cargo` 与文档命令，确认无需额外注入即可稳定拉起。
+- 热键路径下“settings 显示 rewrite=true，但启动参数传入 false/null”的偶发时序问题是否仍存在。
+  - 已观测样本：`task_id=1fba242b-f6f3-4239-a523-ee78aa89121c`、`task_id=7780649a-6ccd-4ea8-9790-e0621a67684c`。
+  - 推荐验证：对比同一时间窗内 `CMD.get_settings` 与 `CMD.start_transcribe_recording_base64` 的 `rewrite_enabled/template_id`。
 
 ## 更正与最新状态（2026-02-11）
 
