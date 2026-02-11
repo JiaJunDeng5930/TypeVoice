@@ -409,7 +409,9 @@ fn user_content_shape(content: &MessageContent) -> (&'static str, bool) {
     match content {
         MessageContent::Text(_) => ("text", false),
         MessageContent::Parts(parts) => {
-            let has_image_url = parts.iter().any(|p| matches!(p, ContentPart::ImageUrl { .. }));
+            let has_image_url = parts
+                .iter()
+                .any(|p| matches!(p, ContentPart::ImageUrl { .. }));
             ("parts", has_image_url)
         }
     }

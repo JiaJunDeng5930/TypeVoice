@@ -12,11 +12,13 @@ mod metrics;
 mod model;
 mod panic_log;
 mod pipeline;
+mod python_runtime;
 mod safe_print;
 mod settings;
 mod startup_trace;
 mod task_manager;
 mod templates;
+mod toolchain;
 mod trace;
 
 use history::HistoryItem;
@@ -30,6 +32,38 @@ use tauri::Emitter;
 use tauri::Manager;
 use templates::PromptTemplate;
 use trace::Span;
+
+struct RuntimeState {
+    toolchain: std::sync::Mutex<toolchain::ToolchainStatus>,
+    python: std::sync::Mutex<python_runtime::PythonStatus>,
+}
+
+impl RuntimeState {
+    fn new() -> Self {
+        Self {
+            toolchain: std::sync::Mutex::new(toolchain::ToolchainStatus::pending()),
+            python: std::sync::Mutex::new(python_runtime::PythonStatus::pending()),
+        }
+    }
+
+    fn set_toolchain(&self, st: toolchain::ToolchainStatus) {
+        let mut g = self.toolchain.lock().unwrap();
+        *g = st;
+    }
+
+    fn get_toolchain(&self) -> toolchain::ToolchainStatus {
+        self.toolchain.lock().unwrap().clone()
+    }
+
+    fn set_python(&self, st: python_runtime::PythonStatus) {
+        let mut g = self.python.lock().unwrap();
+        *g = st;
+    }
+
+    fn get_python(&self) -> python_runtime::PythonStatus {
+        self.python.lock().unwrap().clone()
+    }
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct OverlayState {
@@ -76,8 +110,38 @@ fn cmd_span(
     Span::start(data_dir, task_id, "Cmd", step_id, ctx)
 }
 
+fn repo_root() -> Result<std::path::PathBuf, String> {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .map(|p| p.to_path_buf())
+        .ok_or_else(|| "repo root not found".to_string())
+}
+
+fn runtime_not_ready(runtime: &RuntimeState) -> Option<(&'static str, String)> {
+    let tc = runtime.get_toolchain();
+    if !tc.ready {
+        let msg = tc
+            .message
+            .unwrap_or_else(|| "E_TOOLCHAIN_NOT_READY: toolchain is not ready".to_string());
+        return Some(("E_TOOLCHAIN_NOT_READY", msg));
+    }
+
+    let py = runtime.get_python();
+    if !py.ready {
+        let msg = py
+            .message
+            .unwrap_or_else(|| "E_PYTHON_NOT_READY: python runtime is not ready".to_string());
+        return Some(("E_PYTHON_NOT_READY", msg));
+    }
+    None
+}
+
 #[tauri::command]
-fn transcribe_fixture(fixture_name: &str) -> Result<TranscribeResult, String> {
+fn transcribe_fixture(
+    runtime: tauri::State<'_, RuntimeState>,
+    fixture_name: &str,
+) -> Result<TranscribeResult, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let span = cmd_span(
         &dir,
@@ -85,6 +149,10 @@ fn transcribe_fixture(fixture_name: &str) -> Result<TranscribeResult, String> {
         "CMD.transcribe_fixture",
         Some(serde_json::json!({"fixture_name": fixture_name})),
     );
+    if let Some((code, msg)) = runtime_not_ready(&runtime) {
+        span.err("config", code, &msg, None);
+        return Err(msg);
+    }
     match pipeline::run_fixture_pipeline(fixture_name) {
         Ok(r) => {
             span.ok(None);
@@ -98,7 +166,11 @@ fn transcribe_fixture(fixture_name: &str) -> Result<TranscribeResult, String> {
 }
 
 #[tauri::command]
-fn transcribe_recording_base64(b64: &str, ext: &str) -> Result<TranscribeResult, String> {
+fn transcribe_recording_base64(
+    runtime: tauri::State<'_, RuntimeState>,
+    b64: &str,
+    ext: &str,
+) -> Result<TranscribeResult, String> {
     let task_id = uuid::Uuid::new_v4().to_string();
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let span = cmd_span(
@@ -107,6 +179,10 @@ fn transcribe_recording_base64(b64: &str, ext: &str) -> Result<TranscribeResult,
         "CMD.transcribe_recording_base64",
         Some(serde_json::json!({"ext": ext, "b64_chars": b64.len()})),
     );
+    if let Some((code, msg)) = runtime_not_ready(&runtime) {
+        span.err("config", code, &msg, None);
+        return Err(msg);
+    }
     let input = match pipeline::save_base64_file(&task_id, b64, ext) {
         Ok(p) => p,
         Err(e) => {
@@ -130,6 +206,7 @@ fn transcribe_recording_base64(b64: &str, ext: &str) -> Result<TranscribeResult,
 async fn start_transcribe_fixture(
     app: tauri::AppHandle,
     state: tauri::State<'_, TaskManager>,
+    runtime: tauri::State<'_, RuntimeState>,
     fixture_name: &str,
     rewrite_enabled: bool,
     template_id: Option<String>,
@@ -145,16 +222,18 @@ async fn start_transcribe_fixture(
             "template_id": template_id.as_deref(),
         })),
     );
-    match state
-        .start_fixture(
-            app,
-            fixture_name.to_string(),
-            task_manager::StartOpts {
-                rewrite_enabled,
-                template_id,
-            },
-        )
-    {
+    if let Some((code, msg)) = runtime_not_ready(&runtime) {
+        span.err("config", code, &msg, None);
+        return Err(msg);
+    }
+    match state.start_fixture(
+        app,
+        fixture_name.to_string(),
+        task_manager::StartOpts {
+            rewrite_enabled,
+            template_id,
+        },
+    ) {
         Ok(task_id) => {
             span.ok(Some(serde_json::json!({"task_id": task_id})));
             Ok(task_id)
@@ -170,6 +249,7 @@ async fn start_transcribe_fixture(
 async fn start_transcribe_recording_base64(
     app: tauri::AppHandle,
     state: tauri::State<'_, TaskManager>,
+    runtime: tauri::State<'_, RuntimeState>,
     b64: &str,
     ext: &str,
     rewrite_enabled: bool,
@@ -187,17 +267,19 @@ async fn start_transcribe_recording_base64(
             "template_id": template_id.as_deref(),
         })),
     );
-    match state
-        .start_recording_base64(
-            app,
-            b64.to_string(),
-            ext.to_string(),
-            task_manager::StartOpts {
-                rewrite_enabled,
-                template_id,
-            },
-        )
-    {
+    if let Some((code, msg)) = runtime_not_ready(&runtime) {
+        span.err("config", code, &msg, None);
+        return Err(msg);
+    }
+    match state.start_recording_base64(
+        app,
+        b64.to_string(),
+        ext.to_string(),
+        task_manager::StartOpts {
+            rewrite_enabled,
+            template_id,
+        },
+    ) {
         Ok(task_id) => {
             span.ok(Some(serde_json::json!({"task_id": task_id})));
             Ok(task_id)
@@ -207,6 +289,20 @@ async fn start_transcribe_recording_base64(
             Err(e.to_string())
         }
     }
+}
+
+#[tauri::command]
+fn runtime_toolchain_status(
+    runtime: tauri::State<'_, RuntimeState>,
+) -> Result<toolchain::ToolchainStatus, String> {
+    Ok(runtime.get_toolchain())
+}
+
+#[tauri::command]
+fn runtime_python_status(
+    runtime: tauri::State<'_, RuntimeState>,
+) -> Result<python_runtime::PythonStatus, String> {
+    Ok(runtime.get_python())
 }
 
 #[tauri::command]
@@ -257,7 +353,9 @@ fn upsert_template(tpl: PromptTemplate) -> Result<PromptTemplate, String> {
         &dir,
         None,
         "CMD.upsert_template",
-        Some(serde_json::json!({"has_id": has_id, "id": tpl_id, "name_chars": name_chars, "prompt_chars": prompt_chars})),
+        Some(
+            serde_json::json!({"has_id": has_id, "id": tpl_id, "name_chars": name_chars, "prompt_chars": prompt_chars}),
+        ),
     );
     match templates::upsert_template(&dir, tpl) {
         Ok(v) => {
@@ -274,7 +372,12 @@ fn upsert_template(tpl: PromptTemplate) -> Result<PromptTemplate, String> {
 #[tauri::command]
 fn delete_template(id: &str) -> Result<(), String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let span = cmd_span(&dir, None, "CMD.delete_template", Some(serde_json::json!({"id": id})));
+    let span = cmd_span(
+        &dir,
+        None,
+        "CMD.delete_template",
+        Some(serde_json::json!({"id": id})),
+    );
     match templates::delete_template(&dir, id) {
         Ok(()) => {
             span.ok(None);
@@ -395,7 +498,9 @@ fn llm_api_key_status() -> Result<ApiKeyStatus, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let span = cmd_span(&dir, None, "CMD.llm_api_key_status", None);
     let st = llm::api_key_status();
-    span.ok(Some(serde_json::json!({"configured": st.configured, "source": st.source, "reason": st.reason})));
+    span.ok(Some(
+        serde_json::json!({"configured": st.configured, "source": st.source, "reason": st.reason}),
+    ));
     Ok(st)
 }
 
@@ -409,7 +514,12 @@ fn history_db_path() -> Result<std::path::PathBuf, String> {
 fn history_append(item: HistoryItem) -> Result<(), String> {
     let db = history_db_path()?;
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let span = cmd_span(&dir, Some(item.task_id.as_str()), "CMD.history_append", None);
+    let span = cmd_span(
+        &dir,
+        Some(item.task_id.as_str()),
+        "CMD.history_append",
+        None,
+    );
     match history::append(&db, &item) {
         Ok(()) => {
             span.ok(None);
@@ -535,11 +645,7 @@ fn update_settings(
 
 #[tauri::command]
 fn asr_model_status() -> Result<ModelStatus, String> {
-    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(3)
-        .ok_or_else(|| "repo root not found".to_string())?
-        .to_path_buf();
+    let root = repo_root()?;
     let model_dir = model::default_model_dir(&root);
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let span = cmd_span(&dir, None, "CMD.asr_model_status", None);
@@ -559,21 +665,22 @@ fn asr_model_status() -> Result<ModelStatus, String> {
 async fn download_asr_model() -> Result<ModelStatus, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let span = cmd_span(&dir, None, "CMD.download_asr_model", None);
-    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(3)
-        .ok_or_else(|| "repo root not found".to_string())?
-        .to_path_buf();
+    let root = repo_root()?;
     let model_dir = model::default_model_dir(&root);
-    let py = if cfg!(windows) {
-        root.join(".venv").join("Scripts").join("python.exe")
-    } else {
-        root.join(".venv").join("bin").join("python")
+    let py = match python_runtime::resolve_python_binary(&root) {
+        Ok(p) => p,
+        Err(e) => {
+            span.err_anyhow("config", "E_PYTHON_NOT_READY", &e, None);
+            return Err(e.to_string());
+        }
     };
     let root2 = root.clone();
     let py2 = py.clone();
     let model_dir2 = model_dir.clone();
-    let st_res = tauri::async_runtime::spawn_blocking(move || model::download_model(&root2, &py2, &model_dir2)).await;
+    let st_res = tauri::async_runtime::spawn_blocking(move || {
+        model::download_model(&root2, &py2, &model_dir2)
+    })
+    .await;
     let st = match st_res {
         Ok(Ok(st)) => st,
         Ok(Err(e)) => {
@@ -592,7 +699,9 @@ async fn download_asr_model() -> Result<ModelStatus, String> {
         s.asr_model = Some(model_dir.display().to_string());
         let _ = settings::save_settings(&dir, &s);
     }
-    span.ok(Some(serde_json::json!({"ok": st.ok, "reason": st.reason, "model_version": st.model_version})));
+    span.ok(Some(
+        serde_json::json!({"ok": st.ok, "reason": st.reason, "model_version": st.model_version}),
+    ));
     Ok(st)
 }
 
@@ -605,8 +714,34 @@ pub fn run() {
     startup_trace::mark_best_effort("context_generated");
     tauri::Builder::default()
         .manage(TaskManager::new())
+        .manage(RuntimeState::new())
         .manage(hotkeys::HotkeyManager::new())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            #[derive(Clone, serde::Serialize)]
+            struct Payload {
+                args: Vec<String>,
+                cwd: String,
+            }
+
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+            let _ = app.emit("tv_single_instance", Payload { args: argv, cwd });
+
+            if let Ok(dir) = data_dir::data_dir() {
+                trace::event(
+                    &dir,
+                    None,
+                    "App",
+                    "APP.single_instance",
+                    "ok",
+                    Some(serde_json::json!({"note": "second_instance_redirected"})),
+                );
+            }
+        }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             startup_trace::mark_best_effort("setup_enter");
@@ -628,10 +763,36 @@ pub fn run() {
             .focused(false)
             .build();
 
+            let mut toolchain_ready = false;
+            let mut python_ready = false;
+            if let Ok(dir) = data_dir::data_dir() {
+                let runtime = app.state::<RuntimeState>();
+                let st = toolchain::initialize_and_verify(&app.handle(), &dir);
+                toolchain_ready = st.ready;
+                runtime.set_toolchain(st);
+                if let Ok(root) = repo_root() {
+                    let py = python_runtime::initialize_and_verify(&dir, &root);
+                    python_ready = py.ready;
+                    runtime.set_python(py);
+                } else {
+                    let py = python_runtime::PythonStatus {
+                        ready: false,
+                        code: Some("E_PYTHON_NOT_READY".to_string()),
+                        message: Some("E_PYTHON_NOT_READY: repo root not found".to_string()),
+                        python_path: None,
+                        python_version: None,
+                    };
+                    runtime.set_python(py);
+                }
+            }
+
             // Warm up the ASR runner in background so first transcription is fast.
-            let state = app.state::<TaskManager>();
-            state.warmup_asr_best_effort();
-            state.warmup_context_best_effort();
+            // If runtime preflight failed, skip warmup to avoid noisy startup failures.
+            if toolchain_ready && python_ready {
+                let state = app.state::<TaskManager>();
+                state.warmup_asr_best_effort();
+                state.warmup_context_best_effort();
+            }
 
             // Apply hotkeys from persisted settings.
             if let Ok(dir) = data_dir::data_dir() {
@@ -664,6 +825,8 @@ pub fn run() {
             get_settings,
             set_settings,
             update_settings,
+            runtime_toolchain_status,
+            runtime_python_status,
             overlay_set_state,
             asr_model_status,
             download_asr_model

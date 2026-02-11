@@ -10,8 +10,8 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
-use crate::{debug_log, pipeline};
 use crate::trace::Span;
+use crate::{debug_log, pipeline};
 
 fn model_id_hint_for_trace(model_id: &str) -> String {
     let t = model_id.trim();
@@ -134,7 +134,7 @@ impl AsrService {
         let chunk_sec = 60.0_f64;
 
         let root = repo_root()?;
-        let py = default_python_path(&root);
+        let py = crate::python_runtime::resolve_python_binary(&root)?;
 
         let span = Span::start(
             data_dir,
@@ -149,15 +149,16 @@ impl AsrService {
         );
 
         let t0 = Instant::now();
-        let mut child = match Command::new(py)
+        let mut child = match Command::new(&py)
             .current_dir(&root)
             .env("PYTHONPATH", &root)
-            .env("TYPEVOICE_FFPROBE", pipeline::ffprobe_cmd())
+            .env("TYPEVOICE_FFPROBE", pipeline::ffprobe_cmd()?)
             .args([
                 "-m",
                 "asr_runner.runner",
                 "--daemon",
-                "--model", &model_id,
+                "--model",
+                &model_id,
                 "--chunk-sec",
                 &format!("{chunk_sec}"),
             ])
@@ -171,10 +172,18 @@ impl AsrService {
                 span.err(
                     "process",
                     "E_ASR_SPAWN",
-                    &format!("failed to spawn asr runner daemon: {e}"),
+                    &format!(
+                        "failed to spawn asr runner daemon: {e} (python={} root={})",
+                        py.display(),
+                        root.display()
+                    ),
                     None,
                 );
-                return Err(anyhow!("failed to spawn asr runner daemon: {e}"));
+                return Err(anyhow!(
+                    "failed to spawn asr runner daemon: {e} (python={} root={})",
+                    py.display(),
+                    root.display()
+                ));
             }
         };
 
@@ -201,7 +210,12 @@ impl AsrService {
         let stdout = match child.stdout.take() {
             Some(s) => s,
             None => {
-                span.err("logic", "E_ASR_STDOUT_MISSING", "runner stdout missing", None);
+                span.err(
+                    "logic",
+                    "E_ASR_STDOUT_MISSING",
+                    "runner stdout missing",
+                    None,
+                );
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(anyhow!("runner stdout missing"));
@@ -256,7 +270,12 @@ impl AsrService {
                 let ready: AsrReady = match serde_json::from_value(v) {
                     Ok(r) => r,
                     Err(e) => {
-                        span.err("parse", "E_ASR_READY_SCHEMA", &format!("parse asr_ready failed: {e}"), None);
+                        span.err(
+                            "parse",
+                            "E_ASR_READY_SCHEMA",
+                            &format!("parse asr_ready failed: {e}"),
+                            None,
+                        );
                         let _ = child.kill();
                         let _ = child.wait();
                         return Err(anyhow!("parse asr_ready failed: {e}"));
@@ -265,7 +284,12 @@ impl AsrService {
                 if !ready.ok {
                     let _ = child.kill();
                     let _ = child.wait();
-                    span.err("process", "E_ASR_READY_NOT_OK", "asr runner ready not ok", None);
+                    span.err(
+                        "process",
+                        "E_ASR_READY_NOT_OK",
+                        "asr runner ready not ok",
+                        None,
+                    );
                     return Err(anyhow!("asr runner ready not ok"));
                 }
                 if ready.device_used != "cuda" {
@@ -334,7 +358,12 @@ impl AsrService {
         let child = match g.child.as_mut() {
             Some(c) => c,
             None => {
-                span.err("process", "E_ASR_NOT_STARTED", "asr runner not started", None);
+                span.err(
+                    "process",
+                    "E_ASR_NOT_STARTED",
+                    "asr runner not started",
+                    None,
+                );
                 return Err(anyhow!("asr runner not started"));
             }
         };
@@ -354,7 +383,12 @@ impl AsrService {
             "device": "cuda",
         });
         if let Err(e) = stdin.write_all(format!("{}\n", req).as_bytes()) {
-            span.err("io", "E_ASR_WRITE", &format!("failed to write runner request: {e}"), None);
+            span.err(
+                "io",
+                "E_ASR_WRITE",
+                &format!("failed to write runner request: {e}"),
+                None,
+            );
             return Err(anyhow!("failed to write runner request: {e}"));
         }
         stdin.flush().ok();
@@ -362,7 +396,12 @@ impl AsrService {
         let stdout = match g.stdout.as_mut() {
             Some(s) => s,
             None => {
-                span.err("logic", "E_ASR_STDOUT_MISSING", "runner stdout missing", None);
+                span.err(
+                    "logic",
+                    "E_ASR_STDOUT_MISSING",
+                    "runner stdout missing",
+                    None,
+                );
                 return Err(anyhow!("runner stdout missing"));
             }
         };
@@ -514,15 +553,4 @@ fn repo_root() -> Result<PathBuf> {
         .nth(3)
         .ok_or_else(|| anyhow!("failed to locate repo root from CARGO_MANIFEST_DIR"))?;
     Ok(root.to_path_buf())
-}
-
-fn default_python_path(root: &Path) -> PathBuf {
-    if let Ok(p) = std::env::var("TYPEVOICE_PYTHON") {
-        return PathBuf::from(p);
-    }
-    if cfg!(windows) {
-        root.join(".venv").join("Scripts").join("python.exe")
-    } else {
-        root.join(".venv").join("bin").join("python")
-    }
 }

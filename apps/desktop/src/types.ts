@@ -60,6 +60,23 @@ export type ApiKeyStatus = {
   reason?: string | null;
 };
 
+export type RuntimeToolchainStatus = {
+  ready: boolean;
+  code?: string | null;
+  message?: string | null;
+  toolchain_dir?: string | null;
+  platform: string;
+  expected_version: string;
+};
+
+export type RuntimePythonStatus = {
+  ready: boolean;
+  code?: string | null;
+  message?: string | null;
+  python_path?: string | null;
+  python_version?: string | null;
+};
+
 export type HistoryItem = {
   task_id: string;
   created_at_ms: number;

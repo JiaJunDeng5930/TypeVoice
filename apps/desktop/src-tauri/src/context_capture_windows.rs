@@ -309,7 +309,10 @@ fn screenshot_err(
     }
 }
 
-fn capture_window_png_diagnose(hwnd: HWND, max_side: u32) -> Result<ScreenshotRaw, ScreenshotDiagError> {
+fn capture_window_png_diagnose(
+    hwnd: HWND,
+    max_side: u32,
+) -> Result<ScreenshotRaw, ScreenshotDiagError> {
     let mut rect = RECT {
         left: 0,
         top: 0,
@@ -475,16 +478,17 @@ fn capture_window_png_diagnose(hwnd: HWND, max_side: u32) -> Result<ScreenshotRa
         }
 
         resize_convert_bgra_to_rgba(&src_bgra, w, h, &mut rgba, out_w, out_h);
-        let png_bytes = encode_png_rgba(&rgba, out_w, out_h).ok_or_else(|| ScreenshotDiagError {
-            step: "encode_png".to_string(),
-            api: "png::Encoder".to_string(),
-            api_ret: "None".to_string(),
-            last_error: 0,
-            note: Some("encode_png_rgba returned None".to_string()),
-            window_w: w,
-            window_h: h,
-            max_side,
-        })?;
+        let png_bytes =
+            encode_png_rgba(&rgba, out_w, out_h).ok_or_else(|| ScreenshotDiagError {
+                step: "encode_png".to_string(),
+                api: "png::Encoder".to_string(),
+                api_ret: "None".to_string(),
+                last_error: 0,
+                note: Some("encode_png_rgba returned None".to_string()),
+                window_w: w,
+                window_h: h,
+                max_side,
+            })?;
         Ok(ScreenshotRaw {
             png_bytes,
             width: out_w,

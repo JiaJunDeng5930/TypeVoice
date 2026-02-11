@@ -268,6 +268,17 @@ impl TaskManager {
                 context_pack::ContextSnapshot::default(),
             )
         };
+        crate::trace::event(
+            &data_dir,
+            Some(&task_id),
+            "Task",
+            "TASK.start_opts",
+            "ok",
+            Some(serde_json::json!({
+                "rewrite_requested": opts.rewrite_enabled,
+                "template_id": opts.template_id.as_deref(),
+            })),
+        );
 
         emit_event(
             &app,
@@ -473,6 +484,20 @@ impl TaskManager {
         let mut final_text = asr_text.clone();
         let mut rewrite_ms = None;
         let mut template_id = None;
+        let rewrite_entered = opts.rewrite_enabled && opts.template_id.is_some();
+        crate::trace::event(
+            &data_dir,
+            Some(&task_id),
+            "Task",
+            "TASK.rewrite_effective",
+            if rewrite_entered { "ok" } else { "skipped" },
+            Some(serde_json::json!({
+                "rewrite_requested": opts.rewrite_enabled,
+                "has_template": opts.template_id.is_some(),
+                "rewrite_entered": rewrite_entered,
+                "template_id": opts.template_id.as_deref(),
+            })),
+        );
         if opts.rewrite_enabled {
             if let Some(tid) = opts.template_id.clone() {
                 template_id = Some(tid.clone());

@@ -47,47 +47,23 @@ fn repo_root() -> Result<PathBuf> {
     Ok(root.to_path_buf())
 }
 
-fn default_python_path(root: &Path) -> PathBuf {
-    if let Ok(p) = std::env::var("TYPEVOICE_PYTHON") {
-        return PathBuf::from(p);
-    }
-    // Dev default: repo-local venv.
+fn resolve_tool_path(env_key: &str, candidate_file: &str) -> Result<String> {
+    let p = crate::toolchain::resolve_tool_binary(env_key, candidate_file)?;
+    Ok(p.display().to_string())
+}
+
+pub fn ffmpeg_cmd() -> Result<String> {
     if cfg!(windows) {
-        root.join(".venv").join("Scripts").join("python.exe")
-    } else {
-        root.join(".venv").join("bin").join("python")
+        return resolve_tool_path("TYPEVOICE_FFMPEG", "ffmpeg.exe");
     }
+    resolve_tool_path("TYPEVOICE_FFMPEG", "ffmpeg")
 }
 
-fn resolve_tool_path(env_key: &str, candidate_file: &str, fallback: &str) -> String {
-    if let Ok(p) = std::env::var(env_key) {
-        let t = p.trim();
-        if !t.is_empty() {
-            return t.to_string();
-        }
-    }
-
-    // In packaged apps it's common to place helper binaries next to the main executable.
+pub fn ffprobe_cmd() -> Result<String> {
     if cfg!(windows) {
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(dir) = exe.parent() {
-                let cand = dir.join(candidate_file);
-                if cand.exists() {
-                    return cand.display().to_string();
-                }
-            }
-        }
+        return resolve_tool_path("TYPEVOICE_FFPROBE", "ffprobe.exe");
     }
-
-    fallback.to_string()
-}
-
-pub fn ffmpeg_cmd() -> String {
-    resolve_tool_path("TYPEVOICE_FFMPEG", "ffmpeg.exe", "ffmpeg")
-}
-
-pub fn ffprobe_cmd() -> String {
-    resolve_tool_path("TYPEVOICE_FFPROBE", "ffprobe.exe", "ffprobe")
+    resolve_tool_path("TYPEVOICE_FFPROBE", "ffprobe")
 }
 
 fn truncate_stderr_bytes(mut b: Vec<u8>) -> Vec<u8> {
@@ -127,7 +103,7 @@ pub fn save_base64_file(task_id: &str, b64: &str, ext: &str) -> Result<PathBuf> 
 
 pub fn preprocess_ffmpeg(input: &Path, output: &Path) -> Result<u128> {
     let t0 = Instant::now();
-    let cmd = ffmpeg_cmd();
+    let cmd = ffmpeg_cmd()?;
     let out = Command::new(&cmd)
         .args([
             "-y",
@@ -175,12 +151,12 @@ pub fn transcribe_with_python_runner(
     model_id: &str,
 ) -> Result<(String, f64, String, u128)> {
     let root = repo_root()?;
-    let py = default_python_path(&root);
+    let py = crate::python_runtime::resolve_python_binary(&root)?;
     let t0 = Instant::now();
     let mut child = Command::new(py)
         .current_dir(&root)
         .env("PYTHONPATH", &root)
-        .env("TYPEVOICE_FFPROBE", ffprobe_cmd())
+        .env("TYPEVOICE_FFPROBE", ffprobe_cmd()?)
         .args(["-m", "asr_runner.runner", "--model", model_id])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -310,13 +286,13 @@ pub fn transcribe_with_python_runner_cancellable(
     pid_slot: &std::sync::Arc<std::sync::Mutex<Option<u32>>>,
 ) -> Result<(String, f64, String, u128)> {
     let root = repo_root()?;
-    let py = default_python_path(&root);
+    let py = crate::python_runtime::resolve_python_binary(&root)?;
     let t0 = Instant::now();
     let mut child = Command::new(py)
         .current_dir(&root)
         .env("PYTHONPATH", &root)
         // If the app bundles ffprobe, provide its location to the runner.
-        .env("TYPEVOICE_FFPROBE", ffprobe_cmd())
+        .env("TYPEVOICE_FFPROBE", ffprobe_cmd()?)
         .args(["-m", "asr_runner.runner", "--model", model_id])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -419,18 +395,18 @@ pub fn preprocess_ffmpeg_cancellable(
     token: &tokio_util::sync::CancellationToken,
     pid_slot: &std::sync::Arc<std::sync::Mutex<Option<u32>>>,
 ) -> Result<u128> {
+    let cmd = ffmpeg_cmd()?;
     let span = Span::start(
         data_dir,
         Some(task_id),
         "Preprocess",
         "FFMPEG.preprocess",
         Some(serde_json::json!({
-            "cmd_hint": cmd_hint_for_trace(&ffmpeg_cmd()),
+            "cmd_hint": cmd_hint_for_trace(&cmd),
         })),
     );
 
     let t0 = Instant::now();
-    let cmd = ffmpeg_cmd();
     let input_s = match input.to_str() {
         Some(s) => s,
         None => {
@@ -468,7 +444,12 @@ pub fn preprocess_ffmpeg_cancellable(
         Ok(c) => c,
         Err(e) => {
             if e.kind() == std::io::ErrorKind::NotFound {
-                span.err("process", "E_FFMPEG_NOT_FOUND", &format!("ffmpeg not found (cmd={cmd})"), None);
+                span.err(
+                    "process",
+                    "E_FFMPEG_NOT_FOUND",
+                    &format!("ffmpeg not found (cmd={cmd})"),
+                    None,
+                );
                 return Err(anyhow!("E_FFMPEG_NOT_FOUND: ffmpeg not found (cmd={cmd})"));
             }
             span.err(
@@ -477,7 +458,9 @@ pub fn preprocess_ffmpeg_cancellable(
                 &format!("failed to start ffmpeg (cmd={cmd}): {e}"),
                 None,
             );
-            return Err(anyhow!("E_FFMPEG_FAILED: failed to start ffmpeg (cmd={cmd}): {e}"));
+            return Err(anyhow!(
+                "E_FFMPEG_FAILED: failed to start ffmpeg (cmd={cmd}): {e}"
+            ));
         }
     };
 

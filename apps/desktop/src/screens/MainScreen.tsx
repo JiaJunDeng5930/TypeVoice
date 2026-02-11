@@ -3,7 +3,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { blobToBase64, guessAudioExtFromMime } from "../lib/audio";
 import { copyText } from "../lib/clipboard";
-import type { HistoryItem, Settings, TaskDone, TaskEvent } from "../types";
+import type {
+  HistoryItem,
+  RuntimePythonStatus,
+  RuntimeToolchainStatus,
+  Settings,
+  TaskDone,
+  TaskEvent,
+} from "../types";
 import { IconStart, IconStop, IconTranscribing } from "../ui/icons";
 
 type UiState = "idle" | "recording" | "transcribing" | "cancelling";
@@ -20,6 +27,27 @@ type Props = {
   pushToast: (msg: string, tone?: "default" | "ok" | "danger") => void;
   onHistoryChanged: () => void;
 };
+
+function errorMessage(err: unknown): string {
+  if (typeof err === "string") return err;
+  if (err && typeof err === "object" && "toString" in err) {
+    try {
+      return String(err);
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
+function transcribeErrorHint(err: unknown): string {
+  const raw = errorMessage(err);
+  if (raw.includes("E_TOOLCHAIN_NOT_READY")) return "TOOLCHAIN NOT READY";
+  if (raw.includes("E_TOOLCHAIN_CHECKSUM_MISMATCH")) return "TOOLCHAIN CHECKSUM ERROR";
+  if (raw.includes("E_TOOLCHAIN_VERSION_MISMATCH")) return "TOOLCHAIN VERSION ERROR";
+  if (raw.includes("E_PYTHON_NOT_READY")) return "PYTHON NOT READY";
+  return "TRANSCRIBE FAILED";
+}
 
 export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
   const [ui, setUi] = useState<UiState>("idle");
@@ -74,6 +102,23 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
 
   useEffect(() => {
     (async () => {
+      try {
+        const runtime = (await invoke("runtime_toolchain_status")) as RuntimeToolchainStatus;
+        if (!runtime.ready) {
+          pushToast("TOOLCHAIN NOT READY", "danger");
+        }
+      } catch {
+        // ignore
+      }
+      try {
+        const runtime = (await invoke("runtime_python_status")) as RuntimePythonStatus;
+        if (!runtime.ready) {
+          pushToast("PYTHON NOT READY", "danger");
+        }
+      } catch {
+        // ignore
+      }
+
       try {
         const rows = (await invoke("history_list", {
           limit: 1,
@@ -229,12 +274,13 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
             templateId: templateIdNow,
           })) as string;
           activeTaskIdRef.current = id;
-        } catch {
+        } catch (err) {
           activeTaskIdRef.current = "";
           setUi("idle");
-          pushToast("TRANSCRIBE FAILED", "danger");
+          const hint = transcribeErrorHint(err);
+          pushToast(hint, "danger");
           if (hotkeySessionRef.current) {
-            overlayFlash("ERROR", 1200, "TRANSCRIBE FAILED");
+            overlayFlash("ERROR", 1200, hint);
             hotkeySessionRef.current = false;
           }
         }

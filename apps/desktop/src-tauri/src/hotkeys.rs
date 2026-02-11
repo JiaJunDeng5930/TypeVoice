@@ -154,7 +154,9 @@ impl HotkeyManager {
                     "Hotkeys",
                     "HK.register.ptt",
                     "err",
-                    Some(serde_json::json!({"code": "E_HK_REGISTER_PTT", "ptt": ptt, "error": e.to_string()})),
+                    Some(
+                        serde_json::json!({"code": "E_HK_REGISTER_PTT", "ptt": ptt, "error": e.to_string()}),
+                    ),
                 );
             }
         }
@@ -178,15 +180,21 @@ impl HotkeyManager {
                     "Hotkeys",
                     "HK.register.toggle",
                     "err",
-                    Some(serde_json::json!({"code": "E_HK_REGISTER_TOGGLE", "toggle": toggle, "error": e.to_string()})),
+                    Some(
+                        serde_json::json!({"code": "E_HK_REGISTER_TOGGLE", "toggle": toggle, "error": e.to_string()}),
+                    ),
                 );
             }
         }
 
         // Surface the "same key" normalization explicitly in trace.
         if cfg.ptt.is_some() && cfg.toggle.is_none() {
-            if let (Some(raw_ptt), Some(raw_toggle)) = (s.hotkey_ptt.as_deref(), s.hotkey_toggle.as_deref()) {
-                if raw_ptt.trim().eq_ignore_ascii_case(raw_toggle.trim()) && !raw_ptt.trim().is_empty() {
+            if let (Some(raw_ptt), Some(raw_toggle)) =
+                (s.hotkey_ptt.as_deref(), s.hotkey_toggle.as_deref())
+            {
+                if raw_ptt.trim().eq_ignore_ascii_case(raw_toggle.trim())
+                    && !raw_ptt.trim().is_empty()
+                {
                     crate::trace::event(
                         data_dir,
                         None,

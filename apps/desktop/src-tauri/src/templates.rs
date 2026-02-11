@@ -102,7 +102,9 @@ pub fn load_templates(data_dir: &Path) -> Result<Vec<PromptTemplate>> {
     );
     if !p.exists() {
         let out = default_templates();
-        span.ok(Some(serde_json::json!({"source": "builtin", "count": out.len()})));
+        span.ok(Some(
+            serde_json::json!({"source": "builtin", "count": out.len()}),
+        ));
         return Ok(out);
     }
     let r: Result<Vec<PromptTemplate>> = (|| {
@@ -113,7 +115,9 @@ pub fn load_templates(data_dir: &Path) -> Result<Vec<PromptTemplate>> {
     })();
     match r {
         Ok(t) => {
-            span.ok(Some(serde_json::json!({"source": "file", "count": t.len()})));
+            span.ok(Some(
+                serde_json::json!({"source": "file", "count": t.len()}),
+            ));
             Ok(t)
         }
         Err(e) => {
@@ -163,7 +167,12 @@ pub fn upsert_template(data_dir: &Path, mut tpl: PromptTemplate) -> Result<Promp
         })),
     );
     if tpl.name.trim().is_empty() {
-        span.err("logic", "E_TPL_NAME_REQUIRED", "template name is required", None);
+        span.err(
+            "logic",
+            "E_TPL_NAME_REQUIRED",
+            "template name is required",
+            None,
+        );
         return Err(anyhow!("template name is required"));
     }
     if tpl.system_prompt.trim().is_empty() {
@@ -290,7 +299,12 @@ pub fn import_templates_json(data_dir: &Path, json_str: &str, mode: &str) -> Res
     let mut normalized = Vec::with_capacity(incoming.len());
     for mut t in incoming {
         if t.name.trim().is_empty() {
-            span.err("logic", "E_TPL_NAME_REQUIRED", "template name is required", None);
+            span.err(
+                "logic",
+                "E_TPL_NAME_REQUIRED",
+                "template name is required",
+                None,
+            );
             return Err(anyhow!("template name is required"));
         }
         if t.system_prompt.trim().is_empty() {
@@ -309,18 +323,18 @@ pub fn import_templates_json(data_dir: &Path, json_str: &str, mode: &str) -> Res
     }
 
     match mode {
-        "replace" => {
-            match save_templates(data_dir, &normalized) {
-                Ok(()) => {
-                    span.ok(Some(serde_json::json!({"mode": "replace", "count": normalized.len()})));
-                    Ok(normalized.len())
-                }
-                Err(e) => {
-                    span.err_anyhow("io", "E_TPL_SAVE", &e, None);
-                    Err(e)
-                }
+        "replace" => match save_templates(data_dir, &normalized) {
+            Ok(()) => {
+                span.ok(Some(
+                    serde_json::json!({"mode": "replace", "count": normalized.len()}),
+                ));
+                Ok(normalized.len())
             }
-        }
+            Err(e) => {
+                span.err_anyhow("io", "E_TPL_SAVE", &e, None);
+                Err(e)
+            }
+        },
         "merge" => {
             let existing = match load_templates(data_dir) {
                 Ok(v) => v,
@@ -338,7 +352,9 @@ pub fn import_templates_json(data_dir: &Path, json_str: &str, mode: &str) -> Res
             out.sort_by(|a, b| a.id.cmp(&b.id));
             match save_templates(data_dir, &out) {
                 Ok(()) => {
-                    span.ok(Some(serde_json::json!({"mode": "merge", "count": out.len()})));
+                    span.ok(Some(
+                        serde_json::json!({"mode": "merge", "count": out.len()}),
+                    ));
                     Ok(out.len())
                 }
                 Err(e) => {
@@ -349,7 +365,12 @@ pub fn import_templates_json(data_dir: &Path, json_str: &str, mode: &str) -> Res
         }
         _ => {
             let e = anyhow!("invalid import mode (expected 'merge' or 'replace')");
-            span.err_anyhow("logic", "E_TPL_IMPORT_MODE", &e, Some(serde_json::json!({"mode": mode})));
+            span.err_anyhow(
+                "logic",
+                "E_TPL_IMPORT_MODE",
+                &e,
+                Some(serde_json::json!({"mode": mode})),
+            );
             Err(e)
         }
     }

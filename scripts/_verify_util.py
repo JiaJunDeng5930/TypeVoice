@@ -21,6 +21,29 @@ VENV_PYTHON = _venv_python_path(REPO_ROOT)
 DEFAULT_LOCAL_MODEL_DIR = os.path.join(REPO_ROOT, "models", "Qwen3-ASR-0.6B")
 
 
+def _default_toolchain_dir() -> str:
+    if os.name == "nt":
+        return os.path.join(REPO_ROOT, "apps", "desktop", "src-tauri", "toolchain", "bin", "windows-x86_64")
+    return os.path.join(REPO_ROOT, "apps", "desktop", "src-tauri", "toolchain", "bin", "linux-x86_64")
+
+
+def resolve_tool_binary_or_fail(env_key: str, file_name: str) -> str:
+    env_path = os.environ.get(env_key, "").strip()
+    if env_path:
+        if os.path.isfile(env_path):
+            return env_path
+        raise RuntimeError(f"E_TOOLCHAIN_NOT_READY: {env_key} points to missing file: {env_path}")
+
+    toolchain_dir = os.environ.get("TYPEVOICE_TOOLCHAIN_DIR", "").strip() or _default_toolchain_dir()
+    cand = os.path.join(toolchain_dir, file_name)
+    if os.path.isfile(cand):
+        return cand
+    raise RuntimeError(
+        f"E_TOOLCHAIN_NOT_READY: missing tool binary {cand} "
+        f"(set {env_key} or TYPEVOICE_TOOLCHAIN_DIR)"
+    )
+
+
 def resolve_asr_model_id_or_exit() -> str:
     """Resolve ASR model id/path without triggering implicit downloads."""
     m = os.environ.get("TYPEVOICE_ASR_MODEL", "").strip()
@@ -52,7 +75,7 @@ def append_jsonl(path: str, obj: dict[str, Any]) -> None:
 
 
 def ffprobe_duration_seconds(path: str) -> float:
-    ffprobe = os.environ.get("TYPEVOICE_FFPROBE", "").strip() or "ffprobe"
+    ffprobe = resolve_tool_binary_or_fail("TYPEVOICE_FFPROBE", "ffprobe.exe" if os.name == "nt" else "ffprobe")
     out = subprocess.check_output(
         [
             ffprobe,
@@ -71,7 +94,7 @@ def ffprobe_duration_seconds(path: str) -> float:
 
 def ffmpeg_preprocess_to_wav(input_path: str, output_path: str) -> int:
     """Convert audio to 16kHz mono PCM WAV. Returns elapsed ms."""
-    ffmpeg = os.environ.get("TYPEVOICE_FFMPEG", "").strip() or "ffmpeg"
+    ffmpeg = resolve_tool_binary_or_fail("TYPEVOICE_FFMPEG", "ffmpeg.exe" if os.name == "nt" else "ffmpeg")
     t0 = now_ms()
     subprocess.check_call(
         [
@@ -96,7 +119,7 @@ def ffmpeg_preprocess_to_wav(input_path: str, output_path: str) -> int:
 
 def cancel_ffmpeg_preprocess(input_path: str, output_path: str, delay_ms: int = 100) -> int:
     """Start ffmpeg preprocess then kill; return cancel latency in ms."""
-    ffmpeg = os.environ.get("TYPEVOICE_FFMPEG", "").strip() or "ffmpeg"
+    ffmpeg = resolve_tool_binary_or_fail("TYPEVOICE_FFMPEG", "ffmpeg.exe" if os.name == "nt" else "ffmpeg")
     proc = subprocess.Popen(
         [
             ffmpeg,

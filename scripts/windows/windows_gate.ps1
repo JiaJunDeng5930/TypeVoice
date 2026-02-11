@@ -36,8 +36,6 @@ Ensure-Command "python"
 Ensure-Command "node"
 Ensure-Command "npm"
 Ensure-Command "cargo"
-Ensure-Command "ffmpeg"
-Ensure-Command "ffprobe"
 
 # Fast fail: Windows-only compile gate (catches Send/Sync and other Windows-specific errors).
 Info "running windows compile gate"
@@ -45,6 +43,14 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows\windows_compile_gate.
 
 # Optional speed-up: enable Rust compile cache if available.
 Try-Enable-Sccache $RepoRoot
+
+Info "downloading bundled ffmpeg toolchain"
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\download_ffmpeg_toolchain.ps1 -Platform all
+
+$ToolchainDir = Join-Path $RepoRoot "apps\desktop\src-tauri\toolchain\bin\windows-x86_64"
+$env:TYPEVOICE_TOOLCHAIN_DIR = $ToolchainDir
+$env:TYPEVOICE_FFMPEG = (Join-Path $ToolchainDir "ffmpeg.exe")
+$env:TYPEVOICE_FFPROBE = (Join-Path $ToolchainDir "ffprobe.exe")
 
 # Python venv (repo-local)
 $VenvPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"

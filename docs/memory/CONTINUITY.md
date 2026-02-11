@@ -136,3 +136,18 @@ UNCONFIRMED
   - 推荐验证：在目标机器 data dir 查看 `trace.jsonl` 是否产生新行；若没有，检查环境变量。
 - 选窗策略是否需要排除 Shell/任务栏窗口以降低“全黑/很窄截图”的概率。
   - 推荐验证：用 trace 对比 `CTX.prev_window.info` 记录的 `process_image` 与 `CTX.prev_window.screenshot` 的成功/尺寸分布，人工评估是否需要过滤。
+
+## 更正与最新状态（2026-02-11）
+
+VERIFIED
+
+- 本轮出现“问题越修越乱”的直接原因不是 FFmpeg/CUDA 本身失效，而是执行过程偏离了用户指定边界：
+  - 用户要求是“就地修环境变量”，执行时却切换到了新的 Windows 工作副本 `C:\\Users\\micro\\Projects\\TypeVoice-win` 并启动了额外安装流程，导致引入了与原环境不同的新变量（如 `.venv`/模型状态不一致）。
+- 已完成清理（按用户要求）：
+  - 删除 `C:\\Users\\micro\\Projects\\TypeVoice-win\\.venv`
+  - 删除 `C:\\Users\\micro\\Projects\\TypeVoice-win\\apps\\desktop\\src-tauri\\toolchain\\bin\\windows-x86_64\\ffmpeg.exe`
+  - 删除 `C:\\Users\\micro\\Projects\\TypeVoice-win\\apps\\desktop\\src-tauri\\toolchain\\bin\\windows-x86_64\\ffprobe.exe`
+  - 删除 `C:\\Users\\micro\\Projects\\TypeVoice-win\\tmp\\windows-debug`
+  - 复核结果：上述路径均不存在，且 `NO_TYPEVOICE_PROCS`（无 TypeVoice 相关残留进程）。
+- 后续执行约束已落盘到 `USER_PREFS.md` 与 `DECISIONS.md`：
+  - 修复类任务必须“原环境 + 最小闭环 + 单变量变更”，禁止未获授权的环境迁移和额外安装。

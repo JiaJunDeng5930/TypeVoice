@@ -193,7 +193,10 @@ fn maybe_backtrace_string() -> Option<String> {
     }
     let bt = std::backtrace::Backtrace::force_capture();
     let s = format!("{bt:?}");
-    Some(clamp_chars(&redact_user_paths(&s), DEFAULT_BACKTRACE_MAX_CHARS))
+    Some(clamp_chars(
+        &redact_user_paths(&s),
+        DEFAULT_BACKTRACE_MAX_CHARS,
+    ))
 }
 
 fn merge_ctx(base: serde_json::Map<String, Value>, extra: Option<Value>) -> Value {
@@ -216,7 +219,10 @@ fn merge_ctx(base: serde_json::Map<String, Value>, extra: Option<Value>) -> Valu
 
 fn ctx_for_anyhow_error(err: &AnyhowError, extra: Option<Value>) -> Value {
     let mut m = serde_json::Map::new();
-    m.insert("err_chain".to_string(), serde_json::json!(anyhow_chain(err)));
+    m.insert(
+        "err_chain".to_string(),
+        serde_json::json!(anyhow_chain(err)),
+    );
     if let Some(bt) = maybe_backtrace_string() {
         m.insert("backtrace".to_string(), serde_json::json!(bt));
     }
@@ -247,7 +253,7 @@ pub struct TraceEvent {
     pub task_id: Option<String>,
     pub stage: String,
     pub step_id: String,
-    pub op: String, // start|end|event
+    pub op: String,     // start|end|event
     pub status: String, // ok|err|skipped|aborted
     pub duration_ms: Option<u128>,
     pub error: Option<TraceError>,

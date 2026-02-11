@@ -68,7 +68,12 @@ fn config_from_settings(s: &settings::Settings) -> ContextConfig {
 #[cfg(windows)]
 fn env_u32(key: &str, default: u32) -> u32 {
     match std::env::var(key) {
-        Ok(v) => v.trim().parse::<u32>().ok().filter(|n| *n > 0).unwrap_or(default),
+        Ok(v) => v
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|n| *n > 0)
+            .unwrap_or(default),
         Err(_) => default,
     }
 }
@@ -229,8 +234,7 @@ impl ContextService {
                         "has_title": snap.prev_window.as_ref().and_then(|w| w.title.as_ref()).is_some(),
                         "has_process": snap.prev_window.as_ref().and_then(|w| w.process_image.as_ref()).is_some(),
                     })));
-                }
-                else {
+                } else {
                     info_span.skipped("no_last_external_window", None);
                 }
 
@@ -245,7 +249,9 @@ impl ContextService {
                     },
                 );
                 let max_side = env_u32("TYPEVOICE_CONTEXT_SCREENSHOT_MAX_SIDE", 1600);
-                let sc = g.win.capture_last_external_window_png_diag_best_effort(max_side);
+                let sc = g
+                    .win
+                    .capture_last_external_window_png_diag_best_effort(max_side);
                 if let Some(raw) = sc.raw {
                     let sha = crate::context_pack::sha256_hex(&raw.png_bytes);
                     snap.screenshot = Some(crate::context_pack::ScreenshotPng {
@@ -266,12 +272,14 @@ impl ContextService {
                     // This is OFF by default because screenshots are sensitive.
                     if debug_log::verbose_enabled() && debug_log::include_screenshots() {
                         if let Some(sc) = snap.screenshot.as_ref() {
-                            if let Some(info) = debug_log::write_payload_binary_no_truncate_best_effort(
-                                data_dir,
-                                task_id,
-                                "prev_window.png",
-                                sc.png_bytes.clone(),
-                            ) {
+                            if let Some(info) =
+                                debug_log::write_payload_binary_no_truncate_best_effort(
+                                    data_dir,
+                                    task_id,
+                                    "prev_window.png",
+                                    sc.png_bytes.clone(),
+                                )
+                            {
                                 debug_log::emit_debug_event_best_effort(
                                     data_dir,
                                     "debug_prev_window_png",
@@ -292,7 +300,9 @@ impl ContextService {
                     shot_span.err(
                         "winapi",
                         "E_SCREENSHOT",
-                        &err.note.clone().unwrap_or_else(|| "screenshot failed".to_string()),
+                        &err.note
+                            .clone()
+                            .unwrap_or_else(|| "screenshot failed".to_string()),
                         Some(serde_json::json!({
                             "step": err.step,
                             "api": err.api,
