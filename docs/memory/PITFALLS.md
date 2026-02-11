@@ -268,3 +268,22 @@ VERIFIED（2026-02-11，Windows trace/metrics 复核）
 UNCONFIRMED（待进一步人工确认）
 
 - `ConsoleHost_history.txt` 显示近期执行过 `setx PATH \"$env:PATH;$prefix\"`，这类操作可能改写/截断用户 PATH，并导致某些既有目录（如 WinGet Links）丢失；但目前无法从系统日志精确还原这次 PATH 丢失的唯一触发动作。
+
+## Windows Debug 多实例并存：全局热键注册冲突（`HotKey already registered`）
+
+VERIFIED（2026-02-11，trace + 进程排查）
+
+- 复现条件：
+  - 同时存在多套 `tauri dev` / `cargo run` / `typevoice-desktop.exe` 会话（旧会话未清理）。
+  - 新会话启动时尝试注册全局热键（默认 `F9`/`F10`）。
+- 现象：
+  - `trace.jsonl` 出现：
+    - `HK.register.ptt` -> `E_HK_REGISTER_PTT`
+    - `HK.register.toggle` -> `E_HK_REGISTER_TOGGLE`
+    - 错误信息均为 `HotKey already registered`。
+  - 用户侧表现为“快捷键无效”，并可能伴随窗口状态混乱（容易误判为白屏/前端问题）。
+- 处理方式：
+  - 拉起新 Debug 会话前，先清理所有旧的 TypeVoice 开发进程（`node/cargo/typevoice-desktop/cmd` 相关链路）并释放 1420 端口。
+  - 清理后再启动单实例；复核 `trace.jsonl` 最新 `HK.apply` 无 `HK.register.* err`。
+- 本次复核结果：
+  - 在清理旧实例后，最新 `HK.apply`（`ts_ms=1770797137010`）为 `ok` 且无注册冲突，热键注册恢复正常。
