@@ -114,6 +114,7 @@ VERIFIED
 - 不增加 UI 预览/勾选流程；上下文采集与发送应自动完成（用户偏好：`docs/memory/USER_PREFS.md`）。
 - 诊断信息必须落盘可定位（见 `docs/memory/SPEC.md` 的“可诊断性”硬约束），且不得落盘 API key 与截图像素/base64（除非显式 debug 开关允许）。
 - 禁止手工维护 `file:line` 常量；定位依赖运行时 backtrace + 稳定 `step_id`/`code`。
+- 对 bug 修复/功能更新后的验证流程，必须包含 Windows 侧“同步最新源码 -> 重新编译 -> Debug 模式拉起”，并与 Linux 侧验证一起执行（不可只测单侧）。
 
 ## 风险与坑（指向 PITFALLS）
 
