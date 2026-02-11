@@ -285,5 +285,22 @@ VERIFIED
 UNCONFIRMED
 
 - Windows 实机热键连续录音回归尚未在本轮执行（需复核 `trace.jsonl` 中 `CMD.start_transcribe_recording_base64` 与 `TASK.rewrite_effective`）。
+
+## 更正与最新状态（2026-02-11，Windows 必做步骤已补齐）
+
+VERIFIED
+
+- 已按要求补齐 Windows 侧“同步最新源码 -> 重新编译 -> Debug 模式拉起”：
+  - Windows 工作副本 `D:\\Projects\\TypeVoice` 已从 `1df910c` fast-forward 到 `91a6e77`。
+  - Windows 编译闸门已执行并通过：
+    - 命令：`scripts/windows/windows_compile_gate.ps1`
+    - 结果：`PASS`（`cargo check --locked` 成功）。
+  - 已清理旧的 TypeVoice 开发进程并拉起最新 `npm run tauri dev` 会话。
+  - 进程复核：存在最新 `node/cargo/typevoice-desktop` 三件套。
+  - 连通性复核：Windows 本机 `http://localhost:1420` 返回 `200`。
+
+UNCONFIRMED
+
+- 本轮尚未完成“连续热键录音 + trace 对账”的专项回归（进程与编译均已就位，可直接执行）。
   - 检查 `App.reloadSettings` 的 `catch -> setSettings({})` 是否在某些时序下覆盖了有效设置；
   - 对比 UI 按钮路径与热键路径在同一会话下的启动参数差异，确认是否仅热键受影响。
