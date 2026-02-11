@@ -217,6 +217,24 @@ UNCONFIRMED（如未来要降低发生率）
 
 - 可能需要在“上一窗口选择策略”里排除 Shell/任务栏窗口，或改用其他抓取路径（例如 DWM/BitBlt 等），但需在目标机器验证其兼容性与隐私影响后再决策。
 
+更正（2026-02-12，本轮“黑图”专项复盘）
+
+VERIFIED
+
+- 这次已把“黑图”从现象定位到可复核根因链，且不是 PNG 编码/落盘环节损坏：
+  - 在 `debug/*/prev_window.png` 的 10 个样本中，7 个样本为全黑或黑条（`YAVG=16`），并且哈希高度重复（例如 `c479...` 连续出现 5 次，`eac3...` 为 `1600x48` 黑条）。
+  - 全量 trace 中 `CTX.prev_window.screenshot op=end status=ok` 的 38 条成功样本里，有 27 条落在这 3 个“黑图哈希”（`c479...`、`fb2d...`、`eac3...`）。
+- 根因 1（选窗链路）：
+  - `ForegroundTracker` 仅按“`pid != this_pid`”筛选前台窗口（`apps/desktop/src-tauri/src/context_capture_windows.rs:233`、`apps/desktop/src-tauri/src/context_capture_windows.rs:237`、`apps/desktop/src-tauri/src/context_capture_windows.rs:240`），未过滤 Shell/任务栏/任务切换器等窗口。
+  - 证据样本中黑图对应的 `PREVIOUS WINDOW` 多次为 `title=任务切换`、`process=C:\\Windows\\explorer.exe`，以及无标题 `explorer.exe`（对应 `1600x48`）。
+- 根因 2（抓图链路）：
+  - 当前实现只把 `PrintWindow != 0` 和 `GetDIBits != 0` 视为成功（`apps/desktop/src-tauri/src/context_capture_windows.rs:410`、`apps/desktop/src-tauri/src/context_capture_windows.rs:413`、`apps/desktop/src-tauri/src/context_capture_windows.rs:468`），没有像素有效性校验，因此“成功返回但全黑像素”会被当作 `status=ok` 继续发送给 LLM。
+  - 该现象不只发生在 `explorer.exe`：已有样本在 `title=OpenClaw Control - Google Chrome` 也得到固定全黑图（同一黑图哈希 `fb2d...`），说明 `PrintWindow` 对部分窗口类型/渲染路径本身就是 best-effort。
+
+UNCONFIRMED
+
+- `fb2d...` 这组高频全黑图在最近 16 次样本中对应的具体窗口标题（近期未开启截图 debug 落盘，trace 仅含布尔字段），仍待补采样本确认。
+
 ## 通用：日志不足导致无法定位根本原因（缺少 error chain / backtrace / 稳定 step_id）
 
 VERIFIED（2026-02-10，问题复盘）

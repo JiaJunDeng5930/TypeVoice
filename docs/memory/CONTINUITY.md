@@ -520,3 +520,22 @@ UNCONFIRMED
   - 推荐验证：固定 20 次样本并记录失败分布。
 - `E_SCREENSHOT window has zero size` 是否需要升级为显式配置开关。
   - 推荐验证：按周统计频率与对 rewrite 质量影响再决策。
+
+## 更正与最新状态（2026-02-12，Windows 黑图根因已定位）
+
+VERIFIED
+
+- 已完成“最近几次 Windows debug 日志 + 图片”专项复核，黑图问题根因已定位且可复核：
+  1. 选窗阶段会把 Shell/任务切换器/任务栏等窗口当作“上一外部窗口”（`ForegroundTracker` 仅排除本进程 PID，无窗口类型过滤）。
+  2. 抓图阶段 `PrintWindow/GetDIBits` 即使返回成功，也可能得到全黑像素；当前实现会把这类结果判定为 `status=ok` 并继续进入 LLM 请求。
+- 证据链（同一数据目录）：
+  - `debug/*/prev_window.png` 10 张样本中 7 张全黑或黑条（`YAVG=16`，且重复哈希）。
+  - `trace.jsonl` 里 `CTX.prev_window.screenshot status=ok` 共 38 条，其中 27 条落在 3 个黑图哈希（`c479...`/`fb2d...`/`eac3...`）。
+  - 黑图样本对应的 `PREVIOUS WINDOW` 多次为 `title=任务切换`、`process=C:\\Windows\\explorer.exe`；另有 `Chrome` 窗口样本也出现全黑，说明不仅是“选到 explorer”单一原因。
+- 结论边界：
+  - 该问题已定位为“Windows 选窗策略 + PrintWindow 平台兼容性”组合问题；
+  - 不是 `debug` 图片保存路径、PNG 编码、或 trace 记录链路导致的伪黑图。
+
+UNCONFIRMED
+
+- 最近 16 次 `fb2d...` 高频黑图样本在当前 trace 中仅有 `has_title/has_process` 布尔信息（未含具体标题/进程字符串）；若要进一步细分触发窗口类型，需要在相同复现场景下再次开启截图 debug 落盘采样。
