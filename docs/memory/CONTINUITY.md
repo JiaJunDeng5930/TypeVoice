@@ -64,6 +64,9 @@ VERIFIED（截至 2026-02-10）
   - `ffmpeg/ffprobe` 仍安装在 WinGet 目录（`%LOCALAPPDATA%\\Microsoft\\WinGet\\...`）；
   - 但当前 User/Machine PATH 均缺失 `%LOCALAPPDATA%\\Microsoft\\WinGet\\Links`，导致 `where ffmpeg` 失败；
   - 临时将该目录加到进程 PATH 后可立即解析，证明问题是 PATH 丢失而非二进制缺失。
+- 已完成修复：
+  - 将 `%LOCALAPPDATA%\\Microsoft\\WinGet\\Links` 持久写入用户 PATH，并规范化路径分隔（移除误写入的双反斜杠片段）。
+  - 复核：在 Windows 合成环境（Machine+User PATH）下 `where ffmpeg/ffprobe` 与 `ffmpeg -version/ffprobe -version` 均通过；Linux 侧 `which ffmpeg/ffprobe` 也保持正常。
 
 ### Next
 

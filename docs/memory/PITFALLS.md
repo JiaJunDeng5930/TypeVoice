@@ -258,6 +258,13 @@ VERIFIED（2026-02-11，Windows trace/metrics 复核）
 - 但当前 User/Machine `PATH` 均不包含 `%LOCALAPPDATA%\\Microsoft\\WinGet\\Links`，因此 `where ffmpeg` 与 `where ffprobe` 失败，TypeVoice fallback 到 `cmd=ffmpeg` 时触发 `E_FFMPEG_NOT_FOUND`。
 - 临时在当前进程前置该目录后，`where ffmpeg` / `where ffprobe` 立即可解析，验证了“二进制存在但 PATH 丢失”是直接原因。
 
+更正（VERIFIED，2026-02-11，已修复）
+
+- 已将 `%LOCALAPPDATA%\\Microsoft\\WinGet\\Links` 持久加入 `HKCU\\Environment\\Path`，并做路径规范化（去除误写入的 `\\` 双反斜杠片段）。
+- 验证结果：
+  - 在“Machine PATH + User PATH”合成环境中，`where ffmpeg` / `where ffprobe` 均可解析到 `C:\\Users\\micro\\AppData\\Local\\Microsoft\\WinGet\\Links\\...`；
+  - `ffmpeg -version` / `ffprobe -version` 可正常返回版本号（8.0.1-full_build）。
+
 UNCONFIRMED（待进一步人工确认）
 
 - `ConsoleHost_history.txt` 显示近期执行过 `setx PATH \"$env:PATH;$prefix\"`，这类操作可能改写/截断用户 PATH，并导致某些既有目录（如 WinGet Links）丢失；但目前无法从系统日志精确还原这次 PATH 丢失的唯一触发动作。
