@@ -460,3 +460,25 @@ UNCONFIRMED
 - 当前高优先怀疑点：
   - 前端运行态 settings 可能在某个时序分支回落为默认值（例如 `setSettings({})`）；
   - 或存在未覆盖的事件链路仍绕过最新配置快照。
+
+## 热键配置字段为 `null` 时，严格模式会直接导致快捷键全失效（E_HK_CONFIG）
+
+VERIFIED（2026-02-12，Windows 运行日志复核）
+
+- 触发条件：运行时 `settings.json` 中 `hotkeys_enabled/hotkey_ptt/hotkey_toggle/hotkeys_show_overlay` 为 `null`。
+- 现象：启动阶段 `HK.apply` 直接 `status=err`，错误码 `E_HK_CONFIG`，错误链含 `E_SETTINGS_HOTKEYS_ENABLED_MISSING`；表现为“快捷键完全没反应”。
+- 证据：`/mnt/d/Projects/TypeVoice/tmp/typevoice-data/trace.jsonl`（历史样本行号约 `1439/1461`）。
+- 处理：把上述字段显式写为兼容值（例如 `true/F9/F10/true`）并重启进程，`HK.apply` 恢复 `status=ok`。
+- 防复发：排障第一步先 `jq` 检查运行时 settings，不要先怀疑系统级快捷键权限。
+
+## trace/metrics 多任务交织，若不按 `task_id` 聚合会产生误判
+
+VERIFIED（2026-02-12，日志复核）
+
+- 触发条件：连续快速触发多次任务（热键或按钮），`trace.jsonl` 与 `metrics.jsonl` 交织写入。
+- 现象：刚看到一条失败（如 `E_ASR_FAILED`）就误判“当前这次也失败”，但相邻 task 可能已成功完成 rewrite 与 task_done。
+- 证据：
+  - 失败样本：`task_id=755ea513-6668-40a0-a67e-fc1750d16638`（`E_ASR_FAILED`）
+  - 成功样本：`task_id=4779b2ec-6c53-458b-8c96-a1bf1eab0390`（`Rewrite completed + task_done`）
+  - 两者在同一时间窗相邻出现，易被肉眼混淆。
+- 处理：所有回归结论必须“按 task_id 聚合”看完整链路（start -> rewrite -> persist -> task_done），禁止仅凭 tail 末尾单行下结论。

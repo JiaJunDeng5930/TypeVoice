@@ -318,3 +318,114 @@ VERIFIED
     - `http://localhost:1420` 返回 `200`
   - 检查 `App.reloadSettings` 的 `catch -> setSettings({})` 是否在某些时序下覆盖了有效设置；
   - 对比 UI 按钮路径与热键路径在同一会话下的启动参数差异，确认是否仅热键受影响。
+
+## HANDOFF SNAPSHOT（2026-02-12 00:30 CST，可直接接班）
+
+### 当前有效目标（与 SPEC 对齐）
+
+VERIFIED
+
+- 保持 MVP 主链路稳定：`Record -> Preprocess -> Transcribe -> Rewrite(可选) -> Persist -> Copy`，其中 rewrite 由后端单点读取 settings 决定，不允许前端/热键路径再出现状态副本漂移。对齐 `docs/memory/SPEC.md` 第 1/2/4 节。
+- 保持“可诊断性”硬约束：失败必须能在落盘日志中定位（`step_id + code + error chain/backtrace`），不能依赖控制台输出。对齐 `docs/memory/SPEC.md` 第 4.1 节。
+
+### 当前状态（Done / Now / Next）
+
+#### Done
+
+VERIFIED（本轮已复核）
+
+- `AGENTS.md` 索引已按技能脚本更新并通过检查：
+  - `python /home/atticusdeng/.agents/skills/agents-md-project-index/scripts/update_agents_md_project_index.py`
+  - `python /home/atticusdeng/.agents/skills/agents-md-project-index/scripts/update_agents_md_project_index.py --check`
+- 最新运行日志显示 hotkey + rewrite 链路可用：
+  - `trace.jsonl`：`HK.apply status=ok`（`/mnt/d/Projects/TypeVoice/tmp/typevoice-data/trace.jsonl:1501`、`/mnt/d/Projects/TypeVoice/tmp/typevoice-data/trace.jsonl:1503`）。
+  - `trace.jsonl`：任务启动参数来自 settings，且 rewrite 打开（`/mnt/d/Projects/TypeVoice/tmp/typevoice-data/trace.jsonl:1513`）。
+  - `trace.jsonl`：`TASK.rewrite_effective rewrite_entered=true`（`/mnt/d/Projects/TypeVoice/tmp/typevoice-data/trace.jsonl:1533`）。
+  - `trace.jsonl`：`LLM.rewrite status=ok, status=200`（`/mnt/d/Projects/TypeVoice/tmp/typevoice-data/trace.jsonl:1540`）。
+  - `metrics.jsonl`：`Rewrite completed -> task_done`（`/mnt/d/Projects/TypeVoice/tmp/typevoice-data/metrics.jsonl:1116`、`/mnt/d/Projects/TypeVoice/tmp/typevoice-data/metrics.jsonl:1120`）。
+
+#### Now
+
+VERIFIED
+
+- rewrite 消失/不生效主问题当前可复现为“已恢复”，不再是持续阻断项。
+- 当前仍存在非阻断噪声样本：
+  - ASR 空文本失败（`/mnt/d/Projects/TypeVoice/tmp/typevoice-data/metrics.jsonl:1109`，`E_ASR_FAILED`）。
+  - 上一窗口截图偶发零尺寸（`/mnt/d/Projects/TypeVoice/tmp/typevoice-data/trace.jsonl:1479`，`E_SCREENSHOT window has zero size`）。
+
+#### Next
+
+VERIFIED（建议执行顺序）
+
+1. 连续做 5~10 次热键触发回归，确认每次 `CMD.start_transcribe_recording_base64.ctx.rewrite_enabled/source/template_id` 都稳定（尤其 `source="settings"`）。
+2. 针对 ASR 空文本做最小复现采样（短语音/静音/噪声边界），按 `task_id` 聚合 trace+metrics，区分“输入问题”与“ASR runner 返回异常”。
+3. 若截图零尺寸频率升高，再进入选窗策略优化；若低频且不阻断 rewrite，则继续保持 best-effort。
+
+### 当前工作集（关键文件路径、关键命令、关键约束）
+
+#### 关键文件路径
+
+VERIFIED
+
+- `apps/desktop/src-tauri/src/settings.rs`（严格配置解析：rewrite/hotkey）
+- `apps/desktop/src-tauri/src/hotkeys.rs`（`HK.apply` 与热键配置错误码）
+- `apps/desktop/src-tauri/src/lib.rs`（命令入口，rewrite 启动参数来源）
+- `apps/desktop/src/screens/MainScreen.tsx`（热键监听生命周期与前端录音触发）
+- `apps/desktop/src-tauri/src/context_capture.rs`
+- `apps/desktop/src-tauri/src/context_capture_windows.rs`
+- `apps/desktop/src-tauri/src/llm.rs`
+- `/mnt/d/Projects/TypeVoice/tmp/typevoice-data/settings.json`（当前运行时配置）
+- `/mnt/d/Projects/TypeVoice/tmp/typevoice-data/trace.jsonl`
+- `/mnt/d/Projects/TypeVoice/tmp/typevoice-data/metrics.jsonl`
+
+#### 关键命令
+
+VERIFIED
+
+- 更新/校验索引：
+  - `python /home/atticusdeng/.agents/skills/agents-md-project-index/scripts/update_agents_md_project_index.py`
+  - `python /home/atticusdeng/.agents/skills/agents-md-project-index/scripts/update_agents_md_project_index.py --check`
+- 日志快查：
+  - `rg -n 'HK.apply|CMD.start_transcribe_recording_base64|TASK.rewrite_effective|LLM.rewrite|E_ASR_FAILED' /mnt/d/Projects/TypeVoice/tmp/typevoice-data/trace.jsonl`
+  - `rg -n 'task_done|Rewrite|E_ASR_FAILED' /mnt/d/Projects/TypeVoice/tmp/typevoice-data/metrics.jsonl`
+- 运行态配置核对：
+  - `jq '{hotkeys_enabled,hotkey_ptt,hotkey_toggle,hotkeys_show_overlay,rewrite_enabled,rewrite_template_id}' /mnt/d/Projects/TypeVoice/tmp/typevoice-data/settings.json`
+
+#### 关键约束
+
+VERIFIED
+
+- 单一状态不允许副本：rewrite/hotkey 运行态只以后端 `settings` 解析结果为准。
+- 不允许静默兜底：缺失配置直接报稳定错误码（例如 `E_HK_CONFIG` / `E_SETTINGS_*`），不再隐式默认。
+- 回归判定必须“按 task_id 看完整链路”，不能只看日志末尾是否出现任意 `err/failed`。
+
+### 风险与坑（本阶段新增/高复发，指向 PITFALLS）
+
+VERIFIED
+
+- 旧版或损坏的 `settings.json` 含 `null` 热键字段时，启动会报 `E_HK_CONFIG`，表现为“快捷键全部失效”；见 `docs/memory/PITFALLS.md` 新增条目“热键配置为 null 导致 HK.apply 失败（E_HK_CONFIG）”。
+- trace/metrics 是多任务并发交织写入，若不按 `task_id` 聚合，容易把“上一条失败”误判为“当前测试失败”；见 `docs/memory/PITFALLS.md` 新增条目“并发日志交织导致误判（需按 task_id 聚合）”。
+- `E_ASR_FAILED: Empty ASR text` 仍会偶发，容易被误认为 rewrite 失效；见 `docs/memory/PITFALLS.md` 既有 ASR 相关条目与本轮补充。
+
+### 未确认事项（UNCONFIRMED + 推荐验证动作）
+
+UNCONFIRMED
+
+- 当前 `settings.json` 同时存在 `rewrite_template_id` 与 `active_template_id:null`，运行时是否会长期只读前者（兼容字段策略是否需清理）。
+  - 推荐验证：在 `settings.rs` 明确字段优先级，并增加单测覆盖“旧字段/空字段/混合字段”。
+- `E_ASR_FAILED: Empty ASR text` 的主因占比（静音输入 vs runner 偶发）尚无量化。
+  - 推荐验证：固定 20 次短样本（含静音/低音量/正常语音）并统计失败分布，记录到 `metrics`。
+- `E_SCREENSHOT window has zero size` 当前作为 best-effort 非阻断处理，是否需要升为可配置开关尚未决策。
+  - 推荐验证：统计一周内该错误频次与对 rewrite 质量影响，再决定是否调整选窗策略。
+
+## 更正与最新状态（2026-02-12，AGENTS 索引排除集已纠正）
+
+VERIFIED
+
+- 已按项目完整排除目录集重建 `AGENTS.md` 索引，恢复对 `fixtures/metrics/models/tmp/target` 等目录的忽略。
+- 已使用同一组 `--exclude-dir` 参数执行 `--check` 校验通过。
+
+UNCONFIRMED
+
+- 若后续通过不同命令再次更新索引，存在“回退到默认排除集”的复发风险。
+- 推荐验证：每次更新后固定执行同参 `--check`，并人工抽查 `AGENTS.md` 中 `exclude_dirs` 行。

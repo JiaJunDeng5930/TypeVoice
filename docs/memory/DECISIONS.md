@@ -248,3 +248,26 @@ VERIFIED（2026-02-11）
   - `templates::load_templates` 在 `templates.json` 缺失时返回 `E_TPL_FILE_NOT_FOUND`，不再隐式使用 `default_templates()`。
 - 取舍：
   - 更早暴露配置问题，避免“看起来可用但实际用了另一套模板”的隐性漂移。
+
+## AGENTS 索引维护采用“项目完整排除目录集”，禁止回退默认排除
+
+VERIFIED（2026-02-12）
+
+- 背景：默认脚本排除集不足以覆盖本项目的大量无索引价值目录（例如 `fixtures/metrics/models/tmp/target`），会导致 AGENTS 索引质量下降并污染检索上下文。
+- 决策：更新 `AGENTS.md` 索引时固定使用项目完整排除目录集（与当前 AGENTS block 中 `exclude_dirs` 保持一致），不得回退脚本默认排除集。
+- 执行命令：
+  - `python /home/atticusdeng/.agents/skills/agents-md-project-index/scripts/update_agents_md_project_index.py --exclude-dir ...`
+  - `python /home/atticusdeng/.agents/skills/agents-md-project-index/scripts/update_agents_md_project_index.py --check --exclude-dir ...`
+- 复核标准：`AGENTS.md` 中 `exclude_dirs` 必须包含 `.cache/.git/.mypy_cache/.next/.parcel-cache/.pnpm-store/.pytest_cache/.ruff_cache/.turbo/.venv/.yarn/__pycache__/build/coverage/dist/fixtures/metrics/models/node_modules/out/target/temp/tmp/venv`。
+
+## 日志验收口径：所有“可用/不可用”结论必须绑定单一 task_id
+
+VERIFIED（2026-02-12）
+
+- 背景：trace/metrics 多任务并发交织，单看 tail 末尾会把上一任务失败误读为当前任务失败。
+- 决策：对 rewrite/hotkey/asr 的验收结论，必须基于“同一 task_id 的完整链路”给出，不允许跨 task 拼接。
+- 最小证据链：
+  - `CMD.start_transcribe_recording_base64`（起点参数）
+  - `TASK.rewrite_effective`（是否进入 rewrite）
+  - `LLM.rewrite`（若开启 rewrite）
+  - `task_done` 或 `status=failed`（终态）
