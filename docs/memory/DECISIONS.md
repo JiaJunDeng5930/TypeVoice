@@ -198,3 +198,20 @@ VERIFIED（2026-02-11）
 - 取舍：
   - 增加少量 `ref` 与样板代码，换取监听生命周期确定性和热键路径参数一致性；
   - 避免后续再出现“同一 settings 下 UI 与热键行为不一致”。
+
+## Windows 运行态与源码一致性的执行策略：先同步提交，再清理旧会话，最后单实例拉起
+
+VERIFIED（2026-02-11）
+
+- 背景：
+  - 用户要求“把 Windows 上的进程更新到最新”。
+  - 历史上多次出现“源码已更新但运行态仍是旧进程”或“多实例叠加导致热键冲突”。
+- 决策：
+  - 固化执行顺序为：
+    1. 先让 Windows 工作副本 fast-forward 到主仓最新提交；
+    2. 清理旧的 `node/cargo/typevoice-desktop` 相关会话；
+    3. 再启动单一最新 `tauri dev` 会话并做连通性验证。
+- 复核方式：
+  - `git -C /mnt/d/Projects/TypeVoice rev-parse --short HEAD` 与主仓一致；
+  - 进程列表只保留一套当前会话相关进程；
+  - Windows 本机 `Invoke-WebRequest http://localhost:1420` 返回 `200`。

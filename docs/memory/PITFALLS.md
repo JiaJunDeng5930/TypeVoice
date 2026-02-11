@@ -349,6 +349,20 @@ VERIFIED（2026-02-11，Windows/WSL 联合复核）
     - `PATH="C:\\Users\\micro\\.cargo\\bin;$WINPATH" WSLENV=PATH/w`
   - 保持文档命令本体不变，仅修复调用链环境变量。
 
+## WSL -> PowerShell 命令中 `$` 未转义：脚本块被当前 shell 先行展开，产生误导性报错
+
+VERIFIED（2026-02-11，本轮执行复盘）
+
+- 复现条件：
+  - 在 WSL shell 中直接用双引号包裹 PowerShell 脚本块，且脚本包含 `$_`、`$env:*` 等 `$` 变量。
+- 现象：
+  - 变量在进入 PowerShell 前被当前 shell 先行展开，PowerShell 侧出现与原意无关的错误（例如把 `$_` 破坏成无效 token，报 `...Name is not recognized...`）。
+- 影响：
+  - 排障命令输出被污染，容易误判为业务问题或系统环境问题。
+- 处理方式：
+  - 从 WSL 发起 PowerShell 命令时优先使用单引号包裹整个 PowerShell `-Command` 文本；
+  - 若必须用双引号，需对 `$` 做显式转义（例如 `\$`），避免 shell 预展开。
+
 ## Windows Debug：`CMD.start_transcribe_recording_base64` 在入口报 `E_TOOLCHAIN_NOT_READY`（表象像“Transcribe failed”）
 
 VERIFIED（2026-02-11，trace + toolchain 目录复核）
@@ -403,3 +417,12 @@ UNCONFIRMED（待进一步验证）
 - 推荐验证：
   - 在触发前后连续记录 `CMD.get_settings` 与 `CMD.start_transcribe_recording_base64` 的时间序列，确认是否出现“settings=true 但启动参数=false”的窗口；
   - 若继续复现，可在前端改为通过 ref 读取最新 `rewrite_enabled/template_id`，避免闭包捕获旧值。
+
+更正（2026-02-11，代码修复后）
+
+VERIFIED
+
+- 上述“可能根因”已被确认并修复：
+  - 根因确认为前端监听器生命周期竞争与旧闭包泄漏（非后端二次读取设置）；
+  - 修复已落在 `apps/desktop/src/screens/MainScreen.tsx`（提交：`6af17a9`、`1df910c`）。
+- 当前该条目保留为历史复盘，后续判断是否彻底关闭仅取决于最新 Windows 连续热键回归结果。

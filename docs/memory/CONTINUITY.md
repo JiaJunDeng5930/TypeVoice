@@ -14,6 +14,9 @@ VERIFIED（截至 2026-02-11）
 - 本阶段目标：把“上下文 + 提示词 + 可诊断日志”固化为可复用流程，能快速迭代 prompt 并定位根因：
   - LLM 输入必须清晰区分 `### TRANSCRIPT` 与 `### CONTEXT`，避免模型把上下文当作待改写文本。
   - 对所有失败路径都能从落盘日志定位到根因（error chain + backtrace + step_id/code），不依赖控制台输出。
+- 本阶段新增聚焦目标（2026-02-11）：
+  - 消除“UI 与热键路径 rewrite 行为不一致”，确保两条路径共享同一份实时配置语义（`rewrite_enabled/template_id`）。
+  - 保持 Windows 运行态与当前源码一致（Windows 工作副本 `D:\\Projects\\TypeVoice` 与 WSL 主仓同 commit，且开发进程为最新会话单实例）。
 
 ## 当前状态（Done / Now / Next）
 
@@ -54,39 +57,32 @@ VERIFIED（main 已包含，且可在本机复核）
 
 VERIFIED（截至 2026-02-11）
 
-- 已确认“上一窗口截图可能全黑/很窄”的现象：属于 `PrintWindow` 对特定窗口（例如 Shell/任务栏/硬件加速/受保护 surface）返回空像素的已知兼容性问题；当前用户决定先忽略不修。详见 `docs/memory/PITFALLS.md`。
-- `templates.json` 覆盖内置默认模板：若 data dir 存在 `templates.json`，应用会优先使用落盘模板，而不是 `default_templates()`。实现：`apps/desktop/src-tauri/src/templates.rs`。
-- 已完成“FFmpeg 路径回退”代码级复盘：
-  - 最近 hotkeys/rewrite 提交未修改 FFmpeg 调用链；
-  - FFmpeg 解析逻辑最近一次实质修改是 `d3de362`（引入 `resolve_tool_path`，优先 env/同目录，再 fallback PATH）；
-  - 当前仓库 `tauri.conf.json` 未配置 `externalBin`，Windows Debug 目录也无 `ffmpeg.exe/ffprobe.exe`，因此 `tauri dev` 下在未配置 env 且 PATH 缺失时会报 `E_FFMPEG_NOT_FOUND`（属于环境/产物问题，不是 hotkey 改动回归）。
-- 已确认 Windows 侧“此前可用、现在不可用”的直接原因：
-  - `ffmpeg/ffprobe` 仍安装在 WinGet 目录（`%LOCALAPPDATA%\\Microsoft\\WinGet\\...`）；
-  - 但当前 User/Machine PATH 均缺失 `%LOCALAPPDATA%\\Microsoft\\WinGet\\Links`，导致 `where ffmpeg` 失败；
-  - 临时将该目录加到进程 PATH 后可立即解析，证明问题是 PATH 丢失而非二进制缺失。
-- 已完成修复：
-  - 将 `%LOCALAPPDATA%\\Microsoft\\WinGet\\Links` 持久写入用户 PATH，并规范化路径分隔（移除误写入的双反斜杠片段）。
-  - 复核：在 Windows 合成环境（Machine+User PATH）下 `where ffmpeg/ffprobe` 与 `ffmpeg -version/ffprobe -version` 均通过；Linux 侧 `which ffmpeg/ffprobe` 也保持正常。
-- 已确认并处理“热键不触发”根因：
-  - 根因是 Windows Debug 多实例并存导致 `HotKey already registered`（`HK.register.ptt/toggle` 报错）。
-  - 清理旧会话后，最新 `HK.apply` 为成功且无 `HK.register.* err`，热键注册恢复。
-- 已确认并修复“文档命令下 `cargo metadata ... program not found`”：
-  - 根因不是 `tauri dev` 命令本身，而是 WSL -> Windows 启动链路继承旧 PATH，导致 `cargo` 不可见。
-  - `HKCU\Environment\Path` 已包含 `C:\Users\micro\.cargo\bin`，但当前调用链进程仍可能读取旧快照。
-  - 已验证可行修复：注入“纯 Windows PATH + cargo bin”后，再执行同一条文档命令，成功进入 `Running DevCommand (cargo run ...)` 并启动 `target\\debug\\typevoice-desktop.exe`。
+- 热键 rewrite 一致性修复已在主仓落地：
+  - 提交：`6af17a9`、`1df910c`
+  - 文件：`apps/desktop/src/screens/MainScreen.tsx`
+  - 要点：监听器单次订阅 + ref 读取最新配置 + 异步注册取消保护，避免旧闭包泄漏导致 `rewrite_enabled/template_id` 漂移。
+- Windows 运行态已更新到最新：
+  - WSL 主仓 `HEAD=1df910c`，Windows 工作副本 `D:\\Projects\\TypeVoice` 同步到 `1df910c`（fast-forward）。
+  - 已清理旧会话并重启 `npm run tauri dev`；当前存在最新 `node/cargo/typevoice-desktop` 进程。
+  - Windows 本机 `Invoke-WebRequest http://localhost:1420` 返回 `200`。
+- 仍在持续关注的已知非阻断项：
+  - `PrintWindow` 在部分窗口类型下仍可能产出全黑/窄图（best-effort，当前不修）。
+  - `templates.json` 继续覆盖内置默认模板（排障时需优先检查 data dir 落盘模板）。
 
 ### Next
 
 VERIFIED（零上下文新 agent 可直接继续的推进顺序）
 
-1. 稳定 Windows Debug 拉起路径（优先级最高）：
-   - 严格执行文档命令本体，不改写命令。
-   - 若从 WSL 触发，先注入纯 Windows PATH（含 `C:\Users\micro\.cargo\bin`）再执行文档命令，避免旧 PATH 快照。
-2. 继续业务回归验证（Linux + Windows 同步）：
-   - 在 Windows Debug 单会话下验证录音 -> Preprocess -> ASR -> Rewrite -> 历史记录完整链路。
-   - 同步跑 Linux 侧快速回归，避免“只测一边”。
-3. 如需继续追根因（可选）：
-   - 对 ContextCapture 的“上一窗口选择”策略做更精细过滤（例如排除 Shell/任务栏窗口），并用 trace 对比选窗与截图成功率。
+1. 做热键 rewrite 回归闭环（优先级最高）：
+   - 在当前 Windows 最新会话连续触发多次 PTT/Toggle。
+   - 用 `trace.jsonl` 核对每次 `CMD.start_transcribe_recording_base64.ctx.rewrite_enabled/template_id` 是否稳定等于 settings。
+   - 核对 `TASK.rewrite_effective` 是否进入 rewrite（`rewrite_entered=true`）。
+2. 做完整链路回归（Linux + Windows）：
+   - Windows：至少一轮 `Record -> Preprocess -> Transcribe -> Rewrite -> Persist -> Copy` 成功。
+   - Linux：同步运行 `./.venv/bin/python scripts/verify_quick.py`，防止只测单侧。
+3. 收敛未确认项：
+   - 验证全新 Windows 终端会话是否无需 PATH 注入也能执行文档命令。
+   - 视结果决定是否需要进一步固化“WSL 调用 Windows 命令”的标准封装。
 
 ## 当前工作集（关键文件 / 命令 / 约束）
 
@@ -99,9 +95,11 @@ VERIFIED
 - Windows 采集实现（截图/前台跟踪/剪贴板诊断）：`apps/desktop/src-tauri/src/context_capture_windows.rs`
 - ContextPack 结构：`apps/desktop/src-tauri/src/context_pack.rs`
 - LLM 调用与请求形态（text vs parts + image_url）：`apps/desktop/src-tauri/src/llm.rs`
+- 热键/主流程前端入口（本轮重点）：`apps/desktop/src/screens/MainScreen.tsx`
 - 模板默认值与 `templates.json` 覆盖：`apps/desktop/src-tauri/src/templates.rs`
 - prompt 实验脚本：`scripts/llm_prompt_lab.py`，文档：`docs/llm-prompt-lab-v0.1.md`
 - Gate：`scripts/verify_quick.py`、`scripts/verify_full.py`、`scripts/windows/windows_compile_gate.ps1`、`scripts/windows/windows_gate.ps1`
+- AGENTS 索引更新脚本（技能）：`/home/atticusdeng/.agents/skills/agents-md-project-index/scripts/update_agents_md_project_index.py`
 
 ### 关键命令（不假设工作目录与磁盘路径）
 
@@ -119,6 +117,12 @@ VERIFIED
   - `python scripts/llm_prompt_lab.py --base-url "$TYPEVOICE_LLM_BASE_URL" --model "$TYPEVOICE_LLM_MODEL" --api-key "$TYPEVOICE_LLM_API_KEY" --system-prompt-file tmp/prompt.txt --transcript "..." --clipboard "..." --prev-process "C:\\\\Windows\\\\explorer.exe"`
 - 从 trace 中定位某次任务的错误：
   - `jq -r 'select(.status==\"err\") | {ts_ms,task_id,stage,step_id,error,ctx} | @json' \"$TYPEVOICE_DATA_DIR/trace.jsonl\" | tail`
+- 校验热键 rewrite 是否稳定（Windows data dir）：
+  - `jq -c 'select(.step_id==\"CMD.start_transcribe_recording_base64\" and .status==\"ok\") | {ts_ms,ctx:.ctx}' /mnt/d/Projects/TypeVoice/tmp/typevoice-data/trace.jsonl | tail -n 30`
+  - `jq -c 'select(.step_id==\"TASK.rewrite_effective\") | {ts_ms,task_id,ctx:.ctx}' /mnt/d/Projects/TypeVoice/tmp/typevoice-data/trace.jsonl | tail -n 30`
+- 更新并校验 AGENTS 索引：
+  - `python /home/atticusdeng/.agents/skills/agents-md-project-index/scripts/update_agents_md_project_index.py`
+  - `python /home/atticusdeng/.agents/skills/agents-md-project-index/scripts/update_agents_md_project_index.py --check`
 
 ### 关键约束
 
@@ -139,6 +143,7 @@ VERIFIED
 - `templates.json` 覆盖内置默认模板：提示词“看起来没生效”时优先检查 data dir。见 `docs/memory/PITFALLS.md`。
 - 上一窗口截图可能全黑/空白：属于 WinAPI 兼容性与选窗策略交互，当前先忽略但会反复出现。见 `docs/memory/PITFALLS.md`。
 - WSL 触发 Windows 命令时可能继承旧 PATH，导致 `cargo` 缺失或工具解析异常。见 `docs/memory/PITFALLS.md` 的“WSL 启动 Windows `tauri dev` 时继承旧 PATH”。
+- WSL 发起 PowerShell 命令时，若 `$` 未正确转义，可能被当前 shell 先行展开并污染脚本（例如把 `$_` 破坏成无效 token）；会导致排障命令产生误导性报错。见 `docs/memory/PITFALLS.md` 新增条目。
 
 ## 未确认事项（UNCONFIRMED + 推荐验证动作）
 
@@ -153,6 +158,8 @@ UNCONFIRMED
 - 热键路径下“settings 显示 rewrite=true，但启动参数传入 false/null”在代码修复后是否完全消失。
   - 已实现修复（VERIFIED，代码 + 构建）：`apps/desktop/src/screens/MainScreen.tsx` 改为“监听单次注册 + 动态配置 ref 读取 + 异步注册取消保护”。
   - 待验证（UNCONFIRMED，运行时）：在 Windows Debug 单实例下连续触发热键录音，复核 `CMD.start_transcribe_recording_base64.ctx.rewrite_enabled/template_id` 是否稳定与 settings 一致。
+- 当前正在运行的 Windows 最新会话在长时间运行下是否会再次出现多实例叠加（热键冲突）：
+  - 推荐验证：每次重启前后都执行一次进程盘点，确保仅保留一套 `node/cargo/typevoice-desktop` 与一个有效的 dev 会话。
 
 ## 更正与最新状态（2026-02-11）
 
@@ -214,3 +221,24 @@ VERIFIED
 UNCONFIRMED
 
 - 尚未在本轮代码上完成 Windows 实机复测（连续热键录音 + trace 对齐）来最终关单该问题。
+
+## 更正与最新状态（2026-02-11，Windows 进程已对齐最新）
+
+VERIFIED
+
+- 已按 `agents-md-project-index` 技能更新并校验 `AGENTS.md` 索引：
+  - 更新命令：`python /home/atticusdeng/.agents/skills/agents-md-project-index/scripts/update_agents_md_project_index.py --exclude-dir fixtures --exclude-dir metrics --exclude-dir models --exclude-dir target`
+  - 校验命令：同脚本 `--check`（带相同 `--exclude-dir` 参数）返回通过。
+- 已按用户要求将 Windows 运行进程更新到最新源码：
+  - 主仓 `HEAD=1df910c`；
+  - Windows 工作副本 `D:\\Projects\\TypeVoice` 已 fast-forward 到 `1df910c`。
+- 已完成会话清理与重启：
+  - 清理旧的 TypeVoice 开发进程；
+  - 重新拉起 Windows 文档命令（`npm run tauri dev`）；
+  - 进程侧可见新的 `node/cargo/typevoice-desktop`（`typevoice-desktop.exe` 路径为 `D:\\Projects\\TypeVoice\\apps\\desktop\\src-tauri\\target\\debug\\typevoice-desktop.exe`）。
+- 连通性复核：
+  - Windows 本机 `Invoke-WebRequest http://localhost:1420` 返回 `200`。
+
+UNCONFIRMED
+
+- 本次“更新到最新进程”完成后，尚未追加热键 rewrite 专项回归数据（trace 连续样本）；该验证仍需执行以关闭该问题。
