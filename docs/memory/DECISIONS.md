@@ -160,3 +160,21 @@ VERIFIED（2026-02-11）
   - 执行文档命令后出现：
     - `Running DevCommand (cargo run ...)`
     - `Running target\\debug\\typevoice-desktop.exe`
+
+## Windows Debug 的 FFmpeg 依赖以仓库 toolchain 为准（非 PATH）
+
+VERIFIED（2026-02-11）
+
+- 背景：
+  - 用户反馈“Transcribe failed”，最新 trace 显示失败点为 `CMD.start_transcribe_recording_base64`，错误码 `E_TOOLCHAIN_NOT_READY`，提示仓库内 `toolchain/bin/windows-x86_64/ffmpeg.exe` 缺失。
+  - `toolchain::selected_toolchain_dir()` 在 Windows Debug 模式优先选择仓库内 toolchain 目录；目录存在但二进制缺失时会在运行前校验阶段失败。
+- 决策：
+  - Windows Debug 环境的 FFmpeg 以仓库 `apps/desktop/src-tauri/toolchain/bin/windows-x86_64` 为准，不再将“系统 PATH 上可用 ffmpeg”视为充分条件。
+  - 缺失时只使用仓库自带脚本恢复（与 manifest 对齐），不做版本不受控的旁路注入。
+- 方案：
+  - 在 Windows repo 执行：
+    - `powershell -ExecutionPolicy Bypass -File .\\scripts\\windows\\download_ffmpeg_toolchain.ps1 -Platform windows-x86_64`
+  - 复核项：
+    - `ffmpeg.exe/ffprobe.exe` 文件存在；
+    - SHA256 与 `apps/desktop/src-tauri/toolchain/ffmpeg_manifest.json` 一致；
+    - 重启后 `trace.jsonl` 出现 `TC.verify status=ok` 且 `expected_version=7.0.2`。

@@ -175,3 +175,22 @@ VERIFIED
   - 错误表现：`failed to run 'cargo metadata' ... program not found`
   - 根因：从 WSL 调用 Windows 命令时继承旧 PATH，`cargo` 不可见。
   - 修复结果：在调用链注入“纯 Windows PATH + cargo bin”后，文档命令成功拉起（出现 `Running DevCommand (cargo run ...)` 与 `Running target\\debug\\typevoice-desktop.exe`，并观测到 `typevoice-desktop` 进程存活）。
+
+## 更正与最新状态（2026-02-11，追加）
+
+VERIFIED
+
+- 本轮用户反馈的“Transcribe failed”最新一次并非 `Transcribe` 阶段失败，而是命令入口拦截：
+  - `trace.jsonl`：`CMD.start_transcribe_recording_base64 op=end status=err code=E_TOOLCHAIN_NOT_READY`
+  - 错误消息：`missing ffmpeg binary at D:\\Projects\\TypeVoice\\apps\\desktop\\src-tauri\\toolchain\\bin\\windows-x86_64\\ffmpeg.exe`
+- 直接根因：
+  - `toolchain::selected_toolchain_dir()` 在 Windows Debug 模式优先选择仓库内 `apps/desktop/src-tauri/toolchain/bin/windows-x86_64`；
+  - 该目录存在但二进制缺失（仅 `.gitkeep`），导致 `TC.verify` 失败并阻断任务启动。
+- 已完成修复：
+  - 在 Windows repo 执行 `powershell -ExecutionPolicy Bypass -File .\\scripts\\windows\\download_ffmpeg_toolchain.ps1 -Platform windows-x86_64` 恢复工具链；
+  - 复核 `ffmpeg.exe/ffprobe.exe` SHA256 与 `ffmpeg_manifest.json` 一致；
+  - 重启 `tauri dev` 后 `trace.jsonl` 出现 `TC.verify status=ok`（`expected_version=7.0.2`）。
+
+UNCONFIRMED
+
+- 本轮重启后尚未再次手动触发录音任务来复核完整 `Preprocess -> Transcribe` 链路（环境预检已恢复为 `ok`）。

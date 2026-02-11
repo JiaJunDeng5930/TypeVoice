@@ -327,3 +327,31 @@ VERIFIED（2026-02-11，Windows/WSL 联合复核）
     - `WINPATH=$(powershell.exe -Command "$env:Path")`
     - `PATH="C:\\Users\\micro\\.cargo\\bin;$WINPATH" WSLENV=PATH/w`
   - 保持文档命令本体不变，仅修复调用链环境变量。
+
+## Windows Debug：`CMD.start_transcribe_recording_base64` 在入口报 `E_TOOLCHAIN_NOT_READY`（表象像“Transcribe failed”）
+
+VERIFIED（2026-02-11，trace + toolchain 目录复核）
+
+- 复现条件：
+  - Windows 端 `tauri dev` 启动后触发录音转写。
+  - 仓库目录 `apps/desktop/src-tauri/toolchain/bin/windows-x86_64` 存在，但其中缺少 `ffmpeg.exe/ffprobe.exe`。
+- 现象：
+  - UI 显示“TRANSCRIBE FAILED/ERROR”，但 `metrics.jsonl` 中看不到 `stage=Transcribe status=failed`。
+  - `trace.jsonl` 真实失败点是：
+    - `step_id=CMD.start_transcribe_recording_base64`
+    - `status=err`
+    - `code=E_TOOLCHAIN_NOT_READY`
+    - `message=missing ffmpeg binary at ...\\toolchain\\bin\\windows-x86_64\\ffmpeg.exe`
+- 根因：
+  - `toolchain::selected_toolchain_dir()` 在 Windows Debug 模式优先选择仓库内 `toolchain/bin/windows-x86_64`；
+  - 该目录被选中后会强制设置 `TYPEVOICE_FFMPEG/TYPEVOICE_FFPROBE` 指向该目录，再做 `TC.verify`；
+  - 目录空缺时会在命令入口被 `runtime_not_ready()` 拦截，任务不会进入 `Preprocess/Transcribe`。
+- 影响：
+  - 从用户视角看像“Transcribe failed”，但根因是 runtime preflight 失败，容易误判成 ASR 或录音问题。
+- 处理方式：
+  - 在 Windows repo 根目录执行：
+    - `powershell -ExecutionPolicy Bypass -File .\\scripts\\windows\\download_ffmpeg_toolchain.ps1 -Platform windows-x86_64`
+  - 复核：
+    - `apps/desktop/src-tauri/toolchain/bin/windows-x86_64/ffmpeg.exe` 与 `ffprobe.exe` 存在；
+    - SHA256 匹配 `ffmpeg_manifest.json`；
+    - 重启后 `trace.jsonl` 出现 `TC.verify status=ok`（`expected_version=7.0.2`）。
