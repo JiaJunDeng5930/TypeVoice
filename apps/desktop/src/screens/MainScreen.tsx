@@ -74,6 +74,28 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
   const templateId = settings?.rewrite_template_id || null;
   const hotkeysEnabled = settings?.hotkeys_enabled !== false;
   const showOverlay = settings?.hotkeys_show_overlay !== false;
+  const rewriteEnabledRef = useRef(rewriteEnabled);
+  const templateIdRef = useRef<string | null>(templateId);
+  const hotkeysEnabledRef = useRef(hotkeysEnabled);
+  const showOverlayRef = useRef(showOverlay);
+  const pushToastRef = useRef(pushToast);
+  const onHistoryChangedRef = useRef(onHistoryChanged);
+
+  useEffect(() => {
+    rewriteEnabledRef.current = rewriteEnabled;
+    templateIdRef.current = templateId;
+    hotkeysEnabledRef.current = hotkeysEnabled;
+    showOverlayRef.current = showOverlay;
+    pushToastRef.current = pushToast;
+    onHistoryChangedRef.current = onHistoryChanged;
+  }, [
+    hotkeysEnabled,
+    onHistoryChanged,
+    pushToast,
+    rewriteEnabled,
+    showOverlay,
+    templateId,
+  ]);
 
   const hint = useMemo(() => {
     if (ui === "idle") return "START";
@@ -83,7 +105,7 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
   }, [ui]);
 
   async function overlaySet(visible: boolean, status: string, detail?: string | null) {
-    if (!showOverlay) return;
+    if (!showOverlayRef.current) return;
     try {
       await invoke("overlay_set_state", {
         state: { visible, status, detail: detail || null, ts_ms: Date.now() },
@@ -136,11 +158,22 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
   }, []);
 
   useEffect(() => {
-    let unlistenDone: null | (() => void) = null;
-    let unlistenEvent: null | (() => void) = null;
-    let unlistenHotkey: null | (() => void) = null;
+    let cancelled = false;
+    const unlistenFns: Array<() => void> = [];
+    const trackUnlisten = (fn: () => void) => {
+      if (cancelled) {
+        try {
+          fn();
+        } catch {
+          // ignore
+        }
+        return;
+      }
+      unlistenFns.push(fn);
+    };
+
     (async () => {
-      unlistenDone = await listen<TaskDone>("task_done", async (e) => {
+      const unlistenDone = await listen<TaskDone>("task_done", async (e) => {
         const done = e.payload;
         if (!done) return;
         if (done.task_id !== activeTaskIdRef.current) return;
@@ -152,18 +185,19 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
         setLastMeta(new Date().toLocaleString());
         try {
           await copyText(text);
-          pushToast("COPIED", "ok");
+          pushToastRef.current("COPIED", "ok");
         } catch {
-          pushToast("COPY FAILED", "danger");
+          pushToastRef.current("COPY FAILED", "danger");
         }
         if (hotkeySessionRef.current) {
           overlayFlash("COPIED", 800);
           hotkeySessionRef.current = false;
         }
-        onHistoryChanged();
+        onHistoryChangedRef.current();
       });
+      trackUnlisten(unlistenDone);
 
-      unlistenEvent = await listen<TaskEvent>("task_event", (e) => {
+      const unlistenEvent = await listen<TaskEvent>("task_event", (e) => {
         const ev = e.payload;
         if (!ev) return;
         if (ev.task_id !== activeTaskIdRef.current) return;
@@ -171,28 +205,29 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
         if (ev.status === "failed" && ev.stage !== "Rewrite") {
           activeTaskIdRef.current = "";
           setUi("idle");
-          pushToast("ERROR", "danger");
+          pushToastRef.current("ERROR", "danger");
           if (hotkeySessionRef.current) {
             overlayFlash("ERROR", 1200);
             hotkeySessionRef.current = false;
           }
         }
         if (ev.status === "failed" && ev.stage === "Rewrite") {
-          pushToast("REWRITE FAILED", "danger");
+          pushToastRef.current("REWRITE FAILED", "danger");
         }
         if (ev.status === "cancelled") {
           activeTaskIdRef.current = "";
           setUi("idle");
-          pushToast("CANCELLED", "default");
+          pushToastRef.current("CANCELLED", "default");
           if (hotkeySessionRef.current) {
             overlayFlash("CANCELLED", 800);
             hotkeySessionRef.current = false;
           }
         }
       });
+      trackUnlisten(unlistenEvent);
 
-      unlistenHotkey = await listen<HotkeyRecordEvent>("tv_hotkey_record", (e) => {
-        if (!hotkeysEnabled) return;
+      const unlistenHotkey = await listen<HotkeyRecordEvent>("tv_hotkey_record", (e) => {
+        if (!hotkeysEnabledRef.current) return;
         const hk = e.payload;
         if (!hk) return;
 
@@ -213,33 +248,27 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
         else if (cur === "recording") void stopAndTranscribe();
         else if (cur === "transcribing") void cancelActiveTask();
       });
+      trackUnlisten(unlistenHotkey);
     })();
     return () => {
-      try {
-        unlistenDone?.();
-      } catch {
-        // ignore
-      }
-      try {
-        unlistenEvent?.();
-      } catch {
-        // ignore
-      }
-      try {
-        unlistenHotkey?.();
-      } catch {
-        // ignore
+      cancelled = true;
+      for (const fn of unlistenFns) {
+        try {
+          fn();
+        } catch {
+          // ignore
+        }
       }
     };
-  }, [hotkeysEnabled, onHistoryChanged, pushToast, rewriteEnabled, showOverlay, templateId]);
+  }, []);
 
   async function startRecording(source: "ui" | "hotkey" = "ui") {
     chunksRef.current = [];
     hotkeySessionRef.current = source === "hotkey";
     if (hotkeySessionRef.current) void overlaySet(true, "REC");
     // Snapshot settings at the moment recording starts.
-    const rewriteEnabledNow = rewriteEnabled;
-    const templateIdNow = templateId;
+    const rewriteEnabledNow = rewriteEnabledRef.current;
+    const templateIdNow = templateIdRef.current;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;

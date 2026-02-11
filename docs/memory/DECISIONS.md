@@ -178,3 +178,23 @@ VERIFIED（2026-02-11）
     - `ffmpeg.exe/ffprobe.exe` 文件存在；
     - SHA256 与 `apps/desktop/src-tauri/toolchain/ffmpeg_manifest.json` 一致；
     - 重启后 `trace.jsonl` 出现 `TC.verify status=ok` 且 `expected_version=7.0.2`。
+
+## 热键监听生命周期改为“单次订阅 + ref 读最新配置”（避免 rewrite 参数漂移）
+
+VERIFIED（2026-02-11）
+
+- 背景：
+  - 用户反馈“UI 转录可 rewrite，但热键转录偶发不 rewrite”。
+  - trace 证据显示在未更新 settings 的时间窗内，`CMD.start_transcribe_recording_base64` 的 `rewrite_enabled/template_id` 会在 `true/"correct"` 与 `false/null` 间漂移。
+- 决策：
+  - 前端事件监听采用“单次订阅”而非“随设置重绑”；
+  - 所有会变化的运行时配置（`rewrite_enabled/template_id/hotkeys_enabled/show_overlay`）统一走 `ref` 读取最新值；
+  - 对异步 `listen(...)` 注册添加取消保护，确保组件清理后不会残留旧监听。
+- 方案：
+  - 修改 `apps/desktop/src/screens/MainScreen.tsx`：
+    - 新增配置/回调 `ref` 同步；
+    - 监听 effect 依赖改为 `[]`，并使用 `trackUnlisten` + `cancelled` 防止泄漏；
+    - `startRecording` 在启动时从 `ref` 快照 rewrite 参数。
+- 取舍：
+  - 增加少量 `ref` 与样板代码，换取监听生命周期确定性和热键路径参数一致性；
+  - 避免后续再出现“同一 settings 下 UI 与热键行为不一致”。

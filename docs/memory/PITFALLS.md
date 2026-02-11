@@ -59,6 +59,27 @@ VERIFIED（2026-02-11，Windows 实测 + trace 复核）
   - 前端热键监听的 `useEffect` 没有把 `rewriteEnabled/templateId` 纳入依赖，导致热键回调捕获了旧渲染的设置值（仍为 false/null），进而把错误参数传给 `start_transcribe_recording_base64`。
 - 处理方式：
   - 让热键监听随 `rewriteEnabled/templateId` 更新，且在 `startRecording` 开始时对这两个值做快照后再用于 invoke。
+
+更正（2026-02-11，本轮）
+
+VERIFIED
+
+- 前述根因描述不完整：即使把 `rewriteEnabled/templateId` 加入依赖，问题仍可能复现。
+- 真实根因是前端监听器生命周期竞争：
+  - `MainScreen` 的事件监听采用异步注册 + 依赖变更重绑；
+  - 清理阶段在异步 `listen(...)` 返回前可能拿不到 `unlisten`，导致旧监听泄漏；
+  - 泄漏监听会持有旧闭包（`rewriteEnabled=false/templateId=null`），热键触发时把旧值传给 `start_transcribe_recording_base64`。
+- 证据链（Windows trace）：
+  - 无 `CMD.update_settings` 的情况下，`CMD.start_transcribe_recording_base64` 参数在多次任务间出现 `true/"correct"` 与 `false/null` 交替（例如 `task_id=79e7ee96-e65e-42eb-ac5e-543b02ca773a` 为 `false/null`，`task_id=8c36be8d-5673-4966-bf4c-9b17f691a350` 为 `true/"correct"`）。
+  - `false/null` 样本任务前有 `CMD.overlay_set_state` 的 `REC/TRANSCRIBING`，证明来自热键路径，而非后端二次读取设置。
+- 已修复（代码级）：
+  - `apps/desktop/src/screens/MainScreen.tsx`
+  - 监听器改为单次注册；动态配置统一走 `ref` 读取；
+  - 增加异步注册取消保护，防止旧监听在卸载后残留。
+
+UNCONFIRMED
+
+- 尚待 Windows 侧实机回归确认“连续热键触发时 `rewrite_enabled/template_id` 不再漂移”。
 ## MVP 取消不可达：UI 未接入 cancel_task
 
 VERIFIED（2026-02-09，代码审阅）

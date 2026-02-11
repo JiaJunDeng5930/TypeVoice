@@ -150,9 +150,9 @@ UNCONFIRMED
   - 推荐验证：用 trace 对比 `CTX.prev_window.info` 记录的 `process_image` 与 `CTX.prev_window.screenshot` 的成功/尺寸分布，人工评估是否需要过滤。
 - 是否需要在用户的“全局登录会话”层面完成 PATH 刷新（避免每次从 WSL 触发都要注入 PATH）。
   - 推荐验证：用户在全新 Windows Terminal 会话执行 `where cargo` 与文档命令，确认无需额外注入即可稳定拉起。
-- 热键路径下“settings 显示 rewrite=true，但启动参数传入 false/null”的偶发时序问题是否仍存在。
-  - 已观测样本：`task_id=1fba242b-f6f3-4239-a523-ee78aa89121c`、`task_id=7780649a-6ccd-4ea8-9790-e0621a67684c`。
-  - 推荐验证：对比同一时间窗内 `CMD.get_settings` 与 `CMD.start_transcribe_recording_base64` 的 `rewrite_enabled/template_id`。
+- 热键路径下“settings 显示 rewrite=true，但启动参数传入 false/null”在代码修复后是否完全消失。
+  - 已实现修复（VERIFIED，代码 + 构建）：`apps/desktop/src/screens/MainScreen.tsx` 改为“监听单次注册 + 动态配置 ref 读取 + 异步注册取消保护”。
+  - 待验证（UNCONFIRMED，运行时）：在 Windows Debug 单实例下连续触发热键录音，复核 `CMD.start_transcribe_recording_base64.ctx.rewrite_enabled/template_id` 是否稳定与 settings 一致。
 
 ## 更正与最新状态（2026-02-11）
 
@@ -197,3 +197,20 @@ VERIFIED
 UNCONFIRMED
 
 - 本轮重启后尚未再次手动触发录音任务来复核完整 `Preprocess -> Transcribe` 链路（环境预检已恢复为 `ok`）。
+
+## 更正与最新状态（2026-02-11，hotkey rewrite 一致性）
+
+VERIFIED
+
+- 已完成根因澄清：并非后端存在“第二套 rewrite 设置读取源”；后端命令入口仅使用前端传入参数（见 `apps/desktop/src-tauri/src/lib.rs` 的 `start_transcribe_recording_base64`）。
+- 已完成代码修复：
+  - 文件：`apps/desktop/src/screens/MainScreen.tsx`
+  - 变更点：
+    - 热键/任务监听改为单次注册，避免依赖变更重绑造成闭包竞争；
+    - `rewrite_enabled/template_id/hotkeys_enabled/show_overlay` 统一经 `ref` 读取最新值；
+    - 对异步 `listen(...)` 注册增加取消保护，防止组件清理后旧监听残留。
+- 本地验证：`apps/desktop` 下执行 `npm run build` 通过（`tsc` + `vite build`）。
+
+UNCONFIRMED
+
+- 尚未在本轮代码上完成 Windows 实机复测（连续热键录音 + trace 对齐）来最终关单该问题。
