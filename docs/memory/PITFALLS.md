@@ -248,3 +248,4 @@ VERIFIED（2026-02-11，Windows trace/metrics 复核）
   - 从固定 `Command::new("ffmpeg")` 调整为 `resolve_tool_path("TYPEVOICE_FFMPEG", "ffmpeg.exe", "ffmpeg")`。
   - 解析顺序为：`TYPEVOICE_FFMPEG` 环境变量 -> `current_exe` 同目录 `ffmpeg.exe` -> fallback `ffmpeg`（PATH）。
 - 当前仓库的 Tauri 配置未声明 `externalBin`，且 Windows Debug 目录下不存在 `ffmpeg.exe/ffprobe.exe`，因此在未设置 `TYPEVOICE_FFMPEG` 且 PATH 无 ffmpeg 时会稳定回落并报 `E_FFMPEG_NOT_FOUND`。
+- `trace.jsonl` 的历史成功记录也显示 `FFMPEG.preprocess.ctx.cmd_hint=ffmpeg`（未出现 `ffmpeg.exe`），说明此前正常时同样主要依赖 PATH 中的 ffmpeg；本次失败是运行环境可执行路径变化，而不是 hotkey/rewrite 代码改动直接导致。
