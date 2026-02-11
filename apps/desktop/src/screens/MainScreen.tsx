@@ -42,6 +42,7 @@ function errorMessage(err: unknown): string {
 
 function transcribeErrorHint(err: unknown): string {
   const raw = errorMessage(err);
+  if (raw.includes("E_SETTINGS_")) return "SETTINGS INVALID";
   if (raw.includes("E_TOOLCHAIN_NOT_READY")) return "TOOLCHAIN NOT READY";
   if (raw.includes("E_TOOLCHAIN_CHECKSUM_MISMATCH")) return "TOOLCHAIN CHECKSUM ERROR";
   if (raw.includes("E_TOOLCHAIN_VERSION_MISMATCH")) return "TOOLCHAIN VERSION ERROR";
@@ -70,32 +71,22 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
   const activeTaskIdRef = useRef<string>("");
   const hotkeySessionRef = useRef<boolean>(false);
 
-  const rewriteEnabled = settings?.rewrite_enabled === true;
-  const templateId = settings?.rewrite_template_id || null;
-  const hotkeysEnabled = settings?.hotkeys_enabled !== false;
-  const showOverlay = settings?.hotkeys_show_overlay !== false;
-  const rewriteEnabledRef = useRef(rewriteEnabled);
-  const templateIdRef = useRef<string | null>(templateId);
-  const hotkeysEnabledRef = useRef(hotkeysEnabled);
-  const showOverlayRef = useRef(showOverlay);
+  const hasHotkeyConfig =
+    typeof settings?.hotkeys_enabled === "boolean" &&
+    typeof settings?.hotkeys_show_overlay === "boolean";
+  const hotkeysEnabledRef = useRef<boolean>(false);
+  const showOverlayRef = useRef<boolean>(false);
+  const hasHotkeyConfigRef = useRef<boolean>(hasHotkeyConfig);
   const pushToastRef = useRef(pushToast);
   const onHistoryChangedRef = useRef(onHistoryChanged);
 
   useEffect(() => {
-    rewriteEnabledRef.current = rewriteEnabled;
-    templateIdRef.current = templateId;
-    hotkeysEnabledRef.current = hotkeysEnabled;
-    showOverlayRef.current = showOverlay;
+    hasHotkeyConfigRef.current = hasHotkeyConfig;
+    hotkeysEnabledRef.current = hasHotkeyConfig ? settings?.hotkeys_enabled === true : false;
+    showOverlayRef.current = hasHotkeyConfig ? settings?.hotkeys_show_overlay === true : false;
     pushToastRef.current = pushToast;
     onHistoryChangedRef.current = onHistoryChanged;
-  }, [
-    hotkeysEnabled,
-    onHistoryChanged,
-    pushToast,
-    rewriteEnabled,
-    showOverlay,
-    templateId,
-  ]);
+  }, [hasHotkeyConfig, onHistoryChanged, pushToast, settings]);
 
   const hint = useMemo(() => {
     if (ui === "idle") return "START";
@@ -121,6 +112,12 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
       void overlaySet(false, "IDLE");
     }, ms);
   }
+
+  useEffect(() => {
+    if (!hasHotkeyConfig) {
+      pushToast("SETTINGS INVALID: HOTKEY FLAGS MISSING", "danger");
+    }
+  }, [hasHotkeyConfig, pushToast]);
 
   useEffect(() => {
     (async () => {
@@ -227,6 +224,10 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
       trackUnlisten(unlistenEvent);
 
       const unlistenHotkey = await listen<HotkeyRecordEvent>("tv_hotkey_record", (e) => {
+        if (!hasHotkeyConfigRef.current) {
+          pushToastRef.current("SETTINGS INVALID", "danger");
+          return;
+        }
         if (!hotkeysEnabledRef.current) return;
         const hk = e.payload;
         if (!hk) return;
@@ -268,9 +269,6 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
     chunksRef.current = [];
     hotkeySessionRef.current = source === "hotkey";
     if (hotkeySessionRef.current) void overlaySet(true, "REC");
-    // Snapshot settings at the moment recording starts.
-    const rewriteEnabledNow = rewriteEnabledRef.current;
-    const templateIdNow = templateIdRef.current;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
@@ -301,8 +299,6 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
           const id = (await invoke("start_transcribe_recording_base64", {
             b64,
             ext,
-            rewriteEnabled: rewriteEnabledNow,
-            templateId: templateIdNow,
           })) as string;
           activeTaskIdRef.current = id;
         } catch (err) {

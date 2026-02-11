@@ -8,9 +8,6 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use crate::settings::Settings;
 use crate::trace::Span;
 
-const DEFAULT_PTT: &str = "F9";
-const DEFAULT_TOGGLE: &str = "F10";
-
 #[derive(Debug, Clone)]
 struct HotkeyConfig {
     enabled: bool,
@@ -18,46 +15,13 @@ struct HotkeyConfig {
     toggle: Option<String>,
 }
 
-fn hotkey_config_from_settings(s: &Settings) -> HotkeyConfig {
-    let enabled = s.hotkeys_enabled.unwrap_or(true);
-    if !enabled {
-        return HotkeyConfig {
-            enabled: false,
-            ptt: None,
-            toggle: None,
-        };
-    }
-
-    let ptt = s
-        .hotkey_ptt
-        .as_deref()
-        .map(|x| x.trim())
-        .filter(|x| !x.is_empty())
-        .unwrap_or(DEFAULT_PTT)
-        .to_string();
-
-    let toggle = s
-        .hotkey_toggle
-        .as_deref()
-        .map(|x| x.trim())
-        .filter(|x| !x.is_empty())
-        .unwrap_or(DEFAULT_TOGGLE)
-        .to_string();
-
-    // If both are the same, prefer PTT and disable toggle to avoid ambiguous behavior.
-    if ptt.eq_ignore_ascii_case(&toggle) {
-        return HotkeyConfig {
-            enabled: true,
-            ptt: Some(ptt),
-            toggle: None,
-        };
-    }
-
-    HotkeyConfig {
-        enabled: true,
-        ptt: Some(ptt),
-        toggle: Some(toggle),
-    }
+fn hotkey_config_from_settings(s: &Settings) -> anyhow::Result<HotkeyConfig> {
+    let cfg = crate::settings::resolve_hotkey_config(s)?;
+    Ok(HotkeyConfig {
+        enabled: cfg.enabled,
+        ptt: cfg.ptt,
+        toggle: cfg.toggle,
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -102,7 +66,14 @@ impl HotkeyManager {
     ) {
         let _g = self.lock.lock().unwrap();
 
-        let cfg = hotkey_config_from_settings(s);
+        let cfg = match hotkey_config_from_settings(s) {
+            Ok(v) => v,
+            Err(e) => {
+                let span = Span::start(data_dir, None, "Hotkeys", "HK.apply", None);
+                span.err_anyhow("config", "E_HK_CONFIG", &e, None);
+                return;
+            }
+        };
         let span = Span::start(
             data_dir,
             None,
@@ -187,74 +158,54 @@ impl HotkeyManager {
             }
         }
 
-        // Surface the "same key" normalization explicitly in trace.
-        if cfg.ptt.is_some() && cfg.toggle.is_none() {
-            if let (Some(raw_ptt), Some(raw_toggle)) =
-                (s.hotkey_ptt.as_deref(), s.hotkey_toggle.as_deref())
-            {
-                if raw_ptt.trim().eq_ignore_ascii_case(raw_toggle.trim())
-                    && !raw_ptt.trim().is_empty()
-                {
-                    crate::trace::event(
-                        data_dir,
-                        None,
-                        "Hotkeys",
-                        "HK.same_key",
-                        "ok",
-                        Some(serde_json::json!({"key": raw_ptt.trim(), "note": "toggle_disabled"})),
-                    );
-                }
-            }
-        }
-
         span.ok(Some(serde_json::json!({"status": "ok"})));
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{hotkey_config_from_settings, HotkeyConfig, DEFAULT_PTT, DEFAULT_TOGGLE};
+    use super::{hotkey_config_from_settings, HotkeyConfig};
     use crate::settings::Settings;
 
-    fn cfg(s: Settings) -> HotkeyConfig {
+    fn cfg(s: Settings) -> anyhow::Result<HotkeyConfig> {
         hotkey_config_from_settings(&s)
     }
 
     #[test]
-    fn defaults_are_present_when_enabled() {
-        let c = cfg(Settings::default());
-        assert!(c.enabled);
-        assert_eq!(c.ptt.as_deref(), Some(DEFAULT_PTT));
-        assert_eq!(c.toggle.as_deref(), Some(DEFAULT_TOGGLE));
+    fn config_requires_explicit_fields() {
+        let err = cfg(Settings::default()).expect_err("should fail");
+        assert!(err
+            .to_string()
+            .contains("E_SETTINGS_HOTKEYS_ENABLED_MISSING"));
     }
 
     #[test]
     fn disabled_means_no_keys() {
         let mut s = Settings::default();
         s.hotkeys_enabled = Some(false);
-        let c = cfg(s);
+        let c = cfg(s).expect("cfg");
         assert!(!c.enabled);
         assert!(c.ptt.is_none());
         assert!(c.toggle.is_none());
     }
 
     #[test]
-    fn trims_and_uses_defaults_on_empty() {
+    fn empty_shortcuts_are_invalid() {
         let mut s = Settings::default();
+        s.hotkeys_enabled = Some(true);
         s.hotkey_ptt = Some("   ".to_string());
         s.hotkey_toggle = Some("\n".to_string());
-        let c = cfg(s);
-        assert_eq!(c.ptt.as_deref(), Some(DEFAULT_PTT));
-        assert_eq!(c.toggle.as_deref(), Some(DEFAULT_TOGGLE));
+        let err = cfg(s).expect_err("should fail");
+        assert!(err.to_string().contains("E_SETTINGS_HOTKEY_PTT_MISSING"));
     }
 
     #[test]
-    fn same_key_disables_toggle() {
+    fn same_key_is_invalid() {
         let mut s = Settings::default();
+        s.hotkeys_enabled = Some(true);
         s.hotkey_ptt = Some("F9".to_string());
         s.hotkey_toggle = Some("f9".to_string());
-        let c = cfg(s);
-        assert_eq!(c.ptt.as_deref(), Some("F9"));
-        assert!(c.toggle.is_none());
+        let err = cfg(s).expect_err("should fail");
+        assert!(err.to_string().contains("E_SETTINGS_HOTKEY_CONFLICT"));
     }
 }

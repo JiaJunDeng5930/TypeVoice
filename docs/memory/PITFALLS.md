@@ -258,6 +258,22 @@ VERIFIED（2026-02-11，Windows trace/metrics 复核）
     - `error_code=E_FFMPEG_NOT_FOUND`
 - 影响：
   - 任务在 Preprocess 阶段即终止，后续 `Transcribe/Rewrite` 都不会执行，容易被误解为 Rewrite 没生效。
+
+## 严格配置模式下，缺失 `settings.json`/`templates.json` 会直接阻断对应链路
+
+VERIFIED（2026-02-11）
+
+- 复现条件：
+  - `settings.json` 不存在，或缺失 `rewrite_enabled/hotkeys_enabled/...` 关键字段；
+  - `templates.json` 不存在。
+- 现象：
+  - 启动转写时返回 `E_SETTINGS_*`；
+  - 模板相关操作返回 `E_TPL_FILE_NOT_FOUND`，Rewrite 阶段可能因模板缺失失败。
+- 影响：
+  - 不再有隐式默认值兜底，旧环境或未初始化环境会更早暴露配置问题。
+- 处理方式：
+  - 在设置页显式保存必要字段；
+  - 确保 `templates.json` 已存在且包含所需 template id。
 - 处理方式：
   - 在 Windows 安装并加入 PATH：`ffmpeg` 与 `ffprobe`。
   - 复核命令：`where ffmpeg`、`where ffprobe`（应能返回路径）。

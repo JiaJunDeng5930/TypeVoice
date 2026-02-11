@@ -72,17 +72,19 @@ struct ChoiceMessage {
     content: String,
 }
 
-fn normalize_base_url(s: &str) -> String {
+fn normalize_base_url(s: &str) -> Result<String> {
     let mut t = s.trim().trim_end_matches('/').to_string();
     if t.is_empty() {
-        return "https://api.openai.com/v1".to_string();
+        return Err(anyhow!(
+            "E_LLM_CONFIG_BASE_URL_MISSING: llm_base_url (or TYPEVOICE_LLM_BASE_URL) is required"
+        ));
     }
 
     // Allow users to paste full endpoint and still work.
     if let Some(stripped) = t.strip_suffix("/chat/completions") {
         t = stripped.to_string();
     }
-    t.trim_end_matches('/').to_string()
+    Ok(t.trim_end_matches('/').to_string())
 }
 
 fn normalize_reasoning_effort(s: &str) -> Option<String> {
@@ -97,29 +99,37 @@ fn normalize_reasoning_effort(s: &str) -> Option<String> {
     Some(t.to_string())
 }
 
-pub fn load_config(data_dir: &std::path::Path) -> LlmConfig {
-    let s = settings::load_settings_or_recover(data_dir);
+pub fn load_config(data_dir: &std::path::Path) -> Result<LlmConfig> {
+    let s = settings::load_settings_strict(data_dir)?;
 
     let base_url = s
         .llm_base_url
         .or_else(|| std::env::var("TYPEVOICE_LLM_BASE_URL").ok())
-        .unwrap_or_default();
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| {
+            anyhow!("E_LLM_CONFIG_BASE_URL_MISSING: llm_base_url (or TYPEVOICE_LLM_BASE_URL) is required")
+        })?;
 
     let model = s
         .llm_model
         .or_else(|| std::env::var("TYPEVOICE_LLM_MODEL").ok())
-        .unwrap_or_else(|| "gpt-4o-mini".to_string());
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| {
+            anyhow!("E_LLM_CONFIG_MODEL_MISSING: llm_model (or TYPEVOICE_LLM_MODEL) is required")
+        })?;
 
     let reasoning_effort = s
         .llm_reasoning_effort
         .as_deref()
         .and_then(normalize_reasoning_effort);
 
-    LlmConfig {
-        base_url: normalize_base_url(&base_url),
+    Ok(LlmConfig {
+        base_url: normalize_base_url(&base_url)?,
         model,
         reasoning_effort,
-    }
+    })
 }
 
 pub fn load_api_key() -> Result<String> {
@@ -232,7 +242,13 @@ pub async fn rewrite_with_context(
         })),
     );
 
-    let cfg = load_config(data_dir);
+    let cfg = match load_config(data_dir) {
+        Ok(c) => c,
+        Err(e) => {
+            span.err_anyhow("config", "E_LLM_CONFIG", &e, None);
+            return Err(e);
+        }
+    };
     let key = match load_api_key() {
         Ok(k) => k,
         Err(e) => {
@@ -472,17 +488,17 @@ mod tests {
 
     #[test]
     fn normalize_base_url_handles_empty_and_endpoint_suffix() {
-        assert_eq!(normalize_base_url(""), "https://api.openai.com/v1");
+        assert!(normalize_base_url("").is_err());
         assert_eq!(
-            normalize_base_url(" https://api.openai.com/v1/ "),
+            normalize_base_url(" https://api.openai.com/v1/ ").expect("base"),
             "https://api.openai.com/v1"
         );
         assert_eq!(
-            normalize_base_url("http://api.server/v1/chat/completions"),
+            normalize_base_url("http://api.server/v1/chat/completions").expect("base"),
             "http://api.server/v1"
         );
         assert_eq!(
-            normalize_base_url("http://api.server/v1/chat/completions/"),
+            normalize_base_url("http://api.server/v1/chat/completions/").expect("base"),
             "http://api.server/v1"
         );
     }

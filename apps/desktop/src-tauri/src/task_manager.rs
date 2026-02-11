@@ -43,6 +43,7 @@ pub struct TaskDone {
 pub struct StartOpts {
     pub rewrite_enabled: bool,
     pub template_id: Option<String>,
+    pub context_cfg: context_capture::ContextConfig,
 }
 
 #[derive(Clone)]
@@ -260,13 +261,12 @@ impl TaskManager {
         record_msg: &str,
     ) -> Result<()> {
         let data_dir = data_dir::data_dir()?;
-        let (ctx_cfg, ctx_snap) = if opts.rewrite_enabled {
-            self.ctx.capture_snapshot_best_effort(&data_dir, &task_id)
+        let ctx_cfg = opts.context_cfg.clone();
+        let ctx_snap = if opts.rewrite_enabled {
+            self.ctx
+                .capture_snapshot_best_effort_with_config(&data_dir, &task_id, &ctx_cfg)
         } else {
-            (
-                context_capture::ContextConfig::default(),
-                context_pack::ContextSnapshot::default(),
-            )
+            context_pack::ContextSnapshot::default()
         };
         crate::trace::event(
             &data_dir,

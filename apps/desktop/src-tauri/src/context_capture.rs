@@ -36,7 +36,7 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-fn config_from_settings(s: &settings::Settings) -> ContextConfig {
+pub fn config_from_settings(s: &settings::Settings) -> ContextConfig {
     let mut cfg = ContextConfig::default();
 
     if let Some(v) = s.context_include_clipboard {
@@ -114,14 +114,13 @@ impl ContextService {
         }
     }
 
-    pub fn capture_snapshot_best_effort(
+    pub fn capture_snapshot_best_effort_with_config(
         &self,
         data_dir: &Path,
         task_id: &str,
-    ) -> (ContextConfig, ContextSnapshot) {
+        cfg: &ContextConfig,
+    ) -> ContextSnapshot {
         let captured_at_ms = now_ms();
-        let s = settings::load_settings_or_recover(data_dir);
-        let cfg = config_from_settings(&s);
 
         let _span_all = Span::start(
             data_dir,
@@ -336,6 +335,6 @@ impl ContextService {
         );
         _span_all.ok(None);
 
-        (cfg, snap)
+        snap
     }
 }

@@ -215,3 +215,36 @@ VERIFIED（2026-02-11）
   - `git -C /mnt/d/Projects/TypeVoice rev-parse --short HEAD` 与主仓一致；
   - 进程列表只保留一套当前会话相关进程；
   - Windows 本机 `Invoke-WebRequest http://localhost:1420` 返回 `200`。
+
+## Rewrite 启动参数改为后端单点解析（移除前端传参副本）
+
+VERIFIED（2026-02-11）
+
+- 背景：
+  - 热键路径存在“前端闭包快照值”和“后端实际执行值”漂移风险，导致 rewrite 偶发不生效。
+- 决策：
+  - `start_transcribe_recording_base64` / `start_transcribe_fixture` 不再接收前端 `rewrite_enabled/template_id`；
+  - 启动时由后端基于 `settings.json` 严格读取并解析（`load_settings_strict + resolve_rewrite_start_config`）后注入 `StartOpts`。
+- 取舍：
+  - 配置缺失会直接失败并返回 `E_SETTINGS_*`，不再静默默认化；
+  - 消除 UI 与热键路径的 rewrite 参数副本，统一后端权威来源。
+
+## 热键与 LLM 配置默认值兜底移除（fail-fast）
+
+VERIFIED（2026-02-11）
+
+- 决策：
+  - 热键配置不再默认 `enabled=true`、`PTT=F9`、`Toggle=F10`；必须由设置显式提供。
+  - LLM 配置不再默认 `base_url/model`；缺失即报 `E_LLM_CONFIG_*`。
+- 复核：
+  - `hotkeys.rs` 改为调用 `settings::resolve_hotkey_config`；
+  - `llm.rs::load_config` 改为 `Result<LlmConfig>` 并由调用方处理错误。
+
+## 模板文件缺失不再回退内置模板
+
+VERIFIED（2026-02-11）
+
+- 决策：
+  - `templates::load_templates` 在 `templates.json` 缺失时返回 `E_TPL_FILE_NOT_FOUND`，不再隐式使用 `default_templates()`。
+- 取舍：
+  - 更早暴露配置问题，避免“看起来可用但实际用了另一套模板”的隐性漂移。

@@ -17,6 +17,7 @@ pub struct PromptTemplate {
     pub system_prompt: String,
 }
 
+#[allow(dead_code)]
 pub fn default_templates() -> Vec<PromptTemplate> {
     vec![
         PromptTemplate {
@@ -101,11 +102,12 @@ pub fn load_templates(data_dir: &Path) -> Result<Vec<PromptTemplate>> {
         Some(serde_json::json!({"has_file": p.exists()})),
     );
     if !p.exists() {
-        let out = default_templates();
-        span.ok(Some(
-            serde_json::json!({"source": "builtin", "count": out.len()}),
-        ));
-        return Ok(out);
+        let e = anyhow!(
+            "E_TPL_FILE_NOT_FOUND: templates.json not found at {}",
+            p.display()
+        );
+        span.err_anyhow("io", "E_TPL_FILE_NOT_FOUND", &e, None);
+        return Err(e);
     }
     let r: Result<Vec<PromptTemplate>> = (|| {
         let s = fs::read_to_string(&p).context("read templates.json failed")?;

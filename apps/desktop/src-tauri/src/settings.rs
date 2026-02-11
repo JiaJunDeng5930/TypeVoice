@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::trace::Span;
@@ -128,58 +128,83 @@ pub fn load_settings(data_dir: &Path) -> Result<Settings> {
     Ok(v)
 }
 
-fn now_ms() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+pub fn load_settings_strict(data_dir: &Path) -> Result<Settings> {
+    let p = settings_path(data_dir);
+    if !p.exists() {
+        return Err(anyhow!(
+            "E_SETTINGS_NOT_FOUND: settings.json not found at {}",
+            p.display()
+        ));
+    }
+    let s = fs::read_to_string(&p).context("read settings.json failed")?;
+    let v: Settings = serde_json::from_str(&s).context("parse settings.json failed")?;
+    Ok(v)
 }
 
-pub fn load_settings_or_recover(data_dir: &Path) -> Settings {
-    let span = Span::start(data_dir, None, "Settings", "SETTINGS.load_or_recover", None);
-    match load_settings(data_dir) {
-        Ok(s) => {
-            span.ok(Some(serde_json::json!({"status": "ok"})));
-            s
-        }
-        Err(e) => {
-            let mut backup_ok = false;
-            let p = settings_path(data_dir);
-            let had_file = p.exists();
-            if had_file {
-                let backup = data_dir.join(format!("settings.json.corrupt.{}", now_ms()));
-                if let Err(re) = fs::rename(&p, &backup) {
-                    crate::safe_eprintln!(
-                        "settings.json corrupt, and failed to back it up (src={}, dst={}): {re:#}",
-                        p.display(),
-                        backup.display()
-                    );
-                } else {
-                    backup_ok = true;
-                    crate::safe_eprintln!(
-                        "settings.json corrupt; moved to {} (error: {:#})",
-                        backup.display(),
-                        e
-                    );
-                }
-            } else {
-                crate::safe_eprintln!("settings load failed (missing file): {e:#}");
-            }
-
-            span.err_anyhow(
-                "parse",
-                "E_SETTINGS_LOAD",
-                &e,
-                Some(serde_json::json!({
-                    "had_file": had_file,
-                    "backup_ok": backup_ok,
-                })),
-            );
-
-            Settings::default()
-        }
+pub fn resolve_rewrite_start_config(s: &Settings) -> Result<(bool, Option<String>)> {
+    let rewrite_enabled = s.rewrite_enabled.ok_or_else(|| {
+        anyhow!("E_SETTINGS_REWRITE_ENABLED_MISSING: rewrite_enabled is required in settings")
+    })?;
+    let template_id = s
+        .rewrite_template_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToOwned::to_owned);
+    if rewrite_enabled && template_id.is_none() {
+        return Err(anyhow!(
+            "E_SETTINGS_REWRITE_TEMPLATE_MISSING: rewrite_template_id is required when rewrite_enabled=true"
+        ));
     }
+    Ok((rewrite_enabled, template_id))
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HotkeyConfigResolved {
+    pub enabled: bool,
+    pub ptt: Option<String>,
+    pub toggle: Option<String>,
+}
+
+pub fn resolve_hotkey_config(s: &Settings) -> Result<HotkeyConfigResolved> {
+    let enabled = s.hotkeys_enabled.ok_or_else(|| {
+        anyhow!("E_SETTINGS_HOTKEYS_ENABLED_MISSING: hotkeys_enabled is required in settings")
+    })?;
+    if !enabled {
+        return Ok(HotkeyConfigResolved {
+            enabled: false,
+            ptt: None,
+            toggle: None,
+        });
+    }
+
+    let ptt = s
+        .hotkey_ptt
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| anyhow!("E_SETTINGS_HOTKEY_PTT_MISSING: hotkey_ptt is required"))?
+        .to_string();
+
+    let toggle = s
+        .hotkey_toggle
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| anyhow!("E_SETTINGS_HOTKEY_TOGGLE_MISSING: hotkey_toggle is required"))?
+        .to_string();
+
+    if ptt.eq_ignore_ascii_case(&toggle) {
+        return Err(anyhow!(
+            "E_SETTINGS_HOTKEY_CONFLICT: hotkey_ptt and hotkey_toggle must be different"
+        ));
+    }
+
+    Ok(HotkeyConfigResolved {
+        enabled: true,
+        ptt: Some(ptt),
+        toggle: Some(toggle),
+    })
 }
 
 pub fn save_settings(data_dir: &Path, settings: &Settings) -> Result<()> {
@@ -199,8 +224,6 @@ pub fn save_settings(data_dir: &Path, settings: &Settings) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{apply_patch, Settings, SettingsPatch};
-    use std::fs;
-    use tempfile::tempdir;
 
     #[test]
     fn apply_patch_is_partial_and_can_clear() {
@@ -240,25 +263,5 @@ mod tests {
         assert_eq!(next.rewrite_enabled, Some(true));
         assert_eq!(next.rewrite_template_id, None);
         assert_eq!(next.context_history_n, Some(5));
-    }
-
-    #[test]
-    fn load_settings_or_recover_moves_corrupt_file_and_returns_default() {
-        let td = tempdir().expect("tempdir");
-        let data_dir = td.path().join("data");
-        fs::create_dir_all(&data_dir).expect("mkdir");
-        fs::write(data_dir.join("settings.json"), "{not-json").expect("write");
-
-        let s = super::load_settings_or_recover(&data_dir);
-        assert_eq!(s.asr_model, None);
-        assert!(!data_dir.join("settings.json").exists());
-
-        let entries: Vec<_> = fs::read_dir(&data_dir)
-            .expect("read_dir")
-            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
-            .collect();
-        assert!(entries
-            .iter()
-            .any(|n| n.starts_with("settings.json.corrupt.")));
     }
 }

@@ -15,6 +15,7 @@ export default function App() {
   const [tab, setTab] = useState<TabKey>("main");
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
   const [epoch, setEpoch] = useState(0);
 
   const pushToast = useCallback((message: string, tone: ToastTone = "default") => {
@@ -30,8 +31,11 @@ export default function App() {
     try {
       const s = (await invoke("get_settings")) as Settings;
       setSettings(s);
-    } catch {
-      setSettings({});
+      setSettingsError(null);
+    } catch (err) {
+      setSettings(null);
+      const msg = typeof err === "string" ? err : String(err);
+      setSettingsError(msg);
     }
   }, []);
 
@@ -43,6 +47,7 @@ export default function App() {
     async (patch: Record<string, unknown>) => {
       const next = (await invoke("update_settings", { patch })) as Settings;
       setSettings(next);
+      setSettingsError(null);
     },
     [],
   );
@@ -83,6 +88,7 @@ export default function App() {
             pushToast={pushToast}
             onHistoryCleared={onHistoryChanged}
           />
+          {settingsError ? <div className="muted">SETTINGS ERROR: {settingsError}</div> : null}
         </div>
       </div>
 

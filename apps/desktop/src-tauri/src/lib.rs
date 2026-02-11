@@ -137,6 +137,17 @@ fn runtime_not_ready(runtime: &RuntimeState) -> Option<(&'static str, String)> {
     None
 }
 
+fn start_opts_from_settings(data_dir: &std::path::Path) -> Result<task_manager::StartOpts, String> {
+    let s = settings::load_settings_strict(data_dir).map_err(|e| e.to_string())?;
+    let (rewrite_enabled, template_id) =
+        settings::resolve_rewrite_start_config(&s).map_err(|e| e.to_string())?;
+    Ok(task_manager::StartOpts {
+        rewrite_enabled,
+        template_id,
+        context_cfg: context_capture::config_from_settings(&s),
+    })
+}
+
 #[tauri::command]
 fn transcribe_fixture(
     runtime: tauri::State<'_, RuntimeState>,
@@ -208,32 +219,32 @@ async fn start_transcribe_fixture(
     state: tauri::State<'_, TaskManager>,
     runtime: tauri::State<'_, RuntimeState>,
     fixture_name: &str,
-    rewrite_enabled: bool,
-    template_id: Option<String>,
 ) -> Result<String, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let opts = match start_opts_from_settings(&dir) {
+        Ok(v) => v,
+        Err(e) => {
+            let span = cmd_span(&dir, None, "CMD.start_transcribe_fixture.settings", None);
+            span.err("config", "E_SETTINGS_INVALID", &e, None);
+            return Err(e);
+        }
+    };
     let span = cmd_span(
         &dir,
         None,
         "CMD.start_transcribe_fixture",
         Some(serde_json::json!({
             "fixture_name": fixture_name,
-            "rewrite_enabled": rewrite_enabled,
-            "template_id": template_id.as_deref(),
+            "rewrite_enabled": opts.rewrite_enabled,
+            "template_id": opts.template_id.as_deref(),
+            "source": "settings",
         })),
     );
     if let Some((code, msg)) = runtime_not_ready(&runtime) {
         span.err("config", code, &msg, None);
         return Err(msg);
     }
-    match state.start_fixture(
-        app,
-        fixture_name.to_string(),
-        task_manager::StartOpts {
-            rewrite_enabled,
-            template_id,
-        },
-    ) {
+    match state.start_fixture(app, fixture_name.to_string(), opts) {
         Ok(task_id) => {
             span.ok(Some(serde_json::json!({"task_id": task_id})));
             Ok(task_id)
@@ -252,10 +263,21 @@ async fn start_transcribe_recording_base64(
     runtime: tauri::State<'_, RuntimeState>,
     b64: &str,
     ext: &str,
-    rewrite_enabled: bool,
-    template_id: Option<String>,
 ) -> Result<String, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let opts = match start_opts_from_settings(&dir) {
+        Ok(v) => v,
+        Err(e) => {
+            let span = cmd_span(
+                &dir,
+                None,
+                "CMD.start_transcribe_recording_base64.settings",
+                None,
+            );
+            span.err("config", "E_SETTINGS_INVALID", &e, None);
+            return Err(e);
+        }
+    };
     let span = cmd_span(
         &dir,
         None,
@@ -263,23 +285,16 @@ async fn start_transcribe_recording_base64(
         Some(serde_json::json!({
             "ext": ext,
             "b64_chars": b64.len(),
-            "rewrite_enabled": rewrite_enabled,
-            "template_id": template_id.as_deref(),
+            "rewrite_enabled": opts.rewrite_enabled,
+            "template_id": opts.template_id.as_deref(),
+            "source": "settings",
         })),
     );
     if let Some((code, msg)) = runtime_not_ready(&runtime) {
         span.err("config", code, &msg, None);
         return Err(msg);
     }
-    match state.start_recording_base64(
-        app,
-        b64.to_string(),
-        ext.to_string(),
-        task_manager::StartOpts {
-            rewrite_enabled,
-            template_id,
-        },
-    ) {
+    match state.start_recording_base64(app, b64.to_string(), ext.to_string(), opts) {
         Ok(task_id) => {
             span.ok(Some(serde_json::json!({"task_id": task_id})));
             Ok(task_id)
@@ -575,9 +590,18 @@ fn history_clear() -> Result<(), String> {
 fn get_settings() -> Result<Settings, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let span = cmd_span(&dir, None, "CMD.get_settings", None);
-    let s = settings::load_settings_or_recover(&dir);
-    span.ok(Some(serde_json::json!({"rewrite_enabled": s.rewrite_enabled, "template_id": s.rewrite_template_id})));
-    Ok(s)
+    match settings::load_settings_strict(&dir) {
+        Ok(s) => {
+            span.ok(Some(
+                serde_json::json!({"rewrite_enabled": s.rewrite_enabled, "template_id": s.rewrite_template_id}),
+            ));
+            Ok(s)
+        }
+        Err(e) => {
+            span.err_anyhow("settings", "E_CMD_GET_SETTINGS", &e, None);
+            Err(e.to_string())
+        }
+    }
 }
 
 #[tauri::command]
@@ -623,7 +647,13 @@ fn update_settings(
         "hotkeys_show_overlay": patch.hotkeys_show_overlay.is_some(),
     });
     let span = cmd_span(&dir, None, "CMD.update_settings", Some(patch_summary));
-    let cur = settings::load_settings_or_recover(&dir);
+    let cur = match settings::load_settings_strict(&dir) {
+        Ok(v) => v,
+        Err(e) => {
+            span.err_anyhow("settings", "E_CMD_UPDATE_SETTINGS_LOAD", &e, None);
+            return Err(e.to_string());
+        }
+    };
     let asr_model_changed = patch.asr_model.is_some();
     let next = settings::apply_patch(cur, patch);
     if let Err(e) = settings::save_settings(&dir, &next) {
@@ -695,9 +725,18 @@ async fn download_asr_model() -> Result<ModelStatus, String> {
     };
     // Set settings.asr_model to local dir if ok.
     if st.ok {
-        let mut s = settings::load_settings_or_recover(&dir);
+        let mut s = match settings::load_settings_strict(&dir) {
+            Ok(v) => v,
+            Err(e) => {
+                span.err_anyhow("settings", "E_CMD_MODEL_DOWNLOAD_SETTINGS", &e, None);
+                return Err(e.to_string());
+            }
+        };
         s.asr_model = Some(model_dir.display().to_string());
-        let _ = settings::save_settings(&dir, &s);
+        if let Err(e) = settings::save_settings(&dir, &s) {
+            span.err_anyhow("settings", "E_CMD_MODEL_DOWNLOAD_SAVE", &e, None);
+            return Err(e.to_string());
+        }
     }
     span.ok(Some(
         serde_json::json!({"ok": st.ok, "reason": st.reason, "model_version": st.model_version}),
@@ -796,9 +835,25 @@ pub fn run() {
 
             // Apply hotkeys from persisted settings.
             if let Ok(dir) = data_dir::data_dir() {
-                let s = settings::load_settings_or_recover(&dir);
-                let hk = app.state::<hotkeys::HotkeyManager>();
-                hk.apply_from_settings_best_effort(&app.handle(), &dir, &s);
+                match settings::load_settings_strict(&dir) {
+                    Ok(s) => {
+                        let hk = app.state::<hotkeys::HotkeyManager>();
+                        hk.apply_from_settings_best_effort(&app.handle(), &dir, &s);
+                    }
+                    Err(e) => {
+                        trace::event(
+                            &dir,
+                            None,
+                            "App",
+                            "APP.hotkeys_init",
+                            "err",
+                            Some(serde_json::json!({
+                                "code": "E_SETTINGS_INVALID",
+                                "error": e.to_string()
+                            })),
+                        );
+                    }
+                }
             }
 
             startup_trace::mark_best_effort("setup_exit");

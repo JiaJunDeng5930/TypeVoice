@@ -54,18 +54,32 @@ export function SettingsScreen({
   const [confirmClear, setConfirmClear] = useState(false);
 
   useEffect(() => {
-    setAsrModel(String(settings?.asr_model || ""));
-    setLlmBaseUrl(String(settings?.llm_base_url || ""));
-    setLlmModel(String(settings?.llm_model || ""));
-    setReasoning(String(settings?.llm_reasoning_effort || "default") || "default");
-    setRewriteEnabled(settings?.rewrite_enabled === true);
-    setRewriteTemplateId(String(settings?.rewrite_template_id || ""));
+    if (!settings) return;
+    setAsrModel(settings.asr_model ?? "");
+    setLlmBaseUrl(settings.llm_base_url ?? "");
+    setLlmModel(settings.llm_model ?? "");
+    setReasoning(settings.llm_reasoning_effort ?? "default");
 
-    setHotkeysEnabled(settings?.hotkeys_enabled !== false);
-    setHotkeyPtt(String(settings?.hotkey_ptt || "F9"));
-    setHotkeyToggle(String(settings?.hotkey_toggle || "F10"));
-    setHotkeysShowOverlay(settings?.hotkeys_show_overlay !== false);
-  }, [settings]);
+    if (typeof settings.rewrite_enabled !== "boolean") {
+      pushToast("SETTINGS INVALID: rewrite_enabled missing", "danger");
+      return;
+    }
+    setRewriteEnabled(settings.rewrite_enabled);
+    setRewriteTemplateId(settings.rewrite_template_id ?? "");
+
+    if (typeof settings.hotkeys_enabled !== "boolean") {
+      pushToast("SETTINGS INVALID: hotkeys_enabled missing", "danger");
+      return;
+    }
+    if (typeof settings.hotkeys_show_overlay !== "boolean") {
+      pushToast("SETTINGS INVALID: hotkeys_show_overlay missing", "danger");
+      return;
+    }
+    setHotkeysEnabled(settings.hotkeys_enabled);
+    setHotkeyPtt(settings.hotkey_ptt ?? "");
+    setHotkeyToggle(settings.hotkey_toggle ?? "");
+    setHotkeysShowOverlay(settings.hotkeys_show_overlay);
+  }, [settings, pushToast]);
 
   useEffect(() => {
     (async () => {
@@ -149,6 +163,10 @@ export function SettingsScreen({
   }
 
   async function saveRewrite() {
+    if (rewriteEnabled && !rewriteTemplateId.trim()) {
+      pushToast("REWRITE TEMPLATE REQUIRED", "danger");
+      return;
+    }
     try {
       await savePatch({
         rewrite_enabled: rewriteEnabled,
@@ -161,6 +179,10 @@ export function SettingsScreen({
   }
 
   async function saveHotkeys() {
+    if (hotkeysEnabled && (!hotkeyPtt.trim() || !hotkeyToggle.trim())) {
+      pushToast("HOTKEYS REQUIRE PTT/TOGGLE", "danger");
+      return;
+    }
     try {
       await savePatch({
         hotkeys_enabled: hotkeysEnabled,

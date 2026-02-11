@@ -258,5 +258,32 @@ UNCONFIRMED
 - 尚未定位到最终根因；当前只确认“设置读取结果”与“任务启动参数”之间仍有链路不一致。
 - 推荐下一步验证动作（按优先级）：
   - 在 `MainScreen` 录音启动前后增加临时 trace（仅记录 `rewriteEnabledRef.current/templateIdRef.current`），与 `CMD.start_transcribe_recording_base64` 对齐；
+
+## 更正与最新状态（2026-02-11，单一状态源与去兜底第一阶段）
+
+VERIFIED
+
+- 已完成“任务启动 rewrite 参数”去前端副本化：
+  - `start_transcribe_recording_base64` 与 `start_transcribe_fixture` 不再接收前端传入的 `rewrite_enabled/template_id`；
+  - 后端在命令入口统一从 `settings.json` 严格读取并解析（`settings::load_settings_strict + resolve_rewrite_start_config`），再注入 `TaskManager::StartOpts`。
+- 已完成热键配置去默认兜底：
+  - `hotkeys.rs` 移除 `unwrap_or(true/F9/F10)`；
+  - 改为必须显式配置 `hotkeys_enabled/hotkey_ptt/hotkey_toggle`，否则记录 `E_HK_CONFIG`。
+- 已完成 LLM 配置去默认兜底：
+  - `llm.rs` 不再默认 `https://api.openai.com/v1` 和 `gpt-4o-mini`；
+  - 缺失时返回 `E_LLM_CONFIG_*` 并在 `LLM.rewrite` span 记为 `E_LLM_CONFIG`。
+- 已完成模板加载去内置回退：
+  - `templates::load_templates` 在 `templates.json` 缺失时直接报 `E_TPL_FILE_NOT_FOUND`，不再自动回退内置模板。
+- 前端已同步收敛：
+  - `MainScreen` 不再缓存并传递 rewrite 参数；
+  - `App` 不再在 `get_settings` 失败时设置 `{}`；改为显式 `settingsError`；
+  - `SettingsScreen` 去掉 `F9/F10` 与布尔隐式默认，保存前增加必填校验。
+- 验证结果：
+  - `apps/desktop`: `npm run build` 通过。
+  - `apps/desktop/src-tauri`: `cargo test -q` 通过（14 tests）。
+
+UNCONFIRMED
+
+- Windows 实机热键连续录音回归尚未在本轮执行（需复核 `trace.jsonl` 中 `CMD.start_transcribe_recording_base64` 与 `TASK.rewrite_effective`）。
   - 检查 `App.reloadSettings` 的 `catch -> setSettings({})` 是否在某些时序下覆盖了有效设置；
   - 对比 UI 按钮路径与热键路径在同一会话下的启动参数差异，确认是否仅热键受影响。
