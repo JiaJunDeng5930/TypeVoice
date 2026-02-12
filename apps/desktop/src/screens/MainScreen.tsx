@@ -20,6 +20,10 @@ type HotkeyRecordEvent = {
   state: "Pressed" | "Released";
   shortcut: string;
   ts_ms: number;
+  capture_id?: string | null;
+  capture_status?: "ok" | "err" | null;
+  capture_error_code?: string | null;
+  capture_error_message?: string | null;
 };
 
 type Props = {
@@ -47,7 +51,17 @@ function transcribeErrorHint(err: unknown): string {
   if (raw.includes("E_TOOLCHAIN_CHECKSUM_MISMATCH")) return "TOOLCHAIN CHECKSUM ERROR";
   if (raw.includes("E_TOOLCHAIN_VERSION_MISMATCH")) return "TOOLCHAIN VERSION ERROR";
   if (raw.includes("E_PYTHON_NOT_READY")) return "PYTHON NOT READY";
+  if (raw.includes("E_CONTEXT_CAPTURE_REQUIRED")) return "CONTEXT CAPTURE REQUIRED";
+  if (raw.includes("E_CONTEXT_CAPTURE_NOT_FOUND")) return "CONTEXT CAPTURE EXPIRED";
+  if (raw.includes("E_CONTEXT_CAPTURE_INVALID")) return "CONTEXT CAPTURE INVALID";
   return "TRANSCRIBE FAILED";
+}
+
+function hotkeyCaptureHint(errCode?: string | null): string {
+  if (!errCode) return "HOTKEY CAPTURE FAILED";
+  if (errCode.includes("E_CONTEXT_SCREENSHOT_DISABLED")) return "SCREENSHOT DISABLED";
+  if (errCode.includes("E_HOTKEY_CAPTURE")) return "WINDOW CAPTURE FAILED";
+  return "HOTKEY CAPTURE FAILED";
 }
 
 export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
@@ -70,6 +84,7 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
 
   const activeTaskIdRef = useRef<string>("");
   const hotkeySessionRef = useRef<boolean>(false);
+  const pendingCaptureIdRef = useRef<string | null>(null);
 
   const hasHotkeyConfig =
     typeof settings?.hotkeys_enabled === "boolean" &&
@@ -235,7 +250,16 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
         const cur = uiRef.current;
         if (hk.kind === "ptt") {
           if (hk.state === "Pressed" && cur === "idle") {
-            void startRecording("hotkey");
+            if (hk.capture_status !== "ok" || !hk.capture_id) {
+              const hint = hotkeyCaptureHint(hk.capture_error_code);
+              pushToastRef.current(hint, "danger");
+              void overlaySet(true, "ERROR", hint);
+              window.setTimeout(() => {
+                void overlaySet(false, "IDLE");
+              }, 1200);
+              return;
+            }
+            void startRecording("hotkey", hk.capture_id);
           }
           if (hk.state === "Released" && cur === "recording") {
             void stopAndTranscribe();
@@ -245,7 +269,18 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
 
         // toggle
         if (hk.state !== "Pressed") return;
-        if (cur === "idle") void startRecording("hotkey");
+        if (cur === "idle") {
+          if (hk.capture_status !== "ok" || !hk.capture_id) {
+            const hint = hotkeyCaptureHint(hk.capture_error_code);
+            pushToastRef.current(hint, "danger");
+            void overlaySet(true, "ERROR", hint);
+            window.setTimeout(() => {
+              void overlaySet(false, "IDLE");
+            }, 1200);
+            return;
+          }
+          void startRecording("hotkey", hk.capture_id);
+        }
         else if (cur === "recording") void stopAndTranscribe();
         else if (cur === "transcribing") void cancelActiveTask();
       });
@@ -265,9 +300,10 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
     };
   }, []);
 
-  async function startRecording(source: "ui" | "hotkey" = "ui") {
+  async function startRecording(source: "ui" | "hotkey" = "ui", captureId: string | null = null) {
     chunksRef.current = [];
     hotkeySessionRef.current = source === "hotkey";
+    pendingCaptureIdRef.current = source === "hotkey" ? captureId : null;
     if (hotkeySessionRef.current) void overlaySet(true, "REC");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -299,13 +335,17 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
           const id = (await invoke("start_transcribe_recording_base64", {
             b64,
             ext,
+            captureId: pendingCaptureIdRef.current,
+            captureRequired: hotkeySessionRef.current,
           })) as string;
           activeTaskIdRef.current = id;
+          pendingCaptureIdRef.current = null;
         } catch (err) {
           activeTaskIdRef.current = "";
           setUi("idle");
           const hint = transcribeErrorHint(err);
           pushToastRef.current(hint, "danger");
+          pendingCaptureIdRef.current = null;
           if (hotkeySessionRef.current) {
             overlayFlash("ERROR", 1200, hint);
             hotkeySessionRef.current = false;
@@ -318,6 +358,7 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
     } catch {
       setUi("idle");
       pushToastRef.current("MIC PERMISSION NEEDED", "danger");
+      pendingCaptureIdRef.current = null;
       if (hotkeySessionRef.current) {
         overlayFlash("MIC DENIED", 1400);
         hotkeySessionRef.current = false;
@@ -333,6 +374,7 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
       r.stop();
     } catch {
       setUi("idle");
+      pendingCaptureIdRef.current = null;
       pushToastRef.current("STOP FAILED", "danger");
       if (hotkeySessionRef.current) {
         overlayFlash("ERROR", 1200, "STOP FAILED");

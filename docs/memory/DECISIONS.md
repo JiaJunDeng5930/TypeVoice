@@ -258,6 +258,24 @@ VERIFIED（2026-02-12）
 - 执行命令：
   - `python /home/atticusdeng/.agents/skills/agents-md-project-index/scripts/update_agents_md_project_index.py --exclude-dir ...`
   - `python /home/atticusdeng/.agents/skills/agents-md-project-index/scripts/update_agents_md_project_index.py --check --exclude-dir ...`
+
+## 热键路径改为“按下瞬间捕获 + 一次性 capture_id 注入”，禁止运行时重取窗口
+
+VERIFIED（2026-02-12）
+
+- 背景：
+  - 已定位根因为“热键事件与截图时刻脱钩”：任务在录音结束后才采样窗口，导致使用了后时刻前台窗口而非按下瞬间窗口。
+- 决策：
+  - 在热键按下回调中立即截图并生成一次性 `capture_id`；
+  - 启动转写时必须携带该 `capture_id`（热键会话 `capture_required=true`）；
+  - 任务流水线只使用这份预采集上下文，不再在运行时重取“上一窗口截图”。
+  - 对截图原始像素增加黑帧校验（`validate_pixels`），拒绝“API 调用成功但画面全黑”的结果。
+- 错误语义：
+  - `E_CONTEXT_CAPTURE_REQUIRED`：热键会话未提供 `capture_id`
+  - `E_CONTEXT_CAPTURE_NOT_FOUND`：`capture_id` 不存在或过期
+  - `E_CONTEXT_CAPTURE_INVALID`：`capture_id` 存在但无有效截图
+- 取舍：
+  - 正确性优先于“尽量继续”：热键路径不再接受“缺图继续发送错误窗口”的行为。
 - 复核标准：`AGENTS.md` 中 `exclude_dirs` 必须包含 `.cache/.git/.mypy_cache/.next/.parcel-cache/.pnpm-store/.pytest_cache/.ruff_cache/.turbo/.venv/.yarn/__pycache__/build/coverage/dist/fixtures/metrics/models/node_modules/out/target/temp/tmp/venv`。
 
 ## 日志验收口径：所有“可用/不可用”结论必须绑定单一 task_id

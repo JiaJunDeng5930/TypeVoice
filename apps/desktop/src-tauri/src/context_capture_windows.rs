@@ -29,6 +29,20 @@ pub struct WindowInfo {
     pub process_image: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ForegroundNowCapture {
+    pub window: WindowInfo,
+    pub screenshot: ScreenshotRaw,
+    pub pid: u32,
+    pub hwnd: isize,
+}
+
+#[derive(Debug, Clone)]
+pub struct ForegroundNowCaptureResult {
+    pub capture: Option<ForegroundNowCapture>,
+    pub error: Option<ScreenshotDiagError>,
+}
+
 #[derive(Clone)]
 pub struct ScreenshotRaw {
     pub png_bytes: Vec<u8>,
@@ -181,6 +195,81 @@ impl WindowsContext {
                     last_error: Some(e.last_error),
                     note: Some(e.note),
                 },
+            },
+        }
+    }
+
+    pub fn capture_foreground_window_now_diag_best_effort(
+        &self,
+        max_side: u32,
+    ) -> ForegroundNowCaptureResult {
+        let hwnd = unsafe { GetForegroundWindow() };
+        if hwnd.is_null() {
+            return ForegroundNowCaptureResult {
+                capture: None,
+                error: Some(ScreenshotDiagError {
+                    step: "foreground_window".to_string(),
+                    api: "GetForegroundWindow".to_string(),
+                    api_ret: "NULL".to_string(),
+                    last_error: last_error_u32(),
+                    note: Some("no foreground window".to_string()),
+                    window_w: 0,
+                    window_h: 0,
+                    max_side,
+                }),
+            };
+        }
+        if unsafe { IsWindow(hwnd) } == 0 {
+            return ForegroundNowCaptureResult {
+                capture: None,
+                error: Some(ScreenshotDiagError {
+                    step: "is_window".to_string(),
+                    api: "IsWindow".to_string(),
+                    api_ret: "0".to_string(),
+                    last_error: last_error_u32(),
+                    note: Some("foreground hwnd is invalid".to_string()),
+                    window_w: 0,
+                    window_h: 0,
+                    max_side,
+                }),
+            };
+        }
+
+        let mut pid: u32 = 0;
+        unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
+        if pid == 0 {
+            return ForegroundNowCaptureResult {
+                capture: None,
+                error: Some(ScreenshotDiagError {
+                    step: "foreground_pid".to_string(),
+                    api: "GetWindowThreadProcessId".to_string(),
+                    api_ret: "pid=0".to_string(),
+                    last_error: last_error_u32(),
+                    note: Some("foreground pid is zero".to_string()),
+                    window_w: 0,
+                    window_h: 0,
+                    max_side,
+                }),
+            };
+        }
+
+        let info = WindowInfo {
+            title: get_window_title_best_effort(hwnd),
+            process_image: get_process_image_best_effort(pid),
+        };
+        match capture_window_png_diagnose(hwnd, max_side) {
+            Ok(raw) => ForegroundNowCaptureResult {
+                capture: Some(ForegroundNowCapture {
+                    window: info,
+                    screenshot: raw,
+                    pid,
+                    hwnd: hwnd as isize,
+                }),
+                error: None,
+            },
+            Err(e) => ForegroundNowCaptureResult {
+                capture: None,
+                error: Some(e),
             },
         }
     }
@@ -477,6 +566,19 @@ fn capture_window_png_diagnose(
             ));
         }
 
+        if is_effectively_black_bgra(&src_bgra) {
+            return Err(ScreenshotDiagError {
+                step: "validate_pixels".to_string(),
+                api: "pixel_check".to_string(),
+                api_ret: "all_black".to_string(),
+                last_error: 0,
+                note: Some("captured frame is effectively black".to_string()),
+                window_w: w,
+                window_h: h,
+                max_side,
+            });
+        }
+
         resize_convert_bgra_to_rgba(&src_bgra, w, h, &mut rgba, out_w, out_h);
         let png_bytes =
             encode_png_rgba(&rgba, out_w, out_h).ok_or_else(|| ScreenshotDiagError {
@@ -495,6 +597,30 @@ fn capture_window_png_diagnose(
             height: out_h,
         })
     }
+}
+
+fn is_effectively_black_bgra(src_bgra: &[u8]) -> bool {
+    if src_bgra.len() < 4 {
+        return true;
+    }
+    let px_count = src_bgra.len() / 4;
+    let stride = (px_count / 4096).max(1);
+    let mut sampled = 0usize;
+    let mut bright = 0usize;
+    let mut i = 0usize;
+    while i < px_count {
+        let idx = i * 4;
+        let b = src_bgra[idx] as f32;
+        let g = src_bgra[idx + 1] as f32;
+        let r = src_bgra[idx + 2] as f32;
+        let y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        sampled += 1;
+        if y > 20.0 {
+            bright += 1;
+        }
+        i += stride;
+    }
+    bright * 1000 <= sampled
 }
 
 fn clamp_size(w: u32, h: u32, max_side: u32) -> (u32, u32) {

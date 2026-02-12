@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 use crate::settings::Settings;
@@ -30,6 +30,10 @@ pub struct HotkeyRecordEvent {
     pub state: String, // Pressed|Released
     pub shortcut: String,
     pub ts_ms: i64,
+    pub capture_id: Option<String>,
+    pub capture_status: Option<String>, // ok|err
+    pub capture_error_code: Option<String>,
+    pub capture_error_message: Option<String>,
 }
 
 fn now_ms() -> i64 {
@@ -107,7 +111,24 @@ impl HotkeyManager {
         }
 
         if let Some(ptt) = cfg.ptt.clone() {
-            if let Err(e) = gs.on_shortcut(ptt.as_str(), |app, shortcut, event| {
+            let ctx_cfg = crate::context_capture::config_from_settings(s);
+            let data_dir_buf = data_dir.to_path_buf();
+            if let Err(e) = gs.on_shortcut(ptt.as_str(), move |app, shortcut, event| {
+                let (capture_id, capture_status, capture_error_code, capture_error_message) =
+                    if event.state == ShortcutState::Pressed {
+                        let tm = app.state::<crate::task_manager::TaskManager>();
+                        match tm.capture_hotkey_context_now(&data_dir_buf, &ctx_cfg) {
+                            Ok(id) => (Some(id), Some("ok".to_string()), None, None),
+                            Err(e) => (
+                                None,
+                                Some("err".to_string()),
+                                Some("E_HOTKEY_CAPTURE".to_string()),
+                                Some(e.to_string()),
+                            ),
+                        }
+                    } else {
+                        (None, None, None, None)
+                    };
                 let payload = HotkeyRecordEvent {
                     kind: "ptt".to_string(),
                     state: match event.state {
@@ -116,6 +137,10 @@ impl HotkeyManager {
                     },
                     shortcut: shortcut.into_string(),
                     ts_ms: now_ms(),
+                    capture_id,
+                    capture_status,
+                    capture_error_code,
+                    capture_error_message,
                 };
                 let _ = app.emit("tv_hotkey_record", payload);
             }) {
@@ -133,15 +158,32 @@ impl HotkeyManager {
         }
 
         if let Some(toggle) = cfg.toggle.clone() {
-            if let Err(e) = gs.on_shortcut(toggle.as_str(), |app, shortcut, event| {
+            let ctx_cfg = crate::context_capture::config_from_settings(s);
+            let data_dir_buf = data_dir.to_path_buf();
+            if let Err(e) = gs.on_shortcut(toggle.as_str(), move |app, shortcut, event| {
                 if event.state != ShortcutState::Pressed {
                     return;
                 }
+                let tm = app.state::<crate::task_manager::TaskManager>();
+                let (capture_id, capture_status, capture_error_code, capture_error_message) =
+                    match tm.capture_hotkey_context_now(&data_dir_buf, &ctx_cfg) {
+                        Ok(id) => (Some(id), Some("ok".to_string()), None, None),
+                        Err(e) => (
+                            None,
+                            Some("err".to_string()),
+                            Some("E_HOTKEY_CAPTURE".to_string()),
+                            Some(e.to_string()),
+                        ),
+                    };
                 let payload = HotkeyRecordEvent {
                     kind: "toggle".to_string(),
                     state: "Pressed".to_string(),
                     shortcut: shortcut.into_string(),
                     ts_ms: now_ms(),
+                    capture_id,
+                    capture_status,
+                    capture_error_code,
+                    capture_error_message,
                 };
                 let _ = app.emit("tv_hotkey_record", payload);
             }) {

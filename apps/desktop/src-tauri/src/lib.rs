@@ -145,6 +145,7 @@ fn start_opts_from_settings(data_dir: &std::path::Path) -> Result<task_manager::
         rewrite_enabled,
         template_id,
         context_cfg: context_capture::config_from_settings(&s),
+        pre_captured_context: None,
     })
 }
 
@@ -263,9 +264,11 @@ async fn start_transcribe_recording_base64(
     runtime: tauri::State<'_, RuntimeState>,
     b64: &str,
     ext: &str,
+    capture_id: Option<String>,
+    capture_required: Option<bool>,
 ) -> Result<String, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let opts = match start_opts_from_settings(&dir) {
+    let mut opts = match start_opts_from_settings(&dir) {
         Ok(v) => v,
         Err(e) => {
             let span = cmd_span(
@@ -287,9 +290,40 @@ async fn start_transcribe_recording_base64(
             "b64_chars": b64.len(),
             "rewrite_enabled": opts.rewrite_enabled,
             "template_id": opts.template_id.as_deref(),
+            "capture_required": capture_required.unwrap_or(false),
+            "has_capture_id": capture_id.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false),
             "source": "settings",
         })),
     );
+    if capture_required.unwrap_or(false) {
+        let cid_opt = capture_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty());
+        let cid = match cid_opt {
+            Some(v) => v,
+            None => {
+                let msg = "E_CONTEXT_CAPTURE_REQUIRED: hotkey session requires capture_id";
+                span.err("config", "E_CONTEXT_CAPTURE_REQUIRED", msg, None);
+                return Err(msg.to_string());
+            }
+        };
+        let snap = match state.take_hotkey_context_once(cid) {
+            Some(v) => v,
+            None => {
+                let msg =
+                    format!("E_CONTEXT_CAPTURE_NOT_FOUND: capture_id not found or expired ({cid})");
+                span.err("config", "E_CONTEXT_CAPTURE_NOT_FOUND", &msg, None);
+                return Err(msg);
+            }
+        };
+        if snap.screenshot.is_none() {
+            let msg = format!("E_CONTEXT_CAPTURE_INVALID: capture_id has no screenshot ({cid})");
+            span.err("config", "E_CONTEXT_CAPTURE_INVALID", &msg, None);
+            return Err(msg);
+        }
+        opts.pre_captured_context = Some(snap);
+    }
     if let Some((code, msg)) = runtime_not_ready(&runtime) {
         span.err("config", code, &msg, None);
         return Err(msg);

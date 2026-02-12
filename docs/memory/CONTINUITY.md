@@ -521,6 +521,31 @@ UNCONFIRMED
 - `E_SCREENSHOT window has zero size` 是否需要升级为显式配置开关。
   - 推荐验证：按周统计频率与对 rewrite 质量影响再决策。
 
+## 更正与最新状态（2026-02-12，热键“按下瞬间截图”链路已落地）
+
+VERIFIED
+
+- 已完成实现：热键按下时由后端立即抓取当前前台窗口截图，并生成一次性 `capture_id`。
+  - `tv_hotkey_record` 事件新增字段：`capture_id/capture_status/capture_error_code/capture_error_message`。
+  - 前端仅在 `capture_status=ok` 且有 `capture_id` 时才会启动热键录音。
+- 已完成实现：`start_transcribe_recording_base64` 新增 `capture_id/capture_required` 入参。
+  - 当 `capture_required=true` 时，后端会强制校验 `capture_id`，缺失/过期/无截图直接报错：
+    - `E_CONTEXT_CAPTURE_REQUIRED`
+    - `E_CONTEXT_CAPTURE_NOT_FOUND`
+    - `E_CONTEXT_CAPTURE_INVALID`
+- 已完成实现：任务流水线支持注入预采集上下文（`StartOpts.pre_captured_context`）。
+  - 注入后会关闭运行时“上一窗口截图”采集并写入 `CTX.hotkey_capture_injected`，避免窗口漂移到后时刻快照。
+- 已完成实现：Windows 抓图链路新增黑帧校验（`validate_pixels`），当 `GetDIBits` 结果近似全黑时直接失败（`E_HOTKEY_CAPTURE`），不再把黑图当有效截图发送。
+- 本地验证通过：
+  - `cargo check --locked`（`apps/desktop/src-tauri`）
+  - `cargo test --locked -q`（14 tests passed）
+  - `npm run build`（`apps/desktop`）
+
+UNCONFIRMED
+
+- 尚未完成 Windows 实机回归来最终确认“按下瞬间窗口 = 最终发送截图窗口”在多场景（切窗/任务切换器/Chrome）下 100% 一致。
+- 当前截图底层仍使用 `PrintWindow/GetDIBits`，虽已改为“按下瞬间句柄”采集，但平台级黑帧兼容性是否完全消除仍需 Windows 实测数据确认。
+
 ## 更正与最新状态（2026-02-12，Windows 黑图根因已定位）
 
 VERIFIED

@@ -44,6 +44,7 @@ pub struct StartOpts {
     pub rewrite_enabled: bool,
     pub template_id: Option<String>,
     pub context_cfg: context_capture::ContextConfig,
+    pub pre_captured_context: Option<context_pack::ContextSnapshot>,
 }
 
 #[derive(Clone)]
@@ -99,6 +100,21 @@ impl TaskManager {
 
     pub fn warmup_context_best_effort(&self) {
         self.ctx.warmup_best_effort();
+    }
+
+    pub fn capture_hotkey_context_now(
+        &self,
+        data_dir: &std::path::Path,
+        cfg: &context_capture::ContextConfig,
+    ) -> Result<String> {
+        self.ctx.capture_hotkey_context_now(data_dir, cfg)
+    }
+
+    pub fn take_hotkey_context_once(
+        &self,
+        capture_id: &str,
+    ) -> Option<context_pack::ContextSnapshot> {
+        self.ctx.take_hotkey_context_once(capture_id)
     }
 
     pub fn restart_asr_best_effort(&self, reason: &str) {
@@ -262,12 +278,31 @@ impl TaskManager {
     ) -> Result<()> {
         let data_dir = data_dir::data_dir()?;
         let ctx_cfg = opts.context_cfg.clone();
-        let ctx_snap = if opts.rewrite_enabled {
+        let mut runtime_ctx_cfg = ctx_cfg.clone();
+        if opts.pre_captured_context.is_some() {
+            runtime_ctx_cfg.include_prev_window_screenshot = false;
+        }
+        let mut ctx_snap = if opts.rewrite_enabled {
             self.ctx
-                .capture_snapshot_best_effort_with_config(&data_dir, &task_id, &ctx_cfg)
+                .capture_snapshot_best_effort_with_config(&data_dir, &task_id, &runtime_ctx_cfg)
         } else {
             context_pack::ContextSnapshot::default()
         };
+        if let Some(pre) = opts.pre_captured_context.clone() {
+            ctx_snap.prev_window = pre.prev_window;
+            ctx_snap.screenshot = pre.screenshot;
+            crate::trace::event(
+                &data_dir,
+                Some(&task_id),
+                "ContextCapture",
+                "CTX.hotkey_capture_injected",
+                "ok",
+                Some(serde_json::json!({
+                    "has_prev_window": ctx_snap.prev_window.is_some(),
+                    "has_screenshot": ctx_snap.screenshot.is_some(),
+                })),
+            );
+        }
         crate::trace::event(
             &data_dir,
             Some(&task_id),

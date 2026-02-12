@@ -500,3 +500,25 @@ VERIFIED（2026-02-12，日志复核）
   - 成功样本：`task_id=4779b2ec-6c53-458b-8c96-a1bf1eab0390`（`Rewrite completed + task_done`）
   - 两者在同一时间窗相邻出现，易被肉眼混淆。
 - 处理：所有回归结论必须“按 task_id 聚合”看完整链路（start -> rewrite -> persist -> task_done），禁止仅凭 tail 末尾单行下结论。
+
+## 热键 capture_id 为一次性且有 TTL：延迟启动会触发 `E_CONTEXT_CAPTURE_NOT_FOUND`
+
+VERIFIED（2026-02-12，代码设计复核）
+
+- 触发条件：
+  - 热键按下后生成的 `capture_id` 未及时用于启动任务，超过注册表 TTL（当前 60s）或已被消费。
+- 现象：
+  - `start_transcribe_recording_base64` 在 `capture_required=true` 时返回：
+    - `E_CONTEXT_CAPTURE_NOT_FOUND`
+- 影响：
+  - 热键路径会直接拒绝启动（这是有意的正确性约束，不是随机故障）。
+- 处理：
+  - 前端收到热键 `Pressed` 后立即进入录音流程；
+  - 录音结束立刻调用 `start_transcribe_recording_base64` 并携带当前会话 `capture_id`，避免跨会话复用。
+
+更正（2026-02-12，本轮）
+
+VERIFIED
+
+- 触发 `E_CONTEXT_CAPTURE_NOT_FOUND` 的另一常见原因是“按下瞬间截图被判定为黑帧无效（`validate_pixels`）”，此时不会生成可用 `capture_id`。
+- 这是有意设计：宁可拒绝启动，也不允许把黑图当作正确窗口截图发送到 LLM。
