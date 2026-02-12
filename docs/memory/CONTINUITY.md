@@ -666,3 +666,25 @@ UNCONFIRMED
   - 推荐验证：固定场景连续 20 次录制，逐次记录 `task_id`、`capture_id`、`prev_window.png` 与当时前台窗口，按任务闭环判定。
 - 黑帧检测（`validate_pixels`）在真实复杂窗口（浏览器硬件加速、系统 UI）下的误拒率是否可接受。
   - 推荐验证：在同一台 Windows 机器开启 debug 落盘，统计“判黑拒绝”与“实际可用截图”差异后再决策阈值。
+
+## 更正与最新状态（2026-02-12，Windows 转录阶段耗时统计）
+
+VERIFIED
+
+- 数据源：`/mnt/d/Projects/TypeVoice/tmp/typevoice-data/trace.jsonl`（Windows data dir），按 `task_id` 聚合 `CTX.capture_snapshot/FFMPEG.preprocess/ASR.transcribe/LLM.rewrite/HISTORY.append` 的 `op=end duration_ms`。
+- 最近 10 次“完整链路”样本（`2026-02-12 05:49:45` 到 `2026-02-12 11:25:14`）统计：
+  - `ctx`：均值 `152.9ms`，中位数 `151ms`，总占比 `2.46%`
+  - `preprocess`：均值 `55.5ms`，中位数 `63.5ms`，总占比 `0.89%`
+  - `transcribe`：均值 `2179.6ms`，中位数 `2523.5ms`，总占比 `35.14%`
+  - `rewrite`：均值 `3810.8ms`，中位数 `4615.5ms`，总占比 `61.43%`
+  - `history`：均值 `4.4ms`，中位数 `4ms`，总占比 `0.07%`
+- 最近 10 次样本的单次瓶颈归因：
+  - `rewrite` 为最长阶段：`9/10`
+  - `transcribe` 为最长阶段：`1/10`
+- 扩展到近 45 次“全阶段齐全”样本（`2026-02-10 16:21:37` 到 `2026-02-12 11:25:14`）后，结论保持一致：
+  - `rewrite` 总占比 `58.09%`，`transcribe` 总占比 `38.33%`，其余阶段合计约 `3.58%`。
+- 最近 10 次样本里，音频体量（`CMD.start_transcribe_recording_base64.ctx.b64_chars`）与 `transcribe_ms` 的相关性显著高于与 `rewrite_ms` 的相关性（Pearson：`0.934` vs `0.566`），说明转录时长更受录音长度影响，而改写时长主要受 LLM 侧响应延迟与请求处理影响。
+
+UNCONFIRMED
+
+- 本统计来自当前这台 Windows 调试环境与该时间窗内样本；不同网络时延、模型服务负载、GPU 型号下的绝对时延可能变化，但“`rewrite + transcribe` 主导总耗时”的结构性结论仍需在目标长期环境持续复核。
