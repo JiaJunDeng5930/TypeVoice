@@ -24,6 +24,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetWindowThreadProcessId, IsWindow,
 };
 
+#[derive(Debug, Clone)]
 pub struct WindowInfo {
     pub title: Option<String>,
     pub process_image: Option<String>,
