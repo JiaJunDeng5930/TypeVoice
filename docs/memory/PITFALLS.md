@@ -522,3 +522,29 @@ VERIFIED
 
 - 触发 `E_CONTEXT_CAPTURE_NOT_FOUND` 的另一常见原因是“按下瞬间截图被判定为黑帧无效（`validate_pixels`）”，此时不会生成可用 `capture_id`。
 - 这是有意设计：宁可拒绝启动，也不允许把黑图当作正确窗口截图发送到 LLM。
+
+## Windows-only 编译才暴露 trait 派生缺失：Linux 侧全绿但 `tauri dev` 启动失败
+
+VERIFIED（2026-02-12，Windows 实机编译复核）
+
+- 触发条件：新增或调整 Windows 路径结构体后，仅在 Linux 侧执行 `cargo check/test`，未在 Windows 侧重新编译。
+- 现象：`tauri dev` 在 Windows 编译阶段报 `E0277`，提示类型缺少 `Debug`/`Clone`（本轮为 `WindowInfo`）。
+- 影响：主仓已经有功能提交，但 Windows 开发链路会直接起不来，阻断后续回归。
+- 本轮证据：
+  - 失败点：`apps/desktop/src-tauri/src/context_capture_windows.rs` 的 `WindowInfo` 缺少 `#[derive(Debug, Clone)]`。
+  - 修复提交：`b499006`（`fix(windows): derive debug and clone for window info`）。
+- 防复发：涉及 `#[cfg(target_os = "windows")]` 或 Windows 专有文件的改动后，必须至少完成一次 Windows 侧 `npm run tauri dev` 编译复核。
+
+## Windows 副本存在本地改动时，fast-forward 同步会被阻断
+
+VERIFIED（2026-02-12，双仓状态复核）
+
+- 触发条件：`/mnt/d/Projects/TypeVoice` 有未提交改动（或未跟踪文件）时，尝试直接 `git merge --ff-only` 到主仓最新提交。
+- 现象：同步被 Git 拒绝，Windows 运行态继续停留在旧 commit。
+- 本轮证据：
+  - `git -C /mnt/d/Projects/TypeVoice status --short --branch` -> `## main...origin/main [ahead 14]`，且存在：
+    - `M apps/desktop/src-tauri/src/context_capture_windows.rs`
+    - `?? .cache/`
+  - `git -C /mnt/d/Projects/TypeVoice rev-parse --short HEAD` -> `3a238b1`（落后主仓 `b499006`）。
+- 影响：Windows 在跑的程序可能不是主仓最新已签名提交，回归结论容易失真。
+- 防复发：同步前先清理工作区（提交/暂存/丢弃由操作者决定），再执行 fast-forward，并复核 Windows 进程路径与 HEAD 一致。

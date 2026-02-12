@@ -289,3 +289,25 @@ VERIFIED（2026-02-12）
   - `TASK.rewrite_effective`（是否进入 rewrite）
   - `LLM.rewrite`（若开启 rewrite）
   - `task_done` 或 `status=failed`（终态）
+
+## Windows 专有改动的最小验收：提交后必须做一次 Windows 实机编译复核
+
+VERIFIED（2026-02-12）
+
+- 背景：本轮主仓在 Linux 侧检查均通过，但 Windows 启动仍因 `WindowInfo` 缺少 `Debug/Clone` 导致 `E0277`。
+- 决策：凡是触达 `apps/desktop/src-tauri/src/*windows*`、`#[cfg(target_os = "windows")]` 分支、或热键/截图等 Windows-only 路径的提交，在“可交付”前必须补一轮 Windows `npm run tauri dev` 编译复核。
+- 复核口径：
+  - 编译阶段不出现 `E0277/E043*` 等类型错误；
+  - 进程侧可见 `typevoice-desktop.exe`，且本机 `http://localhost:1420` 返回 200（dev 模式）。
+
+## 双仓并行时先对齐工作区再 fast-forward，禁止带脏改动直接同步
+
+VERIFIED（2026-02-12）
+
+- 背景：Windows 副本 `/mnt/d/Projects/TypeVoice` 因本地改动与未跟踪文件存在，导致无法直接 fast-forward 到主仓最新提交。
+- 决策：
+  - 同步顺序固定为：
+    1. 清理 Windows 副本工作区（提交/暂存/丢弃，必须先达成干净状态）；
+    2. 执行 fast-forward 到主仓目标 commit；
+    3. 重启单实例 `tauri dev` 并复核进程与端口。
+- 目的：保证“Windows 运行态 = 主仓已提交状态”，避免回归结论混入未提交补丁。

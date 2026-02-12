@@ -564,3 +564,105 @@ VERIFIED
 UNCONFIRMED
 
 - 最近 16 次 `fb2d...` 高频黑图样本在当前 trace 中仅有 `has_title/has_process` 布尔信息（未含具体标题/进程字符串）；若要进一步细分触发窗口类型，需要在相同复现场景下再次开启截图 debug 落盘采样。
+
+## HANDOFF SNAPSHOT REFRESH（2026-02-12 14:39 CST，清上下文前）
+
+### 当前有效目标（与 SPEC 对齐）
+
+VERIFIED
+
+- 维持 MVP 主链路稳定：`Record -> Preprocess -> Transcribe -> Rewrite -> Persist -> Export`，并保持 Windows 端可运行、可诊断、可回归。
+- 对热键链路继续坚持“按下瞬间截图必须对应正确窗口”的正确性目标：不允许再退回“截图失败就无图继续”的策略。
+- 交付口径保持不变：所有“可用/不可用”结论都必须绑定单一 `task_id` 的完整证据链。
+
+### 当前状态（Done / Now / Next）
+
+#### Done
+
+VERIFIED
+
+- `AGENTS.md` 索引已按 `agents-md-project-index` 刷新，并使用项目完整排除目录集；`--check` 已通过。
+- 主仓当前为干净工作区：`git status --short --branch` 仅返回 `## main`。
+- 主仓最新提交为 `b499006`（Windows 编译修复：`WindowInfo` 增加 `#[derive(Debug, Clone)]`）。
+- Windows dev 会话当前可用：
+  - 进程存在 `typevoice-desktop.exe`（PID 28036）与 `node`；
+  - `Invoke-WebRequest http://localhost:1420` 返回 `200`。
+- 本轮 memory 文件已刷新：`CONTINUITY.md`、`PITFALLS.md`、`DECISIONS.md`。
+
+#### Now
+
+VERIFIED
+
+- Windows 工作副本（`/mnt/d/Projects/TypeVoice`）尚未与主仓对齐：
+  - `HEAD=3a238b1`（落后主仓 `b499006`）；
+  - 存在本地改动 `M apps/desktop/src-tauri/src/context_capture_windows.rs` 与未跟踪 `?? .cache/`。
+- 当前 Windows 运行进程来自 `D:\Projects\TypeVoice`，因此运行态可能混入未提交改动，不满足“运行态=已提交源码”要求。
+
+#### Next
+
+VERIFIED（建议接班顺序）
+
+1. 在 Windows 副本先处理脏工作区（提交/暂存/清理由接班者按现场策略执行），恢复可 fast-forward 状态。
+2. 将 `/mnt/d/Projects/TypeVoice` fast-forward 到主仓 `b499006`，并复核 `HEAD` 一致。
+3. 清理旧 `tauri dev` 会话后只保留一个最新会话，再做热键截图正确性回归（按 `task_id` 聚合证据链）。
+
+### 当前工作集（关键文件路径、关键命令、关键约束）
+
+#### 关键文件路径
+
+VERIFIED
+
+- `AGENTS.md`
+- `docs/memory/CONTINUITY.md`
+- `docs/memory/PITFALLS.md`
+- `docs/memory/DECISIONS.md`
+- `apps/desktop/src-tauri/src/context_capture.rs`
+- `apps/desktop/src-tauri/src/context_capture_windows.rs`
+- `apps/desktop/src-tauri/src/hotkeys.rs`
+- `apps/desktop/src-tauri/src/lib.rs`
+- `apps/desktop/src-tauri/src/task_manager.rs`
+- `apps/desktop/src/screens/MainScreen.tsx`
+
+#### 关键命令
+
+VERIFIED
+
+- 更新索引（完整排除集）：
+  - `python /home/atticusdeng/.agents/skills/agents-md-project-index/scripts/update_agents_md_project_index.py --root /home/atticusdeng/Projects/TypeVoice --agents-md /home/atticusdeng/Projects/TypeVoice/AGENTS.md --exclude-dir ...`
+- 校验索引：
+  - `python /home/atticusdeng/.agents/skills/agents-md-project-index/scripts/update_agents_md_project_index.py --root /home/atticusdeng/Projects/TypeVoice --agents-md /home/atticusdeng/Projects/TypeVoice/AGENTS.md --exclude-dir ... --check`
+- 双仓状态核对：
+  - `git status --short --branch`
+  - `git -C /mnt/d/Projects/TypeVoice status --short --branch`
+  - `git -C /mnt/d/Projects/TypeVoice rev-parse --short HEAD`
+- Windows 运行态核对：
+  - `powershell.exe -NoProfile -Command "Get-Process typevoice-desktop,node ..."`
+  - `powershell.exe -NoProfile -Command "(Invoke-WebRequest -UseBasicParsing http://localhost:1420).StatusCode"`
+
+#### 关键约束
+
+VERIFIED
+
+- 用户明确要求：按下热键瞬间必须截到正确窗口，不接受“错误窗口过滤 + 无图继续”类降级行为。
+- 在 Git 仓库完成任务要求原子化提交。
+- 更新 AGENTS 索引必须使用项目完整排除目录集，不允许回退脚本默认排除集。
+- 涉及 Windows-only 路径的改动，交付前必须做 Windows 实机编译复核。
+
+### 风险与坑（本阶段新增或高概率复发，指向 PITFALLS）
+
+VERIFIED
+
+- Linux 侧检查通过不代表 Windows 可编译：见 `docs/memory/PITFALLS.md` 新增条目“Windows-only 编译才暴露 trait 派生缺失”。
+- Windows 副本有脏改动会阻断 fast-forward，同步失败后运行态易与主仓分叉：见 `docs/memory/PITFALLS.md` 新增条目“Windows 副本存在本地改动时，fast-forward 同步会被阻断”。
+- 热键截图链路结论仍需按单一 `task_id` 验证，避免并发日志交织误判：见 `docs/memory/PITFALLS.md` 既有条目“trace/metrics 多任务交织，若不按 task_id 聚合会产生误判”。
+
+### 未确认事项（UNCONFIRMED + 推荐验证动作）
+
+UNCONFIRMED
+
+- Windows 当前运行会话是否完全对应主仓 `b499006`（而不是 `3a238b1` + 本地补丁）。
+  - 推荐验证：先清理 `/mnt/d` 工作区并 fast-forward，再重启单实例 `tauri dev`，复核进程路径与 `git rev-parse --short HEAD` 一致。
+- “按下热键瞬间窗口 == 最终发送截图窗口”在高频切窗场景是否达到用户要求的稳定正确。
+  - 推荐验证：固定场景连续 20 次录制，逐次记录 `task_id`、`capture_id`、`prev_window.png` 与当时前台窗口，按任务闭环判定。
+- 黑帧检测（`validate_pixels`）在真实复杂窗口（浏览器硬件加速、系统 UI）下的误拒率是否可接受。
+  - 推荐验证：在同一台 Windows 机器开启 debug 落盘，统计“判黑拒绝”与“实际可用截图”差异后再决策阈值。
