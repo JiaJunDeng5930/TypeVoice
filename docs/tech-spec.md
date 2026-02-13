@@ -43,6 +43,14 @@
 - Pipeline 内部每个阶段必须检查取消信号。
 - 对外部进程的调用（FFmpeg、ASR Runner）必须能终止进程或终止正在执行的作业。
 
+### 2.4 统一命令与配置快照（冻结）
+
+- 启动任务只允许 `start_task(req)` 一个命令入口；不再并存多入口命令。
+- 任务启动时必须生成不可变 `TaskConfigSnapshot`，后续阶段仅消费该快照，禁止运行中回读 settings 形成配置漂移。
+- 录音会话生命周期必须进入单一终态 `Finalized` 后再释放，禁止悬挂会话。
+- 主录音链路由后端命令托管（`start_backend_recording` / `stop_backend_recording` / `abort_backend_recording`）；`stop_backend_recording` 仅产出 `recording_asset_id`，任务启动统一经 `start_task(req)` 并消费该资产。
+- `recording_asset_id` 必须具备短时租约与自动清理语义，避免“停止录音后未启动任务”造成中间产物悬挂。
+
 ### 2.3 产物与缓存
 
 - 音频中间产物为临时文件，任务完成后默认清理。
@@ -79,6 +87,7 @@
 - 形态：单独可执行（或 Python 入口）由 Core Pipeline 启动与管理。
 - 通信：stdin/stdout JSON RPC 或本地 HTTP（MVP 优先选择 stdin/stdout，减少端口与防火墙问题）。
 - 约束：必须返回结构化结果与结构化错误码，禁止只输出人类可读日志。
+- 执行模型：仅允许常驻 daemon 模式；禁止并存一次性进程路径造成行为分叉。
 
 ### 4.3 输入输出接口（逻辑约束）
 

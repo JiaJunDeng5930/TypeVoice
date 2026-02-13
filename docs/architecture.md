@@ -46,12 +46,25 @@
 - Task events（阶段变更、进度、完成/失败）
 - Task result（asr_text、final_text、耗时、rtf、错误码）
 
+统一入口约束（新增）：
+
+- 对外仅暴露单一任务启动命令 `start_task(req)`。
+- `req` 仅表达触发意图与输入模式（例如 `trigger_source`、`record_mode`、`recording_asset_id`），不携带可变执行策略。
+- 热键与 UI 必须走同一条 Orchestrator 路径，不允许并行实现第二套任务入口。
+- 录音停止命令不得直接起任务；只返回受管控的录音资产句柄（`recording_asset_id`），再由 `start_task(req)` 进入统一编排。
+- 录音资产句柄必须由后端注册并托管生命周期（租约到期自动回收），禁止 UI 直接传入文件路径触发任务。
+
 ### 2.2 Recorder（适配器）
 
 职责：
 
 - 提供录音音频文件（临时文件）
 - 对外隐藏平台差异（Windows 设备枚举等）
+
+实现约束（新增）：
+
+- 主录音链路由后端命令托管，前端不直接持有录音数据生命周期。
+- 推荐命令形态：`start_backend_recording` / `stop_backend_recording` / `abort_backend_recording`，其中 `stop_backend_recording` 仅结束采集并返回 `recording_asset_id`。
 
 注意：录音实现与 ASR 解耦，验证与性能测量默认走 fixtures（不依赖录音）。
 

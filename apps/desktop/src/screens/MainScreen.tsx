@@ -1,7 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { blobToBase64, guessAudioExtFromMime } from "../lib/audio";
 import { copyText } from "../lib/clipboard";
 import type {
   HistoryItem,
@@ -24,6 +23,12 @@ type HotkeyRecordEvent = {
   capture_status?: "ok" | "err" | null;
   capture_error_code?: string | null;
   capture_error_message?: string | null;
+};
+
+type StopBackendRecordingResult = {
+  recordingId: string;
+  recordingAssetId: string;
+  ext: string;
 };
 
 type Props = {
@@ -55,6 +60,10 @@ function transcribeErrorHint(err: unknown): string {
   if (raw.includes("E_CONTEXT_CAPTURE_NOT_FOUND")) return "CONTEXT CAPTURE EXPIRED";
   if (raw.includes("E_CONTEXT_CAPTURE_INVALID")) return "CONTEXT CAPTURE INVALID";
   if (raw.includes("E_RECORDING_SESSION_OPEN")) return "RECORDING SESSION FAILED";
+  if (raw.includes("E_RECORD_ALREADY_ACTIVE")) return "RECORDING BUSY";
+  if (raw.includes("E_TASK_ALREADY_ACTIVE")) return "TASK BUSY";
+  if (raw.includes("E_RECORD_UNSUPPORTED")) return "RECORDING UNSUPPORTED";
+  if (raw.includes("E_RECORD_")) return "RECORDING FAILED";
   return "TRANSCRIBE FAILED";
 }
 
@@ -79,12 +88,8 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
     uiRef.current = ui;
   }, [ui]);
 
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const chunksRef = useRef<BlobPart[]>([]);
-  const mimeRef = useRef<string>("audio/webm");
-
   const activeTaskIdRef = useRef<string>("");
+  const backendRecordingIdRef = useRef<string>("");
   const hotkeySessionRef = useRef<boolean>(false);
   const pendingRecordingSessionIdRef = useRef<string | null>(null);
 
@@ -128,6 +133,15 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
     window.setTimeout(() => {
       void overlaySet(false, "IDLE");
     }, ms);
+  }
+
+  async function abortRecordingSessionBestEffort(sessionId: string | null) {
+    if (!sessionId || !sessionId.trim()) return;
+    try {
+      await invoke("abort_recording_session", { recordingSessionId: sessionId });
+    } catch {
+      // ignore
+    }
   }
 
   useEffect(() => {
@@ -292,6 +306,14 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
     });
     return () => {
       cancelled = true;
+      const staleRecordingId = backendRecordingIdRef.current;
+      backendRecordingIdRef.current = "";
+      if (staleRecordingId) {
+        void invoke("abort_backend_recording", { recordingId: staleRecordingId }).catch(() => {});
+      }
+      const staleSessionId = pendingRecordingSessionIdRef.current;
+      pendingRecordingSessionIdRef.current = null;
+      void abortRecordingSessionBestEffort(staleSessionId);
       for (const fn of unlistenFns) {
         try {
           fn();
@@ -303,82 +325,72 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
   }, []);
 
   async function startRecording(source: "ui" | "hotkey" = "ui", recordingSessionId: string | null = null) {
-    chunksRef.current = [];
     hotkeySessionRef.current = source === "hotkey";
     pendingRecordingSessionIdRef.current = source === "hotkey" ? recordingSessionId : null;
     if (hotkeySessionRef.current) void overlaySet(true, "REC");
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-
-      const mimeType =
-        MediaRecorder.isTypeSupported("audio/webm;codecs=opus") &&
-        "audio/webm;codecs=opus";
-      const r = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-      mimeRef.current = r.mimeType || "audio/webm";
-      recorderRef.current = r;
-
-      r.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
-      };
-
-      r.onstop = async () => {
-        stream.getTracks().forEach((t) => t.stop());
-        streamRef.current = null;
-        recorderRef.current = null;
-
-        const blob = new Blob(chunksRef.current, { type: mimeRef.current });
-        chunksRef.current = [];
-
-        try {
-          if (hotkeySessionRef.current) void overlaySet(true, "TRANSCRIBING");
-          const b64 = await blobToBase64(blob);
-          const ext = guessAudioExtFromMime(mimeRef.current);
-          const id = (await invoke("start_transcribe_recording_base64", {
-            b64,
-            ext,
-            recordingSessionId: pendingRecordingSessionIdRef.current,
-          })) as string;
-          activeTaskIdRef.current = id;
-          pendingRecordingSessionIdRef.current = null;
-        } catch (err) {
-          activeTaskIdRef.current = "";
-          setUi("idle");
-          const hint = transcribeErrorHint(err);
-          pushToastRef.current(hint, "danger");
-          pendingRecordingSessionIdRef.current = null;
-          if (hotkeySessionRef.current) {
-            overlayFlash("ERROR", 1200, hint);
-            hotkeySessionRef.current = false;
-          }
-        }
-      };
-
-      r.start();
+      const rid = (await invoke("start_backend_recording")) as string;
+      backendRecordingIdRef.current = rid;
       setUi("recording");
-    } catch {
+    } catch (err) {
+      const staleSessionId = pendingRecordingSessionIdRef.current;
+      void abortRecordingSessionBestEffort(staleSessionId);
       setUi("idle");
-      pushToastRef.current("MIC PERMISSION NEEDED", "danger");
+      pushToastRef.current(transcribeErrorHint(err), "danger");
       pendingRecordingSessionIdRef.current = null;
       if (hotkeySessionRef.current) {
-        overlayFlash("MIC DENIED", 1400);
+        overlayFlash("ERROR", 1200);
         hotkeySessionRef.current = false;
       }
     }
   }
 
   async function stopAndTranscribe() {
-    const r = recorderRef.current;
-    if (!r) return;
+    const rid = backendRecordingIdRef.current;
+    if (!rid) return;
     setUi("transcribing");
+    let stopResult: StopBackendRecordingResult | null = null;
     try {
-      r.stop();
+      if (hotkeySessionRef.current) void overlaySet(true, "TRANSCRIBING");
+      stopResult = (await invoke("stop_backend_recording", {
+        recordingId: rid,
+      })) as StopBackendRecordingResult;
     } catch {
+      void invoke("abort_backend_recording", { recordingId: rid }).catch(() => {});
+      backendRecordingIdRef.current = "";
+      const staleSessionId = pendingRecordingSessionIdRef.current;
+      void abortRecordingSessionBestEffort(staleSessionId);
       setUi("idle");
       pendingRecordingSessionIdRef.current = null;
       pushToastRef.current("STOP FAILED", "danger");
       if (hotkeySessionRef.current) {
         overlayFlash("ERROR", 1200, "STOP FAILED");
+        hotkeySessionRef.current = false;
+      }
+      return;
+    }
+
+    if (!stopResult) return;
+    backendRecordingIdRef.current = "";
+    try {
+      const id = (await invoke("start_task", {
+        req: {
+          triggerSource: hotkeySessionRef.current ? "hotkey" : "ui",
+          recordMode: "recording_asset",
+          recordingAssetId: stopResult.recordingAssetId,
+          recordingSessionId: pendingRecordingSessionIdRef.current,
+        },
+      })) as string;
+      activeTaskIdRef.current = id;
+      pendingRecordingSessionIdRef.current = null;
+    } catch (err) {
+      const staleSessionId = pendingRecordingSessionIdRef.current;
+      void abortRecordingSessionBestEffort(staleSessionId);
+      setUi("idle");
+      pendingRecordingSessionIdRef.current = null;
+      pushToastRef.current(transcribeErrorHint(err), "danger");
+      if (hotkeySessionRef.current) {
+        overlayFlash("ERROR", 1200);
         hotkeySessionRef.current = false;
       }
     }

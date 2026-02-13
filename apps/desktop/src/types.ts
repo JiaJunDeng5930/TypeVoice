@@ -35,6 +35,7 @@ export type Settings = {
   llm_base_url?: string | null;
   llm_model?: string | null;
   llm_reasoning_effort?: string | null;
+  record_input_spec?: string | null;
   rewrite_enabled?: boolean | null;
   rewrite_template_id?: string | null;
   rewrite_glossary?: string[] | null;

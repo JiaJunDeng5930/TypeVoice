@@ -125,6 +125,25 @@ impl WindowsContext {
         })
     }
 
+    pub fn foreground_window_info_best_effort(&self) -> Option<WindowInfo> {
+        let hwnd = unsafe { GetForegroundWindow() };
+        if hwnd.is_null() {
+            return None;
+        }
+        if unsafe { IsWindow(hwnd) } == 0 {
+            return None;
+        }
+        let mut pid: u32 = 0;
+        unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
+        if pid == 0 {
+            return None;
+        }
+        Some(WindowInfo {
+            title: get_window_title_best_effort(hwnd),
+            process_image: get_process_image_best_effort(pid),
+        })
+    }
+
     pub fn capture_last_external_window_png_best_effort(
         &self,
         max_side: u32,

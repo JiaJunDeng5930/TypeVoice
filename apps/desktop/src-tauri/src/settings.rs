@@ -22,6 +22,7 @@ pub struct Settings {
     pub llm_reasoning_effort: Option<String>, // e.g. none|minimal|low|medium|high|xhigh
 
     // UX settings
+    pub record_input_spec: Option<String>, // ffmpeg dshow input spec, e.g. audio=default
     pub rewrite_enabled: Option<bool>,
     pub rewrite_template_id: Option<String>,
     pub rewrite_glossary: Option<Vec<String>>,
@@ -57,6 +58,7 @@ pub struct SettingsPatch {
     pub llm_model: Option<Option<String>>,
     pub llm_reasoning_effort: Option<Option<String>>,
 
+    pub record_input_spec: Option<Option<String>>,
     pub rewrite_enabled: Option<Option<bool>>,
     pub rewrite_template_id: Option<Option<String>>,
     pub rewrite_glossary: Option<Option<Vec<String>>>,
@@ -100,6 +102,9 @@ pub fn apply_patch(mut s: Settings, p: SettingsPatch) -> Settings {
     }
     if let Some(v) = p.llm_reasoning_effort {
         s.llm_reasoning_effort = v;
+    }
+    if let Some(v) = p.record_input_spec {
+        s.record_input_spec = v;
     }
     if let Some(v) = p.rewrite_enabled {
         s.rewrite_enabled = v;
@@ -242,6 +247,15 @@ pub fn resolve_hotkey_config(s: &Settings) -> Result<HotkeyConfigResolved> {
     })
 }
 
+pub fn resolve_record_input_spec(s: &Settings) -> String {
+    s.record_input_spec
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or("audio=default")
+        .to_string()
+}
+
 pub fn save_settings(data_dir: &Path, settings: &Settings) -> Result<()> {
     let span = Span::start(data_dir, None, "Settings", "SETTINGS.save", None);
     std::fs::create_dir_all(data_dir).context("create data dir failed")?;
@@ -267,6 +281,7 @@ mod tests {
             llm_base_url: Some("https://x/v1".to_string()),
             llm_model: Some("m1".to_string()),
             llm_reasoning_effort: Some("low".to_string()),
+            record_input_spec: None,
             rewrite_enabled: Some(false),
             rewrite_template_id: Some("t1".to_string()),
             rewrite_glossary: None,

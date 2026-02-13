@@ -115,12 +115,14 @@ pub fn check_hotkey_available(
 pub struct HotkeyManager {
     // Ensures apply is serialized (settings updates may come quickly).
     lock: Mutex<()>,
+    registered: Mutex<Vec<String>>,
 }
 
 impl Default for HotkeyManager {
     fn default() -> Self {
         Self {
             lock: Mutex::new(()),
+            registered: Mutex::new(Vec::new()),
         }
     }
 }
@@ -160,23 +162,36 @@ impl HotkeyManager {
 
         let gs = app.global_shortcut();
 
-        // Clean slate. This app owns all global shortcuts.
-        if let Err(e) = gs.unregister_all() {
-            crate::trace::event(
-                data_dir,
-                None,
-                "Hotkeys",
-                "HK.unregister_all",
-                "err",
-                Some(serde_json::json!({"code": "E_HK_UNREGISTER_ALL", "error": e.to_string()})),
-            );
-            // Keep going: attempt to register anyway; worst case, register fails and we surface it.
+        // Only unregister shortcuts that this module registered before.
+        {
+            let mut prev = self.registered.lock().unwrap();
+            for shortcut in prev.iter() {
+                if let Err(e) = gs.unregister(shortcut.as_str()) {
+                    crate::trace::event(
+                        data_dir,
+                        None,
+                        "Hotkeys",
+                        "HK.unregister_scoped",
+                        "err",
+                        Some(
+                            serde_json::json!({"code": "E_HK_UNREGISTER_SCOPED", "shortcut": shortcut, "error": e.to_string()}),
+                        ),
+                    );
+                }
+            }
+            prev.clear();
         }
 
         if !cfg.enabled {
             span.ok(Some(serde_json::json!({"status": "disabled"})));
             return;
         }
+
+        let capture_required = matches!(
+            crate::settings::resolve_rewrite_start_config(s),
+            Ok((true, Some(_)))
+        );
+        let mut registered_now: Vec<String> = Vec::new();
 
         if let Some(ptt) = cfg.ptt.clone() {
             let ctx_cfg = crate::context_capture::config_from_settings(s);
@@ -185,14 +200,18 @@ impl HotkeyManager {
                 let (recording_session_id, capture_status, capture_error_code, capture_error_message) =
                     if event.state == ShortcutState::Pressed {
                         let tm = app.state::<crate::task_manager::TaskManager>();
-                        match tm.open_recording_session(&data_dir_buf, &ctx_cfg, true) {
-                            Ok(id) => (Some(id), Some("ok".to_string()), None, None),
-                            Err(e) => (
-                                None,
-                                Some("err".to_string()),
-                                Some("E_RECORDING_SESSION_OPEN".to_string()),
-                                Some(e.to_string()),
-                            ),
+                        if tm.has_active_task() {
+                            (None, None, None, None)
+                        } else {
+                            match tm.open_recording_session(&data_dir_buf, &ctx_cfg, capture_required) {
+                                Ok(id) => (Some(id), Some("ok".to_string()), None, None),
+                                Err(e) => (
+                                    None,
+                                    Some("err".to_string()),
+                                    Some("E_RECORDING_SESSION_OPEN".to_string()),
+                                    Some(e.to_string()),
+                                ),
+                            }
                         }
                     } else {
                         (None, None, None, None)
@@ -222,6 +241,8 @@ impl HotkeyManager {
                         serde_json::json!({"code": "E_HK_REGISTER_PTT", "ptt": ptt, "error": e.to_string()}),
                     ),
                 );
+            } else {
+                registered_now.push(ptt);
             }
         }
 
@@ -234,14 +255,18 @@ impl HotkeyManager {
                 }
                 let tm = app.state::<crate::task_manager::TaskManager>();
                 let (recording_session_id, capture_status, capture_error_code, capture_error_message) =
-                    match tm.open_recording_session(&data_dir_buf, &ctx_cfg, true) {
-                        Ok(id) => (Some(id), Some("ok".to_string()), None, None),
-                        Err(e) => (
-                            None,
-                            Some("err".to_string()),
-                            Some("E_RECORDING_SESSION_OPEN".to_string()),
-                            Some(e.to_string()),
-                        ),
+                    if tm.has_active_task() {
+                        (None, None, None, None)
+                    } else {
+                        match tm.open_recording_session(&data_dir_buf, &ctx_cfg, capture_required) {
+                            Ok(id) => (Some(id), Some("ok".to_string()), None, None),
+                            Err(e) => (
+                                None,
+                                Some("err".to_string()),
+                                Some("E_RECORDING_SESSION_OPEN".to_string()),
+                                Some(e.to_string()),
+                            ),
+                        }
                     };
                 let payload = HotkeyRecordEvent {
                     kind: "toggle".to_string(),
@@ -265,9 +290,15 @@ impl HotkeyManager {
                         serde_json::json!({"code": "E_HK_REGISTER_TOGGLE", "toggle": toggle, "error": e.to_string()}),
                     ),
                 );
+            } else {
+                registered_now.push(toggle);
             }
         }
 
+        {
+            let mut current = self.registered.lock().unwrap();
+            *current = registered_now;
+        }
         span.ok(Some(serde_json::json!({"status": "ok"})));
     }
 }

@@ -57,6 +57,8 @@ pub struct StartOpts {
     pub context_cfg: context_capture::ContextConfig,
     pub pre_captured_context: Option<context_pack::ContextSnapshot>,
     pub recording_session_id: Option<String>,
+    pub record_elapsed_ms: u128,
+    pub record_label: String,
 }
 
 #[derive(Debug, Clone)]
@@ -98,6 +100,10 @@ impl TaskManager {
             asr: asr_service::AsrService::new(),
             ctx: context_capture::ContextService::new(),
         }
+    }
+
+    pub fn has_active_task(&self) -> bool {
+        self.inner.lock().unwrap().is_some()
     }
 
     fn env_bool_default_true(key: &str) -> bool {
@@ -153,6 +159,8 @@ impl TaskManager {
         context_cfg: &context_capture::ContextConfig,
         capture_required: bool,
     ) -> Result<String> {
+        self.cleanup_orphan_recording_sessions(60_000);
+
         let session_id = Uuid::new_v4().to_string();
         let pre_captured_context = if capture_required {
             let capture_id = self.ctx.capture_hotkey_context_now(data_dir, context_cfg)?;
@@ -200,6 +208,17 @@ impl TaskManager {
         g.remove(session_id).is_some()
     }
 
+    pub fn cleanup_orphan_recording_sessions(&self, max_age_ms: i64) {
+        let now = now_ms();
+        let mut g = self.recording_sessions.lock().unwrap();
+        g.retain(|_, v| {
+            if v.task_id.is_some() {
+                return true;
+            }
+            now.saturating_sub(v.created_at_ms) <= max_age_ms
+        });
+    }
+
     pub fn finalize_recording_session_by_task(&self, task_id: &str) {
         let mut g = self.recording_sessions.lock().unwrap();
         g.retain(|_, v| v.task_id.as_deref() != Some(task_id));
@@ -228,22 +247,20 @@ impl TaskManager {
         opts: StartOpts,
     ) -> Result<String> {
         let input = pipeline::fixture_path(&fixture_name)?;
-        self.start_audio(app, input, opts, "Record (fixture)")
+        self.start_audio(app, input, opts)
     }
 
-    pub fn start_recording_base64(
+    pub fn start_recording_file(
         &self,
         app: AppHandle,
-        b64: String,
-        ext: String,
+        input_path: PathBuf,
         opts: StartOpts,
     ) -> Result<String> {
-        let task_id = Uuid::new_v4().to_string();
-        let input = pipeline::save_base64_file(&task_id, &b64, &ext)?;
-        match self.start_audio_with_task_id(app, task_id, input.clone(), opts, "Record (saved)") {
+        let cleanup_input = input_path.clone();
+        match self.start_audio(app, input_path, opts) {
             Ok(task_id) => Ok(task_id),
             Err(e) => {
-                let _ = pipeline::cleanup_audio_artifacts(&input, &input);
+                let _ = pipeline::cleanup_audio_artifacts(&cleanup_input, &cleanup_input);
                 Err(e)
             }
         }
@@ -254,10 +271,9 @@ impl TaskManager {
         app: AppHandle,
         input: PathBuf,
         opts: StartOpts,
-        record_msg: &str,
     ) -> Result<String> {
         let task_id = Uuid::new_v4().to_string();
-        self.start_audio_with_task_id(app, task_id, input, opts, record_msg)
+        self.start_audio_with_task_id(app, task_id, input, opts)
     }
 
     fn start_audio_with_task_id(
@@ -266,7 +282,6 @@ impl TaskManager {
         task_id: String,
         input: PathBuf,
         mut opts: StartOpts,
-        record_msg: &str,
     ) -> Result<String> {
         if let Some(session_id) = opts.recording_session_id.clone() {
             opts.pre_captured_context = self.bind_recording_session_to_task(&session_id, &task_id)?;
@@ -286,7 +301,6 @@ impl TaskManager {
             });
         }
         let this = self.clone();
-        let record_msg = record_msg.to_string();
 
         // The invoke handler may execute on a thread without an active Tokio
         // runtime/reactor. We detach into an OS thread and drive the async
@@ -300,7 +314,7 @@ impl TaskManager {
                 Ok(rt) => {
                     rt.block_on(async move {
                         if let Err(e) = this
-                            .run_pipeline(app.clone(), task_id.clone(), input, opts, &record_msg)
+                            .run_pipeline(app.clone(), task_id.clone(), input, opts)
                             .await
                         {
                             // Fail-safe: ensure the UI always gets a terminal event.
@@ -381,7 +395,6 @@ impl TaskManager {
         task_id: String,
         input: PathBuf,
         opts: StartOpts,
-        record_msg: &str,
     ) -> Result<RecordingTerminal> {
         let data_dir = data_dir::data_dir()?;
         let ctx_cfg = opts.context_cfg.clone();
@@ -459,8 +472,8 @@ impl TaskManager {
                 task_id: task_id.clone(),
                 stage: "Record".to_string(),
                 status: "completed".to_string(),
-                message: record_msg.to_string(),
-                elapsed_ms: Some(0),
+                message: opts.record_label.clone(),
+                elapsed_ms: Some(opts.record_elapsed_ms),
                 error_code: None,
             },
         );

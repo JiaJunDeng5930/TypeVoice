@@ -21,12 +21,21 @@
 - [VERIFIED] Windows 侧补齐“最新源码构建并启动”流程：新增 `scripts/windows/run-latest.ps1`，并在 `docs/windows-dev.md` / `docs/windows-gate.md` 固化一键执行路径。
 - [VERIFIED] ASR 预处理新增可配置项已接通：新增 `asr_preprocess_silence_*` 设置字段，`Settings` 与 `SettingsPatch` 持久化，并在 `SettingsScreen` 新增 `PREPROCESS` 开关/参数面板（静音裁剪开关、阈值、首尾静音时长）。
 - [VERIFIED] 预处理配置已纳入运行链路：`task_manager::StartOpts`、`StartOpts` 组装、FFmpeg 预处理阶段与日志指标（`task_perf`）均记录 `asr_preprocess_*`，用于比对配置对 ASR 时延的影响。
+- [UNCONFIRMED] 任务启动入口已统一：新增 `start_task(req)` 命令并删除旧的多入口转写命令实现；待校验路径：`npm run tauri dev` + 热键/UI 双链路 smoke。
+- [UNCONFIRMED] 更正：主 UI 录音链路已收敛为 `start_backend_recording` -> `stop_backend_recording` -> `start_task(record_mode=recording_asset)`；任务启动只经 `start_task`。
+- [UNCONFIRMED] 录音中间产物已切换为后端托管 `recording_asset_id` 语义：任务启动不再接收裸文件路径，资产由后端租约回收。
+- [UNCONFIRMED] 后端同步清理了旧转写命令实现，当前命令面仅保留统一任务链路。
+- [UNCONFIRMED] 热键注册已改为“作用域化注销”语义：`HotkeyManager` 仅注销自身曾注册快捷键，不再调用 `unregister_all`；待校验路径：热键重复保存设置后仍可触发，且不影响其他 scope。
+- [UNCONFIRMED] 热键会话清理链路已补齐：新增 `abort_recording_session` 命令，前端在录音失败/转写启动失败/组件卸载时会回收未消费 `recording_session_id`；待校验路径：trace 中无悬挂 session。
+- [UNCONFIRMED] 上下文窗口采样语义已向“前台窗口即时采样”收敛：hotkey 与任务内上下文均优先使用 `foreground_window_*` 路径；待校验路径：同 task_id 下两入口截图来源一致。
 
 ### 当前工作集
 
 - 需要在下一步优先验证：
   - 热键触发链路的 rewrite 一致性（`rewrite_enabled/template_id` 与设置一致）。
   - 关键 Windows-only 改动后的本机 `Windows` `npm run tauri dev` 与 `quick/full` 可回归。
+- [UNCONFIRMED] “后端录音替代前端 `MediaRecorder`”已接通：`MainScreen` 调用 `start_backend_recording` / `stop_backend_recording` / `abort_backend_recording`，录音由后端 FFmpeg 进程托管；待校验路径：Windows 默认麦克风 dshow 输入可用性。
+- [UNCONFIRMED] `start_task(recording_bytes)` 已从任务入口移除；当前统一输入模式为 `recording_asset|fixture`。
 - 进行中更新点：`docs/memory` 由复盘内容转为“当前事实清单”。
 - ASR 设置页状态来源修正：状态检查已改为按 `settings` 解析后的实际 ASR 模型来源（本地路径或远端模型 id）执行，不再固定指向仓库默认目录。
 - 完整性告警策略调整：`manifest.json_missing` 仍可见，但不再阻断 ASR 可用性，状态面板会明确标注为“可用但未做完整性清单校验”。

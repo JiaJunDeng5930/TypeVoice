@@ -161,7 +161,7 @@ impl ContextService {
                 screenshot: None,
             };
             if cfg.include_prev_window_meta {
-                if let Some(info) = g.win.last_external_window_info_best_effort() {
+                if let Some(info) = g.win.foreground_window_info_best_effort() {
                     snapshot.prev_window = Some(crate::context_pack::PrevWindowInfo {
                         title: info.title,
                         process_image: info.process_image,
@@ -399,7 +399,7 @@ impl ContextService {
                     "CTX.prev_window.info",
                     None,
                 );
-                if let Some(info) = g.win.last_external_window_info_best_effort() {
+                if let Some(info) = g.win.foreground_window_info_best_effort() {
                     snap.prev_window = Some(crate::context_pack::PrevWindowInfo {
                         title: info.title,
                         process_image: info.process_image,
@@ -429,17 +429,23 @@ impl ContextService {
                     },
                 );
                 let max_side = env_u32("TYPEVOICE_CONTEXT_SCREENSHOT_MAX_SIDE", 1600);
-                let sc = g
-                    .win
-                    .capture_last_external_window_png_diag_best_effort(max_side);
-                if let Some(raw) = sc.raw {
-                    let sha = crate::context_pack::sha256_hex(&raw.png_bytes);
+                let sc = g.win.capture_foreground_window_now_diag_best_effort(max_side);
+                let capture = sc.capture;
+                let error = sc.error;
+                if let Some(raw_capture) = capture {
+                    let sha = crate::context_pack::sha256_hex(&raw_capture.screenshot.png_bytes);
                     snap.screenshot = Some(crate::context_pack::ScreenshotPng {
-                        width: raw.width,
-                        height: raw.height,
+                        width: raw_capture.screenshot.width,
+                        height: raw_capture.screenshot.height,
                         sha256_hex: sha,
-                        png_bytes: raw.png_bytes,
+                        png_bytes: raw_capture.screenshot.png_bytes,
                     });
+                    if cfg.include_prev_window_meta {
+                        snap.prev_window = Some(crate::context_pack::PrevWindowInfo {
+                            title: raw_capture.window.title,
+                            process_image: raw_capture.window.process_image,
+                        });
+                    }
                     shot_span.ok(Some(serde_json::json!({
                         "w": snap.screenshot.as_ref().unwrap().width,
                         "h": snap.screenshot.as_ref().unwrap().height,
@@ -451,11 +457,11 @@ impl ContextService {
                     // Optional debug artifact: persist the screenshot PNG for manual inspection.
                     // This is OFF by default because screenshots are sensitive.
                     if debug_log::verbose_enabled() && debug_log::include_screenshots() {
-                        if let Some(sc) = snap.screenshot.as_ref() {
-                            if let Some(info) =
-                                debug_log::write_payload_binary_no_truncate_best_effort(
-                                    data_dir,
-                                    task_id,
+                            if let Some(sc) = snap.screenshot.as_ref() {
+                                if let Some(info) =
+                                    debug_log::write_payload_binary_no_truncate_best_effort(
+                                        data_dir,
+                                        task_id,
                                     "prev_window.png",
                                     sc.png_bytes.clone(),
                                 )
@@ -476,7 +482,7 @@ impl ContextService {
                             }
                         }
                     }
-                } else if let Some(err) = sc.error {
+                } else if let Some(err) = error {
                     shot_span.err(
                         "winapi",
                         "E_SCREENSHOT",

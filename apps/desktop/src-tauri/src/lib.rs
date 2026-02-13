@@ -24,7 +24,6 @@ mod trace;
 use history::HistoryItem;
 use llm::ApiKeyStatus;
 use model::ModelStatus;
-use pipeline::TranscribeResult;
 use settings::Settings;
 use settings::SettingsPatch;
 use task_manager::TaskManager;
@@ -36,6 +35,29 @@ use trace::Span;
 struct RuntimeState {
     toolchain: std::sync::Mutex<toolchain::ToolchainStatus>,
     python: std::sync::Mutex<python_runtime::PythonStatus>,
+}
+
+struct ActiveBackendRecording {
+    recording_id: String,
+    output_path: std::path::PathBuf,
+    child: std::process::Child,
+    started_at: std::time::Instant,
+}
+
+struct RecordedAsset {
+    asset_id: String,
+    output_path: std::path::PathBuf,
+    record_elapsed_ms: u128,
+    created_at: std::time::Instant,
+}
+
+struct BackendRecordingInner {
+    active: Option<ActiveBackendRecording>,
+    assets: std::collections::HashMap<String, RecordedAsset>,
+}
+
+struct BackendRecordingState {
+    inner: std::sync::Mutex<BackendRecordingInner>,
 }
 
 impl RuntimeState {
@@ -65,12 +87,41 @@ impl RuntimeState {
     }
 }
 
+impl BackendRecordingState {
+    fn new() -> Self {
+        Self {
+            inner: std::sync::Mutex::new(BackendRecordingInner {
+                active: None,
+                assets: std::collections::HashMap::new(),
+            }),
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct OverlayState {
     visible: bool,
     status: String,
     detail: Option<String>,
     ts_ms: i64,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StartTaskRequest {
+    trigger_source: String, // ui|hotkey|fixture
+    record_mode: String, // recording_asset|fixture
+    recording_asset_id: Option<String>,
+    fixture_name: Option<String>,
+    recording_session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StopBackendRecordingResult {
+    recording_id: String,
+    recording_asset_id: String,
+    ext: String,
 }
 
 #[tauri::command]
@@ -151,6 +202,8 @@ fn start_opts_from_settings(data_dir: &std::path::Path) -> Result<task_manager::
         asr_preprocess,
         pre_captured_context: None,
         recording_session_id: None,
+        record_elapsed_ms: 0,
+        record_label: "Record".to_string(),
     })
 }
 
@@ -161,6 +214,41 @@ fn abort_recording_session_if_present(
     if let Some(id) = recording_session_id.as_deref() {
         state.abort_recording_session(id);
     }
+}
+
+fn cleanup_expired_recording_assets(
+    recorder: &tauri::State<'_, BackendRecordingState>,
+    max_age: std::time::Duration,
+) {
+    let mut g = recorder.inner.lock().unwrap();
+    let expired_ids: Vec<String> = g
+        .assets
+        .iter()
+        .filter_map(|(id, asset)| {
+            if asset.created_at.elapsed() > max_age {
+                Some(id.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+    for id in expired_ids {
+        if let Some(asset) = g.assets.remove(&id) {
+            let _ = std::fs::remove_file(&asset.output_path);
+        }
+    }
+}
+
+fn has_active_recording(recorder: &tauri::State<'_, BackendRecordingState>) -> bool {
+    recorder.inner.lock().unwrap().active.is_some()
+}
+
+fn take_recording_asset(
+    recorder: &tauri::State<'_, BackendRecordingState>,
+    asset_id: &str,
+) -> Option<RecordedAsset> {
+    let mut g = recorder.inner.lock().unwrap();
+    g.assets.remove(asset_id)
 }
 
 fn resolve_asr_preprocess_config(s: &settings::Settings) -> pipeline::PreprocessConfig {
@@ -180,12 +268,6 @@ fn resolve_asr_preprocess_config(s: &settings::Settings) -> pipeline::Preprocess
     cfg
 }
 
-fn resolve_asr_preprocess_config_strict(
-    data_dir: &std::path::Path,
-) -> anyhow::Result<pipeline::PreprocessConfig> {
-    settings::load_settings_strict(data_dir).map(|s| resolve_asr_preprocess_config(&s))
-}
-
 fn sanitize_rewrite_glossary(glossary: Option<Vec<String>>) -> Vec<String> {
     let mut out = Vec::new();
     for item in glossary.unwrap_or_default() {
@@ -197,211 +279,384 @@ fn sanitize_rewrite_glossary(glossary: Option<Vec<String>>) -> Vec<String> {
     out
 }
 
-#[tauri::command]
-fn transcribe_fixture(
-    runtime: tauri::State<'_, RuntimeState>,
-    fixture_name: &str,
-) -> Result<TranscribeResult, String> {
-    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let span = cmd_span(
-        &dir,
-        None,
-        "CMD.transcribe_fixture",
-        Some(serde_json::json!({"fixture_name": fixture_name})),
-    );
-    if let Some((code, msg)) = runtime_not_ready(&runtime) {
-        span.err("config", code, &msg, None);
-        return Err(msg);
-    }
-    let model_id = match pipeline::resolve_asr_model_id(&dir) {
-        Ok(v) => v,
-        Err(e) => {
-            span.err_anyhow("pipeline", "E_PIPELINE_RESOLVE_ASR", &e, None);
-            return Err(e.to_string());
-        }
-    };
-    let preprocess_cfg = match resolve_asr_preprocess_config_strict(&dir) {
-        Ok(v) => v,
-        Err(e) => {
-            span.err_anyhow("pipeline", "E_CMD_RESOLVE_ASR_PREPROCESS", &e, None);
-            return Err(e.to_string());
-        }
-    };
-    match pipeline::run_fixture_pipeline(fixture_name, &model_id, &preprocess_cfg) {
-        Ok(r) => {
-            span.ok(None);
-            Ok(r)
-        }
-        Err(e) => {
-            span.err_anyhow("pipeline", "E_CMD_TRANSCRIBE_FIXTURE", &e, None);
-            Err(e.to_string())
-        }
-    }
+fn record_input_spec_from_settings(data_dir: &std::path::Path) -> Result<String, String> {
+    let s = settings::load_settings_strict(data_dir).map_err(|e| e.to_string())?;
+    Ok(settings::resolve_record_input_spec(&s))
 }
 
 #[tauri::command]
-fn transcribe_recording_base64(
-    runtime: tauri::State<'_, RuntimeState>,
-    b64: &str,
-    ext: &str,
-) -> Result<TranscribeResult, String> {
-    let task_id = uuid::Uuid::new_v4().to_string();
-    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let span = cmd_span(
-        &dir,
-        Some(&task_id),
-        "CMD.transcribe_recording_base64",
-        Some(serde_json::json!({"ext": ext, "b64_chars": b64.len()})),
-    );
-    if let Some((code, msg)) = runtime_not_ready(&runtime) {
-        span.err("config", code, &msg, None);
-        return Err(msg);
-    }
-    let input = match pipeline::save_base64_file(&task_id, b64, ext) {
-        Ok(p) => p,
-        Err(e) => {
-            span.err_anyhow("io", "E_CMD_SAVE_B64", &e, None);
-            return Err(e.to_string());
-        }
-    };
-    let model_id = match pipeline::resolve_asr_model_id(&dir) {
-        Ok(v) => v,
-        Err(e) => {
-            span.err_anyhow("pipeline", "E_PIPELINE_RESOLVE_ASR", &e, None);
-            return Err(e.to_string());
-        }
-    };
-    let preprocess_cfg = match resolve_asr_preprocess_config_strict(&dir) {
-        Ok(v) => v,
-        Err(e) => {
-            span.err_anyhow("pipeline", "E_CMD_RESOLVE_ASR_PREPROCESS", &e, None);
-            return Err(e.to_string());
-        }
-    };
-    match pipeline::run_audio_pipeline_with_task_id(task_id, &input, &model_id, &preprocess_cfg) {
-        Ok(r) => {
-            span.ok(None);
-            Ok(r)
-        }
-        Err(e) => {
-            span.err_anyhow("pipeline", "E_CMD_TRANSCRIBE_B64", &e, None);
-            Err(e.to_string())
-        }
-    }
-}
-
-#[tauri::command]
-async fn start_transcribe_fixture(
+async fn start_task(
     app: tauri::AppHandle,
     state: tauri::State<'_, TaskManager>,
     runtime: tauri::State<'_, RuntimeState>,
-    fixture_name: &str,
+    recorder: tauri::State<'_, BackendRecordingState>,
+    req: StartTaskRequest,
 ) -> Result<String, String> {
-    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let opts = match start_opts_from_settings(&dir) {
-        Ok(v) => v,
-        Err(e) => {
-            let span = cmd_span(&dir, None, "CMD.start_transcribe_fixture.settings", None);
-            span.err("config", "E_SETTINGS_INVALID", &e, None);
-            return Err(e);
-        }
-    };
-    let span = cmd_span(
-        &dir,
-        None,
-        "CMD.start_transcribe_fixture",
-        Some(serde_json::json!({
-            "fixture_name": fixture_name,
-            "rewrite_enabled": opts.rewrite_enabled,
-            "template_id": opts.template_id.as_deref(),
-            "source": "settings",
-        })),
-    );
-    if let Some((code, msg)) = runtime_not_ready(&runtime) {
-        span.err("config", code, &msg, None);
-        return Err(msg);
-    }
-    match state.start_fixture(app, fixture_name.to_string(), opts) {
-        Ok(task_id) => {
-            span.ok(Some(serde_json::json!({"task_id": task_id})));
-            Ok(task_id)
-        }
-        Err(e) => {
-            span.err_anyhow("task", "E_CMD_START_FIXTURE", &e, None);
-            Err(e.to_string())
-        }
-    }
-}
-
-#[tauri::command]
-async fn start_transcribe_recording_base64(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, TaskManager>,
-    runtime: tauri::State<'_, RuntimeState>,
-    b64: &str,
-    ext: &str,
-    recording_session_id: Option<String>,
-) -> Result<String, String> {
-    let session_id = recording_session_id;
     let dir = match data_dir::data_dir() {
         Ok(v) => v,
         Err(e) => {
-            abort_recording_session_if_present(&state, &session_id);
+            abort_recording_session_if_present(&state, &req.recording_session_id);
             return Err(e.to_string());
         }
     };
     let mut opts = match start_opts_from_settings(&dir) {
         Ok(v) => v,
         Err(e) => {
-            let span = cmd_span(
-                &dir,
-                None,
-                "CMD.start_transcribe_recording_base64.settings",
-                None,
-            );
+            let span = cmd_span(&dir, None, "CMD.start_task.settings", None);
             span.err("config", "E_SETTINGS_INVALID", &e, None);
-            abort_recording_session_if_present(&state, &session_id);
+            abort_recording_session_if_present(&state, &req.recording_session_id);
             return Err(e);
         }
     };
-    opts.recording_session_id = session_id;
+    opts.recording_session_id = req.recording_session_id.clone();
+
     let span = cmd_span(
         &dir,
         None,
-        "CMD.start_transcribe_recording_base64",
+        "CMD.start_task",
         Some(serde_json::json!({
-            "ext": ext,
-            "b64_chars": b64.len(),
+            "trigger_source": req.trigger_source.as_str(),
+            "record_mode": req.record_mode.as_str(),
+            "has_recording_asset_id": req.recording_asset_id.as_deref().map(|v| !v.trim().is_empty()).unwrap_or(false),
+            "fixture_name": req.fixture_name.as_deref(),
+            "has_recording_session_id": opts.recording_session_id.as_ref().map(|v| !v.trim().is_empty()).unwrap_or(false),
             "rewrite_enabled": opts.rewrite_enabled,
             "template_id": opts.template_id.as_deref(),
-            "has_recording_session_id": opts
-                .recording_session_id
-                .as_ref()
-                .map(|s| !s.trim().is_empty())
-                .unwrap_or(false),
-            "context_include_prev_window_screenshot": opts.context_cfg.include_prev_window_screenshot,
-            "context_include_prev_window_meta": opts.context_cfg.include_prev_window_meta,
-            "asr_preprocess_silence_trim_enabled": opts.asr_preprocess.silence_trim_enabled,
-            "source": "settings",
         })),
     );
     let session_id_for_cleanup = opts.recording_session_id.clone();
+
+    cleanup_expired_recording_assets(&recorder, std::time::Duration::from_secs(120));
+    if state.has_active_task() {
+        let msg = "E_TASK_ALREADY_ACTIVE: another task is already running";
+        span.err("task", "E_TASK_ALREADY_ACTIVE", msg, None);
+        abort_recording_session_if_present(&state, &session_id_for_cleanup);
+        return Err(msg.to_string());
+    }
+    if has_active_recording(&recorder) {
+        let msg = "E_RECORD_ALREADY_ACTIVE: recording is still active";
+        span.err("task", "E_RECORD_ALREADY_ACTIVE", msg, None);
+        abort_recording_session_if_present(&state, &session_id_for_cleanup);
+        return Err(msg.to_string());
+    }
+
     if let Some((code, msg)) = runtime_not_ready(&runtime) {
         span.err("config", code, &msg, None);
         abort_recording_session_if_present(&state, &session_id_for_cleanup);
         return Err(msg);
     }
-    match state.start_recording_base64(app, b64.to_string(), ext.to_string(), opts) {
+
+    let start_res = match req.record_mode.as_str() {
+        "recording_asset" => {
+            let recording_asset_id = match req.recording_asset_id {
+                Some(v) if !v.trim().is_empty() => v,
+                _ => {
+                    span.err(
+                        "config",
+                        "E_START_TASK_ASSET_MISSING",
+                        "recording_asset_id is required when record_mode=recording_asset",
+                        None,
+                    );
+                    abort_recording_session_if_present(&state, &session_id_for_cleanup);
+                    return Err(
+                        "E_START_TASK_ASSET_MISSING: recording_asset_id is required".to_string()
+                    );
+                }
+            };
+            let asset = match take_recording_asset(&recorder, recording_asset_id.trim()) {
+                Some(v) => v,
+                None => {
+                    span.err("io", "E_RECORD_ASSET_NOT_FOUND", "recording asset not found", None);
+                    abort_recording_session_if_present(&state, &session_id_for_cleanup);
+                    return Err(
+                        "E_RECORD_ASSET_NOT_FOUND: recording asset not found or expired".to_string()
+                    );
+                }
+            };
+            opts.record_elapsed_ms = asset.record_elapsed_ms;
+            opts.record_label = "Record (backend)".to_string();
+            if !asset.output_path.exists() {
+                span.err("io", "E_RECORD_OUTPUT_MISSING", "recorded file missing", None);
+                abort_recording_session_if_present(&state, &session_id_for_cleanup);
+                return Err("E_RECORD_OUTPUT_MISSING: recorded file missing".to_string());
+            }
+            state.start_recording_file(app, asset.output_path, opts)
+        }
+        "fixture" => {
+            opts.record_elapsed_ms = 0;
+            opts.record_label = "Record (fixture)".to_string();
+            let fixture_name = match req.fixture_name {
+                Some(v) if !v.trim().is_empty() => v,
+                _ => {
+                    span.err(
+                        "config",
+                        "E_START_TASK_FIXTURE_MISSING",
+                        "fixture_name is required when record_mode=fixture",
+                        None,
+                    );
+                    abort_recording_session_if_present(&state, &session_id_for_cleanup);
+                    return Err(
+                        "E_START_TASK_FIXTURE_MISSING: fixture_name is required".to_string()
+                    );
+                }
+            };
+            state.start_fixture(app, fixture_name, opts)
+        }
+        _ => {
+                span.err(
+                    "config",
+                    "E_START_TASK_MODE_INVALID",
+                    "record_mode must be recording_asset|fixture",
+                    None,
+                );
+                abort_recording_session_if_present(&state, &session_id_for_cleanup);
+                return Err("E_START_TASK_MODE_INVALID: invalid record_mode".to_string());
+            }
+        };
+
+    match start_res {
         Ok(task_id) => {
             span.ok(Some(serde_json::json!({"task_id": task_id})));
             Ok(task_id)
         }
         Err(e) => {
-            span.err_anyhow("task", "E_CMD_START_B64", &e, None);
+            span.err_anyhow("task", "E_START_TASK_FAILED", &e, None);
             abort_recording_session_if_present(&state, &session_id_for_cleanup);
             Err(e.to_string())
         }
     }
+}
+
+#[tauri::command]
+fn start_backend_recording(
+    state: tauri::State<'_, TaskManager>,
+    recorder: tauri::State<'_, BackendRecordingState>,
+) -> Result<String, String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(&dir, None, "CMD.start_backend_recording", None);
+    if !cfg!(windows) {
+        let msg = "E_RECORD_UNSUPPORTED: backend recording is only supported on Windows";
+        span.err("config", "E_RECORD_UNSUPPORTED", msg, None);
+        return Err(msg.to_string());
+    }
+    if state.has_active_task() {
+        let msg = "E_RECORD_TASK_ACTIVE: another task is already running";
+        span.err("task", "E_RECORD_TASK_ACTIVE", msg, None);
+        return Err(msg.to_string());
+    }
+    cleanup_expired_recording_assets(&recorder, std::time::Duration::from_secs(120));
+    let mut g = recorder.inner.lock().unwrap();
+    if g.active.is_some() {
+        let msg = "E_RECORD_ALREADY_ACTIVE: recording is already active";
+        span.err("task", "E_RECORD_ALREADY_ACTIVE", msg, None);
+        return Err(msg.to_string());
+    }
+
+    let root = repo_root()?;
+    let tmp = root.join("tmp").join("desktop");
+    std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    let recording_id = uuid::Uuid::new_v4().to_string();
+    let output_path = tmp.join(format!("recording-{recording_id}.wav"));
+    let ffmpeg = pipeline::ffmpeg_cmd().map_err(|e| e.to_string())?;
+    let input_spec = match record_input_spec_from_settings(&dir) {
+        Ok(v) => v,
+        Err(e) => {
+            span.err("config", "E_SETTINGS_INVALID", &e, None);
+            return Err(e);
+        }
+    };
+
+    let child = std::process::Command::new(&ffmpeg)
+        .args([
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "dshow",
+            "-i",
+            input_spec.as_str(),
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-c:a",
+            "pcm_s16le",
+        ])
+        .arg(output_path.as_os_str())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            let msg = format!("E_RECORD_START_FAILED: failed to start ffmpeg recorder: {e}");
+            span.err("process", "E_RECORD_START_FAILED", &msg, None);
+            msg
+        })?;
+
+    g.active = Some(ActiveBackendRecording {
+        recording_id: recording_id.clone(),
+        output_path: output_path.clone(),
+        child,
+        started_at: std::time::Instant::now(),
+    });
+
+    span.ok(Some(serde_json::json!({
+        "recording_id": recording_id,
+        "output_path": output_path,
+    })));
+    Ok(recording_id)
+}
+
+#[tauri::command]
+fn stop_backend_recording(
+    recorder: tauri::State<'_, BackendRecordingState>,
+    recording_id: &str,
+) -> Result<StopBackendRecordingResult, String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(
+        &dir,
+        None,
+        "CMD.stop_backend_recording",
+        Some(serde_json::json!({
+            "has_recording_id": !recording_id.trim().is_empty(),
+        })),
+    );
+
+    cleanup_expired_recording_assets(&recorder, std::time::Duration::from_secs(120));
+    let mut active = {
+        let mut g = recorder.inner.lock().unwrap();
+        match g.active.take() {
+            Some(active) => active,
+            None => {
+                let msg = "E_RECORD_NOT_ACTIVE: no active recording";
+                span.err("task", "E_RECORD_NOT_ACTIVE", msg, None);
+                return Err(msg.to_string());
+            }
+        }
+    };
+
+    if !recording_id.trim().is_empty() && active.recording_id != recording_id {
+        let mut g = recorder.inner.lock().unwrap();
+        g.active = Some(active);
+        let msg = "E_RECORD_ID_MISMATCH: recording id mismatch";
+        span.err("task", "E_RECORD_ID_MISMATCH", msg, None);
+        return Err(msg.to_string());
+    }
+
+    if let Some(stdin) = active.child.stdin.as_mut() {
+        let _ = std::io::Write::write_all(stdin, b"q\n");
+        let _ = std::io::Write::flush(stdin);
+    }
+
+    let mut status = None;
+    for _ in 0..100 {
+        match active.child.try_wait() {
+            Ok(Some(s)) => {
+                status = Some(s);
+                break;
+            }
+            Ok(None) => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(_) => break,
+        }
+    }
+    if status.is_none() {
+        let _ = active.child.kill();
+        status = active.child.wait().ok();
+    }
+    let status = match status {
+        Some(s) => s,
+        None => {
+            let msg = "E_RECORD_STOP_FAILED: recorder process wait failed";
+            span.err("process", "E_RECORD_STOP_FAILED", msg, None);
+            return Err(msg.to_string());
+        }
+    };
+    if !status.success() {
+        let msg = format!("E_RECORD_STOP_FAILED: recorder exited with {status}");
+        span.err("process", "E_RECORD_STOP_FAILED", &msg, None);
+        let _ = std::fs::remove_file(&active.output_path);
+        return Err(msg);
+    }
+
+    if !active.output_path.exists() {
+        let msg = "E_RECORD_OUTPUT_MISSING: recorded file missing";
+        span.err("io", "E_RECORD_OUTPUT_MISSING", msg, None);
+        return Err(msg.to_string());
+    }
+
+    let elapsed_ms = active.started_at.elapsed().as_millis();
+    let asset_id = uuid::Uuid::new_v4().to_string();
+    {
+        let mut g = recorder.inner.lock().unwrap();
+        g.assets.insert(
+            asset_id.clone(),
+            RecordedAsset {
+                asset_id: asset_id.clone(),
+                output_path: active.output_path.clone(),
+                record_elapsed_ms: elapsed_ms,
+                created_at: std::time::Instant::now(),
+            },
+        );
+    }
+    let result = StopBackendRecordingResult {
+        recording_id: active.recording_id.clone(),
+        recording_asset_id: asset_id.clone(),
+        ext: "wav".to_string(),
+    };
+    span.ok(Some(serde_json::json!({
+        "recording_id": result.recording_id.clone(),
+        "recording_asset_id": result.recording_asset_id.clone(),
+        "ext": result.ext.clone(),
+        "record_elapsed_ms": elapsed_ms,
+    })));
+    Ok(result)
+}
+
+#[tauri::command]
+fn abort_backend_recording(
+    recorder: tauri::State<'_, BackendRecordingState>,
+    recording_id: Option<String>,
+) -> Result<(), String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(
+        &dir,
+        None,
+        "CMD.abort_backend_recording",
+        Some(serde_json::json!({
+            "has_recording_id": recording_id.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false),
+        })),
+    );
+    let mut active = {
+        let mut g = recorder.inner.lock().unwrap();
+        match g.active.take() {
+            Some(v) => v,
+            None => {
+                span.ok(Some(serde_json::json!({"aborted": false})));
+                return Ok(());
+            }
+        }
+    };
+    if let Some(expected) = recording_id {
+        if !expected.trim().is_empty() && active.recording_id != expected {
+            let mut g = recorder.inner.lock().unwrap();
+            g.active = Some(active);
+            let msg = "E_RECORD_ID_MISMATCH: recording id mismatch";
+            span.err("task", "E_RECORD_ID_MISMATCH", msg, None);
+            return Err(msg.to_string());
+        }
+    }
+    if let Some(stdin) = active.child.stdin.as_mut() {
+        let _ = std::io::Write::write_all(stdin, b"q\n");
+        let _ = std::io::Write::flush(stdin);
+    }
+    let _ = active.child.kill();
+    let _ = active.child.wait();
+    let _ = std::fs::remove_file(&active.output_path);
+    span.ok(Some(serde_json::json!({"aborted": true})));
+    Ok(())
 }
 
 #[tauri::command]
@@ -437,6 +692,27 @@ fn cancel_task(state: tauri::State<TaskManager>, task_id: &str) -> Result<(), St
             Err(e.to_string())
         }
     }
+}
+
+#[tauri::command]
+fn abort_recording_session(
+    state: tauri::State<TaskManager>,
+    recording_session_id: &str,
+) -> Result<(), String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(
+        &dir,
+        None,
+        "CMD.abort_recording_session",
+        Some(serde_json::json!({"has_recording_session_id": !recording_session_id.trim().is_empty()})),
+    );
+    if recording_session_id.trim().is_empty() {
+        span.ok(Some(serde_json::json!({"removed": false})));
+        return Ok(());
+    }
+    let removed = state.abort_recording_session(recording_session_id);
+    span.ok(Some(serde_json::json!({"removed": removed})));
+    Ok(())
 }
 
 #[tauri::command]
@@ -535,67 +811,6 @@ fn templates_import_json(json: &str, mode: &str) -> Result<usize, String> {
         }
         Err(e) => {
             span.err_anyhow("templates", "E_CMD_TPL_IMPORT", &e, None);
-            Err(e.to_string())
-        }
-    }
-}
-
-#[tauri::command]
-async fn rewrite_text(template_id: &str, asr_text: &str) -> Result<String, String> {
-    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let task_id = uuid::Uuid::new_v4().to_string();
-    let span = cmd_span(
-        &dir,
-        Some(&task_id),
-        "CMD.rewrite_text",
-        Some(serde_json::json!({"template_id": template_id, "asr_chars": asr_text.len()})),
-    );
-    let tpl = match templates::get_template(&dir, template_id) {
-        Ok(t) => t,
-        Err(e) => {
-            span.err_anyhow("templates", "E_CMD_TPL_GET", &e, None);
-            return Err(e.to_string());
-        }
-    };
-    let glossary = match settings::load_settings_strict(&dir) {
-        Ok(s) => {
-            if s.rewrite_include_glossary.unwrap_or(true) {
-                sanitize_rewrite_glossary(s.rewrite_glossary)
-            } else {
-                Vec::new()
-            }
-        }
-        Err(e) => {
-            let ae = anyhow::anyhow!("rewrite_text load settings failed: {e}");
-            span.err_anyhow("settings", "E_CMD_REWRITE_SETTINGS", &ae, None);
-            return Err(ae.to_string());
-        }
-    };
-    let include_glossary = !glossary.is_empty();
-    let policy = llm::RewriteContextPolicy {
-        include_history: false,
-        include_clipboard: false,
-        include_prev_window_meta: false,
-        include_prev_window_screenshot: false,
-        include_glossary,
-    };
-    match llm::rewrite_with_context(
-        &dir,
-        &task_id,
-        &tpl.system_prompt,
-        asr_text,
-        None,
-        &glossary,
-        &policy,
-    )
-    .await
-    {
-        Ok(s) => {
-            span.ok(Some(serde_json::json!({"out_chars": s.len()})));
-            Ok(s)
-        }
-        Err(e) => {
-            span.err_anyhow("llm", "E_CMD_REWRITE", &e, None);
             Err(e.to_string())
         }
     }
@@ -910,6 +1125,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(TaskManager::new())
         .manage(RuntimeState::new())
+        .manage(BackendRecordingState::new())
         .manage(hotkeys::HotkeyManager::new())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
@@ -1016,17 +1232,17 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            transcribe_fixture,
-            transcribe_recording_base64,
-            start_transcribe_fixture,
-            start_transcribe_recording_base64,
+            start_task,
+            start_backend_recording,
+            stop_backend_recording,
+            abort_backend_recording,
             cancel_task,
+            abort_recording_session,
             list_templates,
             upsert_template,
             delete_template,
             templates_export_json,
             templates_import_json,
-            rewrite_text,
             set_llm_api_key,
             clear_llm_api_key,
             llm_api_key_status,
