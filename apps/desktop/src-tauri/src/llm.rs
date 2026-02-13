@@ -72,6 +72,27 @@ struct ChoiceMessage {
     content: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct RewriteContextPolicy {
+    pub include_history: bool,
+    pub include_clipboard: bool,
+    pub include_prev_window_meta: bool,
+    pub include_prev_window_screenshot: bool,
+    pub include_glossary: bool,
+}
+
+impl Default for RewriteContextPolicy {
+    fn default() -> Self {
+        Self {
+            include_history: false,
+            include_clipboard: false,
+            include_prev_window_meta: false,
+            include_prev_window_screenshot: false,
+            include_glossary: false,
+        }
+    }
+}
+
 fn normalize_base_url(s: &str) -> Result<String> {
     let mut t = s.trim().trim_end_matches('/').to_string();
     if t.is_empty() {
@@ -221,7 +242,16 @@ pub async fn rewrite(
     system_prompt: &str,
     asr_text: &str,
 ) -> Result<String> {
-    rewrite_with_context(data_dir, task_id, system_prompt, asr_text, None, &[]).await
+    rewrite_with_context(
+        data_dir,
+        task_id,
+        system_prompt,
+        asr_text,
+        None,
+        &[],
+        &RewriteContextPolicy::default(),
+    )
+    .await
 }
 
 pub async fn rewrite_with_context(
@@ -231,6 +261,7 @@ pub async fn rewrite_with_context(
     asr_text: &str,
     ctx: Option<&PreparedContext>,
     rewrite_glossary: &[String],
+    policy: &RewriteContextPolicy,
 ) -> Result<String> {
     let span = Span::start(
         data_dir,
@@ -240,6 +271,7 @@ pub async fn rewrite_with_context(
         Some(serde_json::json!({
             "has_context": ctx.is_some(),
             "has_screenshot": ctx.and_then(|c| c.screenshot.as_ref()).is_some(),
+            "policy": policy,
         })),
     );
 
@@ -261,7 +293,7 @@ pub async fn rewrite_with_context(
     let url = format!("{}/chat/completions", cfg.base_url);
 
     let (user_content_send, user_content_debug) =
-        build_user_content(asr_text, ctx, rewrite_glossary);
+        build_user_content(asr_text, ctx, rewrite_glossary, policy);
 
     // Record the exact request "shape" the model will receive (text vs multimodal parts).
     let (kind, has_image_url) = user_content_shape(&user_content_send);
@@ -277,6 +309,7 @@ pub async fn rewrite_with_context(
             "asr_chars": asr_text.len(),
             "system_prompt_chars": system_prompt.len(),
             "glossary_count": rewrite_glossary.len(),
+            "include_glossary": policy.include_glossary,
         })),
     );
     let req_send = ChatReq {
@@ -436,15 +469,11 @@ fn user_content_shape(content: &MessageContent) -> (&'static str, bool) {
     }
 }
 
-fn apply_rewrite_glossary_to_user_text(base: &str, rewrite_glossary: &[String]) -> String {
+fn build_rewrite_glossary_section(rewrite_glossary: &[String]) -> Option<String> {
     if rewrite_glossary.is_empty() {
-        return base.to_string();
+        return None;
     }
-
     let mut out = String::new();
-    out.push_str(base);
-    out.push_str("\n\n### GLOSSARY\n");
-    let mut wrote_any = false;
     for item in rewrite_glossary {
         let v = item.trim();
         if v.is_empty() {
@@ -453,53 +482,98 @@ fn apply_rewrite_glossary_to_user_text(base: &str, rewrite_glossary: &[String]) 
         out.push_str("- ");
         out.push_str(v);
         out.push('\n');
-        wrote_any = true;
     }
-    if wrote_any {
-        out
+    if out.is_empty() { None } else { Some(out) }
+}
+
+fn bool_text(v: bool) -> &'static str {
+    if v {
+        "enabled"
     } else {
-        base.to_string()
+        "disabled"
     }
+}
+
+fn policy_to_markdown(policy: &RewriteContextPolicy) -> String {
+    format!(
+        "### CONTEXT_POLICY\n- history: {}\n- clipboard: {}\n- prev_window_meta: {}\n- prev_window_screenshot: {}\n- glossary: {}\n",
+        bool_text(policy.include_history),
+        bool_text(policy.include_clipboard),
+        bool_text(policy.include_prev_window_meta),
+        bool_text(policy.include_prev_window_screenshot),
+        bool_text(policy.include_glossary),
+    )
+}
+
+fn extract_prepared_context_block(prepared: &PreparedContext) -> String {
+    const MARKER: &str = "### CONTEXT\n";
+    match prepared.user_text.find(MARKER) {
+        Some(pos) => prepared.user_text[pos + MARKER.len()..].trim().to_string(),
+        None => String::new(),
+    }
+}
+
+fn build_rewrite_user_text(
+    asr_text: &str,
+    ctx: Option<&PreparedContext>,
+    rewrite_glossary: &[String],
+    policy: &RewriteContextPolicy,
+) -> String {
+    let mut out = String::new();
+    out.push_str("### TRANSCRIPT\n");
+    out.push_str(asr_text.trim());
+    out.push('\n');
+    out.push('\n');
+    out.push_str(&policy_to_markdown(policy));
+
+    if policy.include_glossary {
+        if let Some(g) = build_rewrite_glossary_section(rewrite_glossary) {
+            out.push_str("\n### GLOSSARY\n");
+            out.push_str(&g);
+        }
+    }
+
+    let include_context_sections = policy.include_history
+        || policy.include_clipboard
+        || policy.include_prev_window_meta
+        || policy.include_prev_window_screenshot;
+    if include_context_sections {
+        if let Some(c) = ctx {
+            let context_block = extract_prepared_context_block(c);
+            if !context_block.is_empty() {
+                out.push_str("\n### CONTEXT\n");
+                out.push_str(&context_block);
+            }
+        }
+    }
+
+    out.trim_end().to_string()
 }
 
 fn build_user_content(
     asr_text: &str,
     ctx: Option<&PreparedContext>,
     rewrite_glossary: &[String],
+    policy: &RewriteContextPolicy,
 ) -> (MessageContent, MessageContent) {
-    let Some(c) = ctx else {
+    let send_text = build_rewrite_user_text(asr_text, ctx, rewrite_glossary, policy);
+    let debug_text = send_text.clone();
+
+    let Some(sc) = ctx.and_then(|c| {
+        if policy.include_prev_window_screenshot {
+            c.screenshot.as_ref()
+        } else {
+            None
+        }
+    }) else {
         return (
-            MessageContent::Text(apply_rewrite_glossary_to_user_text(asr_text, rewrite_glossary)),
-            MessageContent::Text(apply_rewrite_glossary_to_user_text(asr_text, rewrite_glossary)),
+            MessageContent::Text(send_text),
+            MessageContent::Text(debug_text),
         );
     };
 
-    // Prefer the prepared text (it already includes transcript + context).
-    let text = c.user_text.clone();
-    let Some(sc) = &c.screenshot else {
-        return (
-            MessageContent::Text(apply_rewrite_glossary_to_user_text(
-                &text,
-                rewrite_glossary,
-            )),
-            MessageContent::Text(apply_rewrite_glossary_to_user_text(
-                &text,
-                rewrite_glossary,
-            )),
-        );
-    };
-
-    let text_send = apply_rewrite_glossary_to_user_text(&text, rewrite_glossary);
-    let mut parts_send = vec![ContentPart::Text {
-        text: text_send.clone(),
-    }];
-    let text_debug = apply_rewrite_glossary_to_user_text(&text, rewrite_glossary);
-    let mut parts_debug = vec![ContentPart::Text { text: text_debug }];
-
-    // Send the real data URL, but redact in debug payload.
     let b64 = base64::engine::general_purpose::STANDARD.encode(&sc.png_bytes);
     let url_send = format!("data:image/png;base64,{}", b64);
-
     let url_debug = format!(
         "data:image/png;base64,<redacted sha256={} bytes={} w={} h={}>",
         sc.sha256_hex,
@@ -508,16 +582,19 @@ fn build_user_content(
         sc.height
     );
 
-    parts_send.push(ContentPart::ImageUrl {
-        image_url: ImageUrl { url: url_send },
-    });
-    parts_debug.push(ContentPart::ImageUrl {
-        image_url: ImageUrl { url: url_debug },
-    });
-
     (
-        MessageContent::Parts(parts_send),
-        MessageContent::Parts(parts_debug),
+        MessageContent::Parts(vec![
+            ContentPart::Text { text: send_text },
+            ContentPart::ImageUrl {
+                image_url: ImageUrl { url: url_send },
+            },
+        ]),
+        MessageContent::Parts(vec![
+            ContentPart::Text { text: debug_text },
+            ContentPart::ImageUrl {
+                image_url: ImageUrl { url: url_debug },
+            },
+        ]),
     )
 }
 

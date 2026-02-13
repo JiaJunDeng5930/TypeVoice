@@ -99,6 +99,7 @@ fn push_with_budget(dst: &mut String, s: &str, remaining: &mut usize) {
 
 pub fn prepare(asr_text: &str, snap: &ContextSnapshot, budget: &ContextBudget) -> PreparedContext {
     let mut out = String::new();
+    let mut context_out = String::new();
     let mut remaining = budget.max_total_context_chars;
 
     // Always include transcript first; we do not apply context budget to transcript itself.
@@ -106,11 +107,9 @@ pub fn prepare(asr_text: &str, snap: &ContextSnapshot, budget: &ContextBudget) -
     out.push_str(asr_text.trim());
     out.push_str("\n\n");
 
-    out.push_str("### CONTEXT\n");
-
     // Recent history
     if !snap.recent_history.is_empty() && budget.max_history_items > 0 && remaining > 0 {
-        out.push_str("#### RECENT HISTORY\n");
+        context_out.push_str("#### RECENT HISTORY\n");
         let mut used_items = 0usize;
         for h in snap.recent_history.iter().take(budget.max_history_items) {
             if remaining == 0 {
@@ -130,12 +129,12 @@ pub fn prepare(asr_text: &str, snap: &ContextSnapshot, budget: &ContextBudget) -
                 Some(tid) => format!("- [t={} template={}] ", h.created_at_ms, tid),
                 None => format!("- [t={}] ", h.created_at_ms),
             };
-            push_with_budget(&mut out, &meta, &mut remaining);
-            push_with_budget(&mut out, &clipped, &mut remaining);
-            push_with_budget(&mut out, "\n", &mut remaining);
+            push_with_budget(&mut context_out, &meta, &mut remaining);
+            push_with_budget(&mut context_out, &clipped, &mut remaining);
+            push_with_budget(&mut context_out, "\n", &mut remaining);
         }
         if used_items > 0 {
-            push_with_budget(&mut out, "\n", &mut remaining);
+            push_with_budget(&mut context_out, "\n", &mut remaining);
         }
     }
 
@@ -144,9 +143,9 @@ pub fn prepare(asr_text: &str, snap: &ContextSnapshot, budget: &ContextBudget) -
         if remaining > 0 {
             let clipped = clamp_chars(cb, budget.max_chars_clipboard);
             if !clipped.is_empty() {
-                out.push_str("#### CLIPBOARD\n");
-                push_with_budget(&mut out, &clipped, &mut remaining);
-                push_with_budget(&mut out, "\n\n", &mut remaining);
+                context_out.push_str("#### CLIPBOARD\n");
+                push_with_budget(&mut context_out, &clipped, &mut remaining);
+                push_with_budget(&mut context_out, "\n\n", &mut remaining);
             }
         }
     }
@@ -154,25 +153,30 @@ pub fn prepare(asr_text: &str, snap: &ContextSnapshot, budget: &ContextBudget) -
     // Previous window meta
     if let Some(w) = &snap.prev_window {
         if remaining > 0 {
-            out.push_str("#### PREVIOUS WINDOW\n");
+            context_out.push_str("#### PREVIOUS WINDOW\n");
             if let Some(t) = w.title.as_deref() {
                 let v = clamp_chars(t, 200);
                 if !v.is_empty() {
-                    push_with_budget(&mut out, "title=", &mut remaining);
-                    push_with_budget(&mut out, &v, &mut remaining);
-                    push_with_budget(&mut out, "\n", &mut remaining);
+                    push_with_budget(&mut context_out, "title=", &mut remaining);
+                    push_with_budget(&mut context_out, &v, &mut remaining);
+                    push_with_budget(&mut context_out, "\n", &mut remaining);
                 }
             }
             if let Some(p) = w.process_image.as_deref() {
                 let v = clamp_chars(p, 260);
                 if !v.is_empty() {
-                    push_with_budget(&mut out, "process=", &mut remaining);
-                    push_with_budget(&mut out, &v, &mut remaining);
-                    push_with_budget(&mut out, "\n", &mut remaining);
+                    push_with_budget(&mut context_out, "process=", &mut remaining);
+                    push_with_budget(&mut context_out, &v, &mut remaining);
+                    push_with_budget(&mut context_out, "\n", &mut remaining);
                 }
             }
-            push_with_budget(&mut out, "\n", &mut remaining);
+            push_with_budget(&mut context_out, "\n", &mut remaining);
         }
+    }
+
+    if !context_out.trim().is_empty() {
+        out.push_str("### CONTEXT\n");
+        out.push_str(&context_out);
     }
 
     PreparedContext {

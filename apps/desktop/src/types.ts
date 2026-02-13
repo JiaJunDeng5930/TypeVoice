@@ -34,12 +34,14 @@ export type Settings = {
   rewrite_enabled?: boolean | null;
   rewrite_template_id?: string | null;
   rewrite_glossary?: string[] | null;
+  rewrite_include_glossary?: boolean | null;
 
   context_include_history?: boolean | null;
   context_history_n?: number | null;
   context_history_window_ms?: number | null;
   context_include_clipboard?: boolean | null;
   context_include_prev_window_screenshot?: boolean | null;
+  context_include_prev_window_meta?: boolean | null;
   llm_supports_vision?: boolean | null;
 
   hotkeys_enabled?: boolean | null;

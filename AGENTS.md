@@ -29,6 +29,14 @@ Local-only artifacts (gitignored): `fixtures/` (audio), `models/` (downloaded mo
 - Windows one-command gate:
   - `powershell -ExecutionPolicy Bypass -File .\\scripts\\windows\\windows_gate.ps1`
 
+## 固定动作（每次功能实现后必须执行）
+
+- 先提交：按 Conventional Commit 规范提交本次变更。
+- 同步 Windows 工作区到最新源码后按文档一键网关编译并启动链路：
+  - `powershell -ExecutionPolicy Bypass -File .\\scripts\\windows\\windows_gate.ps1`
+- `windows_gate.ps1` 会执行 `npm run tauri dev`；若在 WSL 下触发 Windows 命令，使用：
+  - `/mnt/c/Windows/System32/cmd.exe /d /c "cd /d D:\\Projects\\TypeVoice\\apps\\desktop && set RUST_BACKTRACE=1 && set RUST_LOG=debug && npm run tauri dev"`
+
 ## Coding Style & Naming Conventions
 
 - Follow existing style; keep diffs small and readable.

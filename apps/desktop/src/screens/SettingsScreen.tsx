@@ -42,6 +42,12 @@ export function SettingsScreen({
   const [hotkeyPtt, setHotkeyPtt] = useState("F9");
   const [hotkeyToggle, setHotkeyToggle] = useState("F10");
   const [hotkeysShowOverlay, setHotkeysShowOverlay] = useState(true);
+  const [contextIncludeHistory, setContextIncludeHistory] = useState(true);
+  const [contextIncludeClipboard, setContextIncludeClipboard] = useState(true);
+  const [contextIncludePrevWindowMeta, setContextIncludePrevWindowMeta] = useState(true);
+  const [contextIncludePrevWindowScreenshot, setContextIncludePrevWindowScreenshot] =
+    useState(true);
+  const [rewriteIncludeGlossary, setRewriteIncludeGlossary] = useState(true);
 
   const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
 
@@ -68,6 +74,7 @@ export function SettingsScreen({
     setRewriteEnabled(settings.rewrite_enabled);
     setRewriteTemplateId(settings.rewrite_template_id ?? "");
     setRewriteGlossaryDraft((settings.rewrite_glossary || []).join("\n"));
+    setRewriteIncludeGlossary(settings.rewrite_include_glossary ?? true);
 
     if (typeof settings.hotkeys_enabled !== "boolean") {
       pushToast("SETTINGS INVALID: hotkeys_enabled missing", "danger");
@@ -81,6 +88,13 @@ export function SettingsScreen({
     setHotkeyPtt(settings.hotkey_ptt ?? "");
     setHotkeyToggle(settings.hotkey_toggle ?? "");
     setHotkeysShowOverlay(settings.hotkeys_show_overlay);
+
+    setContextIncludeHistory(settings.context_include_history ?? true);
+    setContextIncludeClipboard(settings.context_include_clipboard ?? true);
+    setContextIncludePrevWindowMeta(settings.context_include_prev_window_meta ?? true);
+    setContextIncludePrevWindowScreenshot(
+      settings.context_include_prev_window_screenshot ?? true,
+    );
   }, [settings, pushToast]);
 
   useEffect(() => {
@@ -173,6 +187,7 @@ export function SettingsScreen({
       await savePatch({
         rewrite_enabled: rewriteEnabled,
         rewrite_template_id: rewriteTemplateId.trim() ? rewriteTemplateId.trim() : null,
+        rewrite_include_glossary: rewriteIncludeGlossary,
       });
       pushToast("SAVED", "ok");
     } catch {
@@ -188,6 +203,20 @@ export function SettingsScreen({
     try {
       await savePatch({ rewrite_glossary: items });
       pushToast("GLOSSARY SAVED", "ok");
+    } catch {
+      pushToast("SAVE FAILED", "danger");
+    }
+  }
+
+  async function saveContextConfig() {
+    try {
+      await savePatch({
+        context_include_history: contextIncludeHistory,
+        context_include_clipboard: contextIncludeClipboard,
+        context_include_prev_window_meta: contextIncludePrevWindowMeta,
+        context_include_prev_window_screenshot: contextIncludePrevWindowScreenshot,
+      });
+      pushToast("SAVED", "ok");
     } catch {
       pushToast("SAVE FAILED", "danger");
     }
@@ -406,11 +435,62 @@ export function SettingsScreen({
       </div>
 
       <div className="card">
+        <div className="sectionTitle">REWRITE CONTEXT SWITCH</div>
+        <div className="stack">
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <div className="muted">Context 历史片段</div>
+            <PixelToggle
+              value={contextIncludeHistory}
+              onChange={setContextIncludeHistory}
+              label="history"
+            />
+          </div>
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <div className="muted">Context 剪贴板</div>
+            <PixelToggle
+              value={contextIncludeClipboard}
+              onChange={setContextIncludeClipboard}
+              label="clipboard"
+            />
+          </div>
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <div className="muted">Window 元信息</div>
+            <PixelToggle
+              value={contextIncludePrevWindowMeta}
+              onChange={setContextIncludePrevWindowMeta}
+              label="prev window meta"
+            />
+          </div>
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <div className="muted">Window 截图</div>
+            <PixelToggle
+              value={contextIncludePrevWindowScreenshot}
+              onChange={setContextIncludePrevWindowScreenshot}
+              label="prev window screenshot"
+            />
+          </div>
+          <div className="row" style={{ justifyContent: "flex-end" }}>
+            <PixelButton onClick={saveContextConfig} tone="accent">
+              SAVE
+            </PixelButton>
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
         <div className="sectionTitle">GLOSSARY</div>
         <div className="muted">
           每行一个词；空行会自动忽略。用于 rewrite 阶段作为“上下文词汇/术语”约束模型遵循。
         </div>
         <div style={{ marginTop: 12 }} className="stack">
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <div className="muted">REWRITE 词库启用</div>
+            <PixelToggle
+              value={rewriteIncludeGlossary}
+              onChange={setRewriteIncludeGlossary}
+              label="rewrite glossary"
+            />
+          </div>
           <PixelTextarea
             value={rewriteGlossaryDraft}
             onChange={setRewriteGlossaryDraft}

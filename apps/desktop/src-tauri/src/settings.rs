@@ -23,11 +23,13 @@ pub struct Settings {
     pub rewrite_glossary: Option<Vec<String>>,
 
     // Context settings (for LLM rewrite)
+    pub context_include_prev_window_meta: Option<bool>,
     pub context_include_history: Option<bool>,
     pub context_history_n: Option<i64>,
     pub context_history_window_ms: Option<i64>,
     pub context_include_clipboard: Option<bool>,
     pub context_include_prev_window_screenshot: Option<bool>,
+    pub rewrite_include_glossary: Option<bool>,
     pub llm_supports_vision: Option<bool>,
 
     // Hotkeys / overlay (post-MVP)
@@ -56,6 +58,8 @@ pub struct SettingsPatch {
     pub context_history_window_ms: Option<Option<i64>>,
     pub context_include_clipboard: Option<Option<bool>>,
     pub context_include_prev_window_screenshot: Option<Option<bool>>,
+    pub context_include_prev_window_meta: Option<Option<bool>>,
+    pub rewrite_include_glossary: Option<Option<bool>>,
     pub llm_supports_vision: Option<Option<bool>>,
 
     pub hotkeys_enabled: Option<Option<bool>>,
@@ -100,6 +104,12 @@ pub fn apply_patch(mut s: Settings, p: SettingsPatch) -> Settings {
     }
     if let Some(v) = p.context_include_prev_window_screenshot {
         s.context_include_prev_window_screenshot = v;
+    }
+    if let Some(v) = p.context_include_prev_window_meta {
+        s.context_include_prev_window_meta = v;
+    }
+    if let Some(v) = p.rewrite_include_glossary {
+        s.rewrite_include_glossary = v;
     }
     if let Some(v) = p.llm_supports_vision {
         s.llm_supports_vision = v;
@@ -243,8 +253,10 @@ mod tests {
         context_include_history: None,
             context_history_n: None,
             context_history_window_ms: None,
+            context_include_prev_window_meta: None,
             context_include_clipboard: None,
             context_include_prev_window_screenshot: None,
+            rewrite_include_glossary: None,
             llm_supports_vision: None,
             hotkeys_enabled: None,
             hotkey_ptt: None,
@@ -258,6 +270,8 @@ mod tests {
             rewrite_enabled: Some(Some(true)),
             rewrite_template_id: Some(None),
             context_history_n: Some(Some(5)),
+            context_include_prev_window_meta: Some(Some(true)),
+            rewrite_include_glossary: Some(Some(false)),
             ..Default::default()
         };
 
@@ -270,5 +284,7 @@ mod tests {
         assert_eq!(next.rewrite_template_id, None);
         assert_eq!(next.rewrite_glossary.as_deref(), None);
         assert_eq!(next.context_history_n, Some(5));
+        assert_eq!(next.context_include_prev_window_meta, Some(true));
+        assert_eq!(next.rewrite_include_glossary, Some(false));
     }
 }

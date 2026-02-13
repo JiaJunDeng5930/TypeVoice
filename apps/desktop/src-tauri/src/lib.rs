@@ -146,6 +146,7 @@ fn start_opts_from_settings(data_dir: &std::path::Path) -> Result<task_manager::
         template_id,
         context_cfg: context_capture::config_from_settings(&s),
         rewrite_glossary: sanitize_rewrite_glossary(s.rewrite_glossary),
+        rewrite_include_glossary: s.rewrite_include_glossary.unwrap_or(true),
         pre_captured_context: None,
     })
 }
@@ -304,6 +305,8 @@ async fn start_transcribe_recording_base64(
             "template_id": opts.template_id.as_deref(),
             "capture_required": capture_required.unwrap_or(false),
             "has_capture_id": capture_id.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false),
+            "context_include_prev_window_screenshot": opts.context_cfg.include_prev_window_screenshot,
+            "context_include_prev_window_meta": opts.context_cfg.include_prev_window_meta,
             "source": "settings",
         })),
     );
@@ -329,7 +332,7 @@ async fn start_transcribe_recording_base64(
                 return Err(msg);
             }
         };
-        if snap.screenshot.is_none() {
+        if opts.context_cfg.include_prev_window_screenshot && snap.screenshot.is_none() {
             let msg = format!("E_CONTEXT_CAPTURE_INVALID: capture_id has no screenshot ({cid})");
             span.err("config", "E_CONTEXT_CAPTURE_INVALID", &msg, None);
             return Err(msg);
@@ -506,14 +509,38 @@ async fn rewrite_text(template_id: &str, asr_text: &str) -> Result<String, Strin
         }
     };
     let glossary = match settings::load_settings_strict(&dir) {
-        Ok(s) => sanitize_rewrite_glossary(s.rewrite_glossary),
+        Ok(s) => {
+            if s.rewrite_include_glossary.unwrap_or(true) {
+                sanitize_rewrite_glossary(s.rewrite_glossary)
+            } else {
+                Vec::new()
+            }
+        }
         Err(e) => {
             let ae = anyhow::anyhow!("rewrite_text load settings failed: {e}");
             span.err_anyhow("settings", "E_CMD_REWRITE_SETTINGS", &ae, None);
             return Err(ae.to_string());
         }
     };
-    match llm::rewrite_with_context(&dir, &task_id, &tpl.system_prompt, asr_text, None, &glossary).await {
+    let include_glossary = !glossary.is_empty();
+    let policy = llm::RewriteContextPolicy {
+        include_history: false,
+        include_clipboard: false,
+        include_prev_window_meta: false,
+        include_prev_window_screenshot: false,
+        include_glossary,
+    };
+    match llm::rewrite_with_context(
+        &dir,
+        &task_id,
+        &tpl.system_prompt,
+        asr_text,
+        None,
+        &glossary,
+        &policy,
+    )
+    .await
+    {
         Ok(s) => {
             span.ok(Some(serde_json::json!({"out_chars": s.len()})));
             Ok(s)
@@ -690,10 +717,12 @@ fn update_settings(
         "rewrite_enabled": patch.rewrite_enabled.is_some(),
         "rewrite_template_id": patch.rewrite_template_id.is_some(),
         "rewrite_glossary": patch.rewrite_glossary.is_some(),
+        "rewrite_include_glossary": patch.rewrite_include_glossary.is_some(),
         "context_include_history": patch.context_include_history.is_some(),
         "context_history_n": patch.context_history_n.is_some(),
         "context_history_window_ms": patch.context_history_window_ms.is_some(),
         "context_include_clipboard": patch.context_include_clipboard.is_some(),
+        "context_include_prev_window_meta": patch.context_include_prev_window_meta.is_some(),
         "context_include_prev_window_screenshot": patch.context_include_prev_window_screenshot.is_some(),
         "llm_supports_vision": patch.llm_supports_vision.is_some(),
         "hotkeys_enabled": patch.hotkeys_enabled.is_some(),

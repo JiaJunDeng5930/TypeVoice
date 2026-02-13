@@ -44,6 +44,7 @@ pub struct StartOpts {
     pub rewrite_enabled: bool,
     pub template_id: Option<String>,
     pub rewrite_glossary: Vec<String>,
+    pub rewrite_include_glossary: bool,
     pub context_cfg: context_capture::ContextConfig,
     pub pre_captured_context: Option<context_pack::ContextSnapshot>,
 }
@@ -279,19 +280,24 @@ impl TaskManager {
     ) -> Result<()> {
         let data_dir = data_dir::data_dir()?;
         let ctx_cfg = opts.context_cfg.clone();
-        let mut runtime_ctx_cfg = ctx_cfg.clone();
+        let mut capture_ctx_cfg = ctx_cfg.clone();
         if opts.pre_captured_context.is_some() {
-            runtime_ctx_cfg.include_prev_window_screenshot = false;
+            capture_ctx_cfg.include_prev_window_screenshot = false;
+            capture_ctx_cfg.include_prev_window_meta = false;
         }
         let mut ctx_snap = if opts.rewrite_enabled {
             self.ctx
-                .capture_snapshot_best_effort_with_config(&data_dir, &task_id, &runtime_ctx_cfg)
+                .capture_snapshot_best_effort_with_config(&data_dir, &task_id, &capture_ctx_cfg)
         } else {
             context_pack::ContextSnapshot::default()
         };
         if let Some(pre) = opts.pre_captured_context.clone() {
-            ctx_snap.prev_window = pre.prev_window;
-            ctx_snap.screenshot = pre.screenshot;
+            if ctx_cfg.include_prev_window_meta {
+                ctx_snap.prev_window = pre.prev_window;
+            }
+            if ctx_cfg.include_prev_window_screenshot {
+                ctx_snap.screenshot = pre.screenshot;
+            }
             crate::trace::event(
                 &data_dir,
                 Some(&task_id),
@@ -304,6 +310,22 @@ impl TaskManager {
                 })),
             );
         }
+
+        if !ctx_cfg.include_history {
+            ctx_snap.recent_history.clear();
+        }
+        if !ctx_cfg.include_clipboard {
+            ctx_snap.clipboard_text = None;
+        }
+        if !ctx_cfg.include_prev_window_meta {
+            ctx_snap.prev_window = None;
+        }
+        if !ctx_cfg.include_prev_window_screenshot {
+            ctx_snap.screenshot = None;
+        }
+        if !ctx_cfg.llm_supports_vision {
+            ctx_snap.screenshot = None;
+        }
         crate::trace::event(
             &data_dir,
             Some(&task_id),
@@ -313,6 +335,11 @@ impl TaskManager {
             Some(serde_json::json!({
                 "rewrite_requested": opts.rewrite_enabled,
                 "template_id": opts.template_id.as_deref(),
+                "rewrite_include_glossary": opts.rewrite_include_glossary,
+                "context_include_prev_window_meta": ctx_cfg.include_prev_window_meta,
+                "context_include_prev_window_screenshot": ctx_cfg.include_prev_window_screenshot,
+                "context_include_history": ctx_cfg.include_history,
+                "context_include_clipboard": ctx_cfg.include_clipboard,
             })),
         );
 
@@ -557,9 +584,22 @@ impl TaskManager {
                 };
                 if let Some(tpl) = tpl {
                     let mut prepared = context_pack::prepare(&asr_text, &ctx_snap, &ctx_cfg.budget);
-                    if !ctx_cfg.llm_supports_vision {
+                    if !ctx_cfg.include_prev_window_screenshot {
                         prepared.screenshot = None;
                     }
+                    let rewrite_ctx_policy = llm::RewriteContextPolicy {
+                        include_history: ctx_cfg.include_history,
+                        include_clipboard: ctx_cfg.include_clipboard,
+                        include_prev_window_meta: ctx_cfg.include_prev_window_meta,
+                        include_prev_window_screenshot: ctx_cfg.include_prev_window_screenshot
+                            && prepared.screenshot.is_some(),
+                        include_glossary: opts.rewrite_include_glossary,
+                    };
+                    let rewrite_glossary: &[String] = if opts.rewrite_include_glossary {
+                        &opts.rewrite_glossary
+                    } else {
+                        &[]
+                    };
                     let token = {
                         let g = self.inner.lock().unwrap();
                         g.as_ref().unwrap().token.clone()
@@ -572,7 +612,8 @@ impl TaskManager {
                             &tpl.system_prompt,
                             &asr_text,
                             Some(&prepared),
-                            &opts.rewrite_glossary,
+                            rewrite_glossary,
+                            &rewrite_ctx_policy,
                         ) => r,
                     };
                     match rewrite_res {
