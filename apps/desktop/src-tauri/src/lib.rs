@@ -508,14 +508,9 @@ async fn rewrite_text(template_id: &str, asr_text: &str) -> Result<String, Strin
     let glossary = match settings::load_settings_strict(&dir) {
         Ok(s) => sanitize_rewrite_glossary(s.rewrite_glossary),
         Err(e) => {
-            let ae = format!("rewrite_text load settings failed: {e}");
-            span.err_anyhow(
-                "settings",
-                "E_CMD_REWRITE_SETTINGS",
-                &anyhow::anyhow!(ae.as_str()),
-                None,
-            );
-            return Err(ae);
+            let ae = anyhow::anyhow!("rewrite_text load settings failed: {e}");
+            span.err_anyhow("settings", "E_CMD_REWRITE_SETTINGS", &ae, None);
+            return Err(ae.to_string());
         }
     };
     match llm::rewrite_with_context(&dir, &task_id, &tpl.system_prompt, asr_text, None, &glossary).await {
