@@ -243,6 +243,18 @@ fn has_active_recording(recorder: &tauri::State<'_, BackendRecordingState>) -> b
     recorder.inner.lock().unwrap().active.is_some()
 }
 
+fn read_last_stderr_line(stderr: &mut std::process::ChildStderr) -> Option<String> {
+    let mut buf = String::new();
+    if std::io::Read::read_to_string(stderr, &mut buf).is_err() {
+        return None;
+    }
+    buf.lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(|line| line.to_string())
+}
+
 fn take_recording_asset(
     recorder: &tauri::State<'_, BackendRecordingState>,
     asset_id: &str,
@@ -466,7 +478,7 @@ fn start_backend_recording(
         }
     };
 
-    let child = match std::process::Command::new(&ffmpeg)
+    let mut child = match std::process::Command::new(&ffmpeg)
         .args([
             "-y",
             "-hide_banner",
@@ -496,6 +508,34 @@ fn start_backend_recording(
             return Err(msg);
         }
     };
+
+    std::thread::sleep(std::time::Duration::from_millis(120));
+    match child.try_wait() {
+        Ok(Some(status)) => {
+            let stderr_tail = child.stderr.as_mut().and_then(read_last_stderr_line);
+            let mut msg = if status.success() {
+                "E_RECORD_START_FAILED: recorder exited unexpectedly right after start".to_string()
+            } else {
+                format!("E_RECORD_START_FAILED: recorder exited right after start with {status}")
+            };
+            if let Some(line) = stderr_tail.as_deref() {
+                msg.push_str("; stderr=");
+                msg.push_str(line);
+            }
+            span.err("process", "E_RECORD_START_FAILED", &msg, None);
+            let _ = std::fs::remove_file(&output_path);
+            return Err(msg);
+        }
+        Ok(None) => {}
+        Err(e) => {
+            let msg = format!("E_RECORD_START_FAILED: failed to probe recorder process: {e}");
+            span.err("process", "E_RECORD_START_FAILED", &msg, None);
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = std::fs::remove_file(&output_path);
+            return Err(msg);
+        }
+    }
 
     g.active = Some(ActiveBackendRecording {
         recording_id: recording_id.clone(),
@@ -572,13 +612,23 @@ fn stop_backend_recording(
     let status = match status {
         Some(s) => s,
         None => {
-            let msg = "E_RECORD_STOP_FAILED: recorder process wait failed";
-            span.err("process", "E_RECORD_STOP_FAILED", msg, None);
-            return Err(msg.to_string());
+            let stderr_tail = active.child.stderr.as_mut().and_then(read_last_stderr_line);
+            let mut msg = "E_RECORD_STOP_FAILED: recorder process wait failed".to_string();
+            if let Some(line) = stderr_tail.as_deref() {
+                msg.push_str("; stderr=");
+                msg.push_str(line);
+            }
+            span.err("process", "E_RECORD_STOP_FAILED", &msg, None);
+            return Err(msg);
         }
     };
+    let stderr_tail = active.child.stderr.as_mut().and_then(read_last_stderr_line);
     if !status.success() {
-        let msg = format!("E_RECORD_STOP_FAILED: recorder exited with {status}");
+        let mut msg = format!("E_RECORD_STOP_FAILED: recorder exited with {status}");
+        if let Some(line) = stderr_tail.as_deref() {
+            msg.push_str("; stderr=");
+            msg.push_str(line);
+        }
         span.err("process", "E_RECORD_STOP_FAILED", &msg, None);
         let _ = std::fs::remove_file(&active.output_path);
         return Err(msg);

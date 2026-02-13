@@ -355,16 +355,17 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
       stopResult = (await invoke("stop_backend_recording", {
         recordingId: rid,
       })) as StopBackendRecordingResult;
-    } catch {
+    } catch (err) {
       void invoke("abort_backend_recording", { recordingId: rid }).catch(() => {});
       backendRecordingIdRef.current = "";
       const staleSessionId = pendingRecordingSessionIdRef.current;
       void abortRecordingSessionBestEffort(staleSessionId);
       setUi("idle");
       pendingRecordingSessionIdRef.current = null;
-      pushToastRef.current("STOP FAILED", "danger");
+      const hint = transcribeErrorHint(err);
+      pushToastRef.current(hint, "danger");
       if (hotkeySessionRef.current) {
-        overlayFlash("ERROR", 1200, "STOP FAILED");
+        overlayFlash("ERROR", 1200, hint);
         hotkeySessionRef.current = false;
       }
       return;
