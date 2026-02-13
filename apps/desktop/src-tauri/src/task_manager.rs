@@ -1,8 +1,9 @@
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     process::Command,
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{anyhow, Context, Result};
@@ -14,6 +15,13 @@ use uuid::Uuid;
 
 use crate::{asr_service, data_dir, history, llm, metrics, pipeline, templates};
 use crate::{context_capture, context_pack};
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskEvent {
@@ -48,11 +56,29 @@ pub struct StartOpts {
     pub rewrite_include_glossary: bool,
     pub context_cfg: context_capture::ContextConfig,
     pub pre_captured_context: Option<context_pack::ContextSnapshot>,
+    pub recording_session_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct RecordingSession {
+    pub session_id: String,
+    pub task_id: Option<String>,
+    pub capture_required: bool,
+    pub pre_captured_context: Option<context_pack::ContextSnapshot>,
+    pub created_at_ms: i64,
+}
+
+#[derive(Debug)]
+pub enum RecordingTerminal {
+    Completed,
+    Cancelled,
+    Failed,
 }
 
 #[derive(Clone)]
 pub struct TaskManager {
     inner: Arc<Mutex<Option<ActiveTask>>>,
+    recording_sessions: Arc<Mutex<HashMap<String, RecordingSession>>>,
     asr: asr_service::AsrService,
     ctx: context_capture::ContextService,
 }
@@ -68,6 +94,7 @@ impl TaskManager {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(None)),
+            recording_sessions: Arc::new(Mutex::new(HashMap::new())),
             asr: asr_service::AsrService::new(),
             ctx: context_capture::ContextService::new(),
         }
@@ -120,6 +147,64 @@ impl TaskManager {
         self.ctx.take_hotkey_context_once(capture_id)
     }
 
+    pub fn open_recording_session(
+        &self,
+        data_dir: &Path,
+        context_cfg: &context_capture::ContextConfig,
+        capture_required: bool,
+    ) -> Result<String> {
+        let session_id = Uuid::new_v4().to_string();
+        let pre_captured_context = if capture_required {
+            let capture_id = self.ctx.capture_hotkey_context_now(data_dir, context_cfg)?;
+            Some(
+                self.ctx
+                    .take_hotkey_context_once(&capture_id)
+                    .ok_or_else(|| anyhow!("failed to retrieve hotkey context payload"))?,
+            )
+        } else {
+            None
+        };
+
+        let mut g = self.recording_sessions.lock().unwrap();
+        g.insert(
+            session_id.clone(),
+            RecordingSession {
+                session_id: session_id.clone(),
+                task_id: None,
+                capture_required,
+                pre_captured_context,
+                created_at_ms: now_ms(),
+            },
+        );
+        Ok(session_id)
+    }
+
+    pub fn bind_recording_session_to_task(
+        &self,
+        session_id: &str,
+        task_id: &str,
+    ) -> Result<Option<context_pack::ContextSnapshot>> {
+        let mut g = self.recording_sessions.lock().unwrap();
+        let session = g
+            .get_mut(session_id)
+            .ok_or_else(|| anyhow!("recording session not found"))?;
+        if session.task_id.is_some() {
+            return Err(anyhow!("recording session already in use"));
+        }
+        session.task_id = Some(task_id.to_string());
+        Ok(session.pre_captured_context.clone())
+    }
+
+    pub fn abort_recording_session(&self, session_id: &str) -> bool {
+        let mut g = self.recording_sessions.lock().unwrap();
+        g.remove(session_id).is_some()
+    }
+
+    pub fn finalize_recording_session_by_task(&self, task_id: &str) {
+        let mut g = self.recording_sessions.lock().unwrap();
+        g.retain(|_, v| v.task_id.as_deref() != Some(task_id));
+    }
+
     pub fn restart_asr_best_effort(&self, reason: &str) {
         if !Self::env_bool_default_true("TYPEVOICE_ASR_RESIDENT") {
             return;
@@ -155,7 +240,13 @@ impl TaskManager {
     ) -> Result<String> {
         let task_id = Uuid::new_v4().to_string();
         let input = pipeline::save_base64_file(&task_id, &b64, &ext)?;
-        self.start_audio_with_task_id(app, task_id, input, opts, "Record (saved)")
+        match self.start_audio_with_task_id(app, task_id, input.clone(), opts, "Record (saved)") {
+            Ok(task_id) => Ok(task_id),
+            Err(e) => {
+                let _ = pipeline::cleanup_audio_artifacts(&input, &input);
+                Err(e)
+            }
+        }
     }
 
     fn start_audio(
@@ -174,12 +265,17 @@ impl TaskManager {
         app: AppHandle,
         task_id: String,
         input: PathBuf,
-        opts: StartOpts,
+        mut opts: StartOpts,
         record_msg: &str,
     ) -> Result<String> {
+        if let Some(session_id) = opts.recording_session_id.clone() {
+            opts.pre_captured_context = self.bind_recording_session_to_task(&session_id, &task_id)?;
+        }
+
         {
             let mut g = self.inner.lock().unwrap();
             if g.is_some() {
+                self.finalize_recording_session_by_task(&task_id);
                 return Err(anyhow!("another task is already running"));
             }
             *g = Some(ActiveTask {
@@ -189,11 +285,6 @@ impl TaskManager {
                 asr_pid: Arc::new(Mutex::new(None)),
             });
         }
-
-        let active = {
-            let g = self.inner.lock().unwrap();
-            g.as_ref().unwrap().task_id.clone()
-        };
         let this = self.clone();
         let record_msg = record_msg.to_string();
 
@@ -208,10 +299,10 @@ impl TaskManager {
             match rt {
                 Ok(rt) => {
                     rt.block_on(async move {
-                        let res = this
+                        if let Err(e) = this
                             .run_pipeline(app.clone(), task_id.clone(), input, opts, &record_msg)
-                            .await;
-                        if let Err(e) = res {
+                            .await
+                        {
                             // Fail-safe: ensure the UI always gets a terminal event.
                             let maybe_dir = data_dir::data_dir().ok();
                             if let Some(dir) = maybe_dir {
@@ -238,19 +329,32 @@ impl TaskManager {
                                 );
                             }
                         }
-                        let mut g = this.inner.lock().unwrap();
-                        *g = None;
+                        {
+                            let mut g = this.inner.lock().unwrap();
+                            if g.as_ref().map(|a| &a.task_id) == Some(&task_id) {
+                                *g = None;
+                            }
+                        }
+                        this.finalize_recording_session_by_task(&task_id);
                     });
                 }
                 Err(e) => {
                     // Best-effort cleanup; we might not have a data_dir to emit metrics.
                     crate::safe_eprintln!("failed to create tokio runtime for task {task_id}: {e}");
                     let mut g = this.inner.lock().unwrap();
-                    *g = None;
+                    if g.as_ref().map(|a| &a.task_id) == Some(&task_id) {
+                        *g = None;
+                    }
+                    this.finalize_recording_session_by_task(&task_id);
+                    let _ = pipeline::cleanup_audio_artifacts(&input, &input);
                 }
             }
         });
 
+        let active = {
+            let g = self.inner.lock().unwrap();
+            g.as_ref().unwrap().task_id.clone()
+        };
         Ok(active)
     }
 
@@ -278,7 +382,7 @@ impl TaskManager {
         input: PathBuf,
         opts: StartOpts,
         record_msg: &str,
-    ) -> Result<()> {
+    ) -> Result<RecordingTerminal> {
         let data_dir = data_dir::data_dir()?;
         let ctx_cfg = opts.context_cfg.clone();
         let mut capture_ctx_cfg = ctx_cfg.clone();
@@ -363,7 +467,7 @@ impl TaskManager {
 
         if is_cancelled(&self.inner, &task_id) {
             emit_cancelled(&app, &data_dir, &task_id, "Record");
-            return Ok(());
+            return Ok(RecordingTerminal::Cancelled);
         }
 
         // Preprocess
@@ -403,7 +507,7 @@ impl TaskManager {
                     if is_cancelled_err(&e) || is_cancelled(&self.inner, &task_id) {
                         emit_cancelled(&app, &data_dir, &task_id, "Preprocess");
                         let _ = pipeline::cleanup_audio_artifacts(&input, &wav_path);
-                        return Ok(());
+                        return Ok(RecordingTerminal::Cancelled);
                     }
                     let msg = e.to_string();
                     let code = if msg.contains("E_FFMPEG_NOT_FOUND") {
@@ -415,7 +519,7 @@ impl TaskManager {
                     };
                     emit_failed(&app, &data_dir, &task_id, "Preprocess", None, code, &msg);
                     let _ = pipeline::cleanup_audio_artifacts(&input, &wav_path);
-                    return Ok(());
+                    return Ok(RecordingTerminal::Failed);
                 }
                 Err(e) => {
                     emit_failed(
@@ -428,7 +532,7 @@ impl TaskManager {
                         &format!("preprocess_join_failed:{e}"),
                     );
                     let _ = pipeline::cleanup_audio_artifacts(&input, &wav_path);
-                    return Ok(());
+                    return Ok(RecordingTerminal::Failed);
                 }
             }
         };
@@ -437,7 +541,7 @@ impl TaskManager {
         if is_cancelled(&self.inner, &task_id) {
             emit_cancelled(&app, &data_dir, &task_id, "Preprocess");
             let _ = pipeline::cleanup_audio_artifacts(&input, &wav_path);
-            return Ok(());
+            return Ok(RecordingTerminal::Cancelled);
         }
 
         // ASR
@@ -508,7 +612,7 @@ impl TaskManager {
                     if is_cancelled_err(&e) || is_cancelled(&self.inner, &task_id) {
                         emit_cancelled(&app, &data_dir, &task_id, "Transcribe");
                         let _ = pipeline::cleanup_audio_artifacts(&input, &wav_path);
-                        return Ok(());
+                        return Ok(RecordingTerminal::Cancelled);
                     }
                     emit_failed(
                         &app,
@@ -520,7 +624,7 @@ impl TaskManager {
                         &e.to_string(),
                     );
                     let _ = pipeline::cleanup_audio_artifacts(&input, &wav_path);
-                    return Ok(());
+                    return Ok(RecordingTerminal::Failed);
                 }
                 Err(e) => {
                     emit_failed(
@@ -533,7 +637,7 @@ impl TaskManager {
                         &format!("transcribe_join_failed:{e}"),
                     );
                     let _ = pipeline::cleanup_audio_artifacts(&input, &wav_path);
-                    return Ok(());
+                    return Ok(RecordingTerminal::Failed);
                 }
             }
         };
@@ -549,7 +653,7 @@ impl TaskManager {
         if is_cancelled(&self.inner, &task_id) {
             emit_cancelled(&app, &data_dir, &task_id, "Transcribe");
             let _ = pipeline::cleanup_audio_artifacts(&input, &wav_path);
-            return Ok(());
+            return Ok(RecordingTerminal::Cancelled);
         }
 
         // We no longer need audio artifacts after ASR; cleanup early.
@@ -644,7 +748,7 @@ impl TaskManager {
                         Err(e) => {
                             if is_cancelled_err(&e) || is_cancelled(&self.inner, &task_id) {
                                 emit_cancelled(&app, &data_dir, &task_id, "Rewrite");
-                                return Ok(());
+                                return Ok(RecordingTerminal::Cancelled);
                             }
                             // fallback to asr_text
                             rewrite_ms = Some(t0.elapsed().as_millis());
@@ -665,7 +769,7 @@ impl TaskManager {
 
         if is_cancelled(&self.inner, &task_id) {
             emit_cancelled(&app, &data_dir, &task_id, "Rewrite");
-            return Ok(());
+            return Ok(RecordingTerminal::Cancelled);
         }
 
         // Persist history
@@ -693,7 +797,7 @@ impl TaskManager {
                 "E_PERSIST_FAILED",
                 &e.to_string(),
             );
-            return Ok(());
+            return Ok(RecordingTerminal::Failed);
         }
         emit_completed(&app, &data_dir, &task_id, "Persist", 0, "ok");
 
@@ -759,7 +863,7 @@ impl TaskManager {
         ) {
             crate::safe_eprintln!("metrics append failed (task_perf): {e:#}");
         }
-        Ok(())
+        Ok(RecordingTerminal::Completed)
     }
 }
 

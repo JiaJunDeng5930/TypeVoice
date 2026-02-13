@@ -150,7 +150,17 @@ fn start_opts_from_settings(data_dir: &std::path::Path) -> Result<task_manager::
         rewrite_include_glossary: s.rewrite_include_glossary.unwrap_or(true),
         asr_preprocess,
         pre_captured_context: None,
+        recording_session_id: None,
     })
+}
+
+fn abort_recording_session_if_present(
+    state: &tauri::State<'_, TaskManager>,
+    recording_session_id: &Option<String>,
+) {
+    if let Some(id) = recording_session_id.as_deref() {
+        state.abort_recording_session(id);
+    }
 }
 
 fn resolve_asr_preprocess_config(s: &settings::Settings) -> pipeline::PreprocessConfig {
@@ -330,10 +340,16 @@ async fn start_transcribe_recording_base64(
     runtime: tauri::State<'_, RuntimeState>,
     b64: &str,
     ext: &str,
-    capture_id: Option<String>,
-    capture_required: Option<bool>,
+    recording_session_id: Option<String>,
 ) -> Result<String, String> {
-    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let session_id = recording_session_id;
+    let dir = match data_dir::data_dir() {
+        Ok(v) => v,
+        Err(e) => {
+            abort_recording_session_if_present(&state, &session_id);
+            return Err(e.to_string());
+        }
+    };
     let mut opts = match start_opts_from_settings(&dir) {
         Ok(v) => v,
         Err(e) => {
@@ -344,9 +360,11 @@ async fn start_transcribe_recording_base64(
                 None,
             );
             span.err("config", "E_SETTINGS_INVALID", &e, None);
+            abort_recording_session_if_present(&state, &session_id);
             return Err(e);
         }
     };
+    opts.recording_session_id = session_id;
     let span = cmd_span(
         &dir,
         None,
@@ -356,45 +374,20 @@ async fn start_transcribe_recording_base64(
             "b64_chars": b64.len(),
             "rewrite_enabled": opts.rewrite_enabled,
             "template_id": opts.template_id.as_deref(),
-            "capture_required": capture_required.unwrap_or(false),
-            "has_capture_id": capture_id.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false),
+            "has_recording_session_id": opts
+                .recording_session_id
+                .as_ref()
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false),
             "context_include_prev_window_screenshot": opts.context_cfg.include_prev_window_screenshot,
             "context_include_prev_window_meta": opts.context_cfg.include_prev_window_meta,
             "asr_preprocess_silence_trim_enabled": opts.asr_preprocess.silence_trim_enabled,
             "source": "settings",
         })),
     );
-    if capture_required.unwrap_or(false) {
-        let cid_opt = capture_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|v| !v.is_empty());
-        let cid = match cid_opt {
-            Some(v) => v,
-            None => {
-                let msg = "E_CONTEXT_CAPTURE_REQUIRED: hotkey session requires capture_id";
-                span.err("config", "E_CONTEXT_CAPTURE_REQUIRED", msg, None);
-                return Err(msg.to_string());
-            }
-        };
-        let snap = match state.take_hotkey_context_once(cid) {
-            Some(v) => v,
-            None => {
-                let msg =
-                    format!("E_CONTEXT_CAPTURE_NOT_FOUND: capture_id not found or expired ({cid})");
-                span.err("config", "E_CONTEXT_CAPTURE_NOT_FOUND", &msg, None);
-                return Err(msg);
-            }
-        };
-        if opts.context_cfg.include_prev_window_screenshot && snap.screenshot.is_none() {
-            let msg = format!("E_CONTEXT_CAPTURE_INVALID: capture_id has no screenshot ({cid})");
-            span.err("config", "E_CONTEXT_CAPTURE_INVALID", &msg, None);
-            return Err(msg);
-        }
-        opts.pre_captured_context = Some(snap);
-    }
     if let Some((code, msg)) = runtime_not_ready(&runtime) {
         span.err("config", code, &msg, None);
+        abort_recording_session_if_present(&state, &opts.recording_session_id);
         return Err(msg);
     }
     match state.start_recording_base64(app, b64.to_string(), ext.to_string(), opts) {
@@ -404,6 +397,7 @@ async fn start_transcribe_recording_base64(
         }
         Err(e) => {
             span.err_anyhow("task", "E_CMD_START_B64", &e, None);
+            abort_recording_session_if_present(&state, &opts.recording_session_id);
             Err(e.to_string())
         }
     }

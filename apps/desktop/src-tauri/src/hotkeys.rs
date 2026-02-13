@@ -30,7 +30,7 @@ pub struct HotkeyRecordEvent {
     pub state: String, // Pressed|Released
     pub shortcut: String,
     pub ts_ms: i64,
-    pub capture_id: Option<String>,
+    pub recording_session_id: Option<String>,
     pub capture_status: Option<String>, // ok|err
     pub capture_error_code: Option<String>,
     pub capture_error_message: Option<String>,
@@ -182,15 +182,15 @@ impl HotkeyManager {
             let ctx_cfg = crate::context_capture::config_from_settings(s);
             let data_dir_buf = data_dir.to_path_buf();
             if let Err(e) = gs.on_shortcut(ptt.as_str(), move |app, shortcut, event| {
-                let (capture_id, capture_status, capture_error_code, capture_error_message) =
+                let (recording_session_id, capture_status, capture_error_code, capture_error_message) =
                     if event.state == ShortcutState::Pressed {
                         let tm = app.state::<crate::task_manager::TaskManager>();
-                        match tm.capture_hotkey_context_now(&data_dir_buf, &ctx_cfg) {
+                        match tm.open_recording_session(&data_dir_buf, &ctx_cfg, true) {
                             Ok(id) => (Some(id), Some("ok".to_string()), None, None),
                             Err(e) => (
                                 None,
                                 Some("err".to_string()),
-                                Some("E_HOTKEY_CAPTURE".to_string()),
+                                Some("E_RECORDING_SESSION_OPEN".to_string()),
                                 Some(e.to_string()),
                             ),
                         }
@@ -205,7 +205,7 @@ impl HotkeyManager {
                     },
                     shortcut: shortcut.into_string(),
                     ts_ms: now_ms(),
-                    capture_id,
+                    recording_session_id,
                     capture_status,
                     capture_error_code,
                     capture_error_message,
@@ -233,13 +233,13 @@ impl HotkeyManager {
                     return;
                 }
                 let tm = app.state::<crate::task_manager::TaskManager>();
-                let (capture_id, capture_status, capture_error_code, capture_error_message) =
-                    match tm.capture_hotkey_context_now(&data_dir_buf, &ctx_cfg) {
+                let (recording_session_id, capture_status, capture_error_code, capture_error_message) =
+                    match tm.open_recording_session(&data_dir_buf, &ctx_cfg, true) {
                         Ok(id) => (Some(id), Some("ok".to_string()), None, None),
                         Err(e) => (
                             None,
                             Some("err".to_string()),
-                            Some("E_HOTKEY_CAPTURE".to_string()),
+                            Some("E_RECORDING_SESSION_OPEN".to_string()),
                             Some(e.to_string()),
                         ),
                     };
@@ -248,7 +248,7 @@ impl HotkeyManager {
                     state: "Pressed".to_string(),
                     shortcut: shortcut.into_string(),
                     ts_ms: now_ms(),
-                    capture_id,
+                    recording_session_id,
                     capture_status,
                     capture_error_code,
                     capture_error_message,

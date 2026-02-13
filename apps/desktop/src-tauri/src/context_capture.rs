@@ -104,7 +104,6 @@ struct Inner {
 #[cfg(windows)]
 #[derive(Clone)]
 struct StoredHotkeyCapture {
-    created_at_ms: i64,
     snapshot: ContextSnapshot,
 }
 
@@ -154,7 +153,6 @@ impl ContextService {
         );
 
         if !cfg.include_prev_window_screenshot {
-            let now = now_ms();
             let mut g = self.inner.lock().unwrap();
             let mut snapshot = ContextSnapshot {
                 recent_history: vec![],
@@ -174,12 +172,9 @@ impl ContextService {
             g.hotkey_capture_registry.insert(
                 capture_id.clone(),
                 StoredHotkeyCapture {
-                    created_at_ms: now,
                     snapshot,
                 },
             );
-            g.hotkey_capture_registry
-                .retain(|_, v| now.saturating_sub(v.created_at_ms) <= 60_000);
 
             span.ok(Some(serde_json::json!({
                 "capture_id": capture_id,
@@ -190,7 +185,6 @@ impl ContextService {
             return Ok(capture_id);
         }
 
-        let now = now_ms();
         let mut g = self.inner.lock().unwrap();
         let cap = g
             .win
@@ -254,12 +248,9 @@ impl ContextService {
         g.hotkey_capture_registry.insert(
             capture_id.clone(),
             StoredHotkeyCapture {
-                created_at_ms: now,
                 snapshot,
             },
         );
-        g.hotkey_capture_registry
-            .retain(|_, v| now.saturating_sub(v.created_at_ms) <= 60_000);
 
         span.ok(Some(serde_json::json!({
             "capture_id": capture_id,
@@ -275,10 +266,7 @@ impl ContextService {
 
     #[cfg(windows)]
     pub fn take_hotkey_context_once(&self, capture_id: &str) -> Option<ContextSnapshot> {
-        let now = now_ms();
         let mut g = self.inner.lock().unwrap();
-        g.hotkey_capture_registry
-            .retain(|_, v| now.saturating_sub(v.created_at_ms) <= 60_000);
         g.hotkey_capture_registry
             .remove(capture_id)
             .map(|v| v.snapshot)

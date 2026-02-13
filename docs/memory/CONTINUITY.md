@@ -13,6 +13,7 @@
 ### 已确认
 
 - 结构化诊断链路已启用：`TYPEVOICE_DATA_DIR/trace.jsonl` 为主日志入口，关键路径记录稳定的 `step_id` 与 `code`。
+- 热键上下文采集已改为“录音会话（recording_session_id）”路径：按热键在按下瞬间创建会话并缓存上下文快照，开始转写时消费该会话并在任务收尾统一清理，剔除“capture_id 60 秒有效期”分支。
 - 上下文采集与改写参数链路按设置主源，支持配置缺失即失败（fail-fast），不引入静默兜底。
 - `docs/` 文档索引与命名清洗已完成，历史版本后缀已移除。
 - 可复用的执行索引文件已新增：`docs/index.md`。
@@ -32,6 +33,7 @@
 
 ## 下一步建议
 
+- 在 Windows 下补一次完整闭环验证：热键按下->开始录音->停止/取消->转写完成/失败，确认同一 `recording_session_id` 仅在任务结束时清理一次。
 - 在 Windows 会话里补齐一次“热键录音 -> 转写 -> 改写 -> persist -> copy”闭环，并将观察结果回写：
   - 正常：同一 `task_id` 链路内 `CMD.start...`、`TASK.rewrite_effective`、`task_done` 一致。
   - 异常：将复现条件与处理思路写入 `docs/memory/PITFALLS.md`。
