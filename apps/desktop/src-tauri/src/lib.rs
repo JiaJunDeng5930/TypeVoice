@@ -513,7 +513,7 @@ async fn rewrite_text(template_id: &str, asr_text: &str) -> Result<String, Strin
             return Err(ae);
         }
     };
-    match llm::rewrite(&dir, &task_id, &tpl.system_prompt, asr_text, &glossary).await {
+    match llm::rewrite_with_context(&dir, &task_id, &tpl.system_prompt, asr_text, None, &glossary).await {
         Ok(s) => {
             span.ok(Some(serde_json::json!({"out_chars": s.len()})));
             Ok(s)
