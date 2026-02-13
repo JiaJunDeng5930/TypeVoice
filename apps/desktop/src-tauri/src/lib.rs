@@ -440,8 +440,9 @@ fn sanitize_rewrite_glossary(glossary: Option<Vec<String>>) -> Vec<String> {
 
 fn record_input_spec_from_settings(
     data_dir: &std::path::Path,
-    ffmpeg: &std::path::Path,
+    ffmpeg: &str,
 ) -> Result<String, String> {
+    let ffmpeg_path = std::path::Path::new(ffmpeg);
     let mut s = settings::load_settings_strict(data_dir).map_err(|e| e.to_string())?;
     if let Some(configured) = s
         .record_input_spec
@@ -453,7 +454,7 @@ fn record_input_spec_from_settings(
         return Ok(configured);
     }
 
-    let auto = auto_resolve_record_input_spec(ffmpeg)?;
+    let auto = auto_resolve_record_input_spec(ffmpeg_path)?;
     s.record_input_spec = Some(auto.clone());
     settings::save_settings(data_dir, &s)
         .map_err(|e| format!("E_RECORD_INPUT_AUTO_SAVE_FAILED: {e}"))?;
@@ -634,7 +635,7 @@ fn start_backend_recording(
     let recording_id = uuid::Uuid::new_v4().to_string();
     let output_path = tmp.join(format!("recording-{recording_id}.wav"));
     let ffmpeg = pipeline::ffmpeg_cmd().map_err(|e| e.to_string())?;
-    let input_spec = match record_input_spec_from_settings(&dir, &ffmpeg) {
+    let input_spec = match record_input_spec_from_settings(&dir, ffmpeg.as_str()) {
         Ok(v) => v,
         Err(e) => {
             span.err("config", "E_SETTINGS_INVALID", &e, None);
