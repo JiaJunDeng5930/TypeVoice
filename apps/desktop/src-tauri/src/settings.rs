@@ -20,7 +20,6 @@ pub struct Settings {
     // UX settings
     pub rewrite_enabled: Option<bool>,
     pub rewrite_template_id: Option<String>,
-    pub rewrite_use_dictionary: Option<bool>,
 
     // Context settings (for LLM rewrite)
     pub context_include_history: Option<bool>,
@@ -49,7 +48,6 @@ pub struct SettingsPatch {
 
     pub rewrite_enabled: Option<Option<bool>>,
     pub rewrite_template_id: Option<Option<String>>,
-    pub rewrite_use_dictionary: Option<Option<bool>>,
 
     pub context_include_history: Option<Option<bool>>,
     pub context_history_n: Option<Option<i64>>,
@@ -82,9 +80,6 @@ pub fn apply_patch(mut s: Settings, p: SettingsPatch) -> Settings {
     }
     if let Some(v) = p.rewrite_template_id {
         s.rewrite_template_id = v;
-    }
-    if let Some(v) = p.rewrite_use_dictionary {
-        s.rewrite_use_dictionary = v;
     }
     if let Some(v) = p.context_include_history {
         s.context_include_history = v;
@@ -245,7 +240,6 @@ mod tests {
             context_include_clipboard: None,
             context_include_prev_window_screenshot: None,
             llm_supports_vision: None,
-            rewrite_use_dictionary: Some(true),
             hotkeys_enabled: None,
             hotkey_ptt: None,
             hotkey_toggle: None,
@@ -258,7 +252,6 @@ mod tests {
             rewrite_enabled: Some(Some(true)),
             rewrite_template_id: Some(None),
             context_history_n: Some(Some(5)),
-            rewrite_use_dictionary: Some(None),
             ..Default::default()
         };
 
@@ -270,6 +263,5 @@ mod tests {
         assert_eq!(next.rewrite_enabled, Some(true));
         assert_eq!(next.rewrite_template_id, None);
         assert_eq!(next.context_history_n, Some(5));
-        assert_eq!(next.rewrite_use_dictionary, Some(true));
     }
 }

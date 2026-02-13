@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{asr_service, data_dir, history, llm, metrics, pipeline, templates};
-use crate::{context_capture, context_pack, dictionary};
+use crate::{context_capture, context_pack};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskEvent {
@@ -43,7 +43,6 @@ pub struct TaskDone {
 pub struct StartOpts {
     pub rewrite_enabled: bool,
     pub template_id: Option<String>,
-    pub rewrite_use_dictionary: bool,
     pub context_cfg: context_capture::ContextConfig,
     pub pre_captured_context: Option<context_pack::ContextSnapshot>,
 }
@@ -313,7 +312,6 @@ impl TaskManager {
             Some(serde_json::json!({
                 "rewrite_requested": opts.rewrite_enabled,
                 "template_id": opts.template_id.as_deref(),
-                "rewrite_use_dictionary": opts.rewrite_use_dictionary,
             })),
         );
 
@@ -522,32 +520,6 @@ impl TaskManager {
         let mut rewrite_ms = None;
         let mut template_id = None;
         let rewrite_entered = opts.rewrite_enabled && opts.template_id.is_some();
-        let dictionary_text = if rewrite_entered && opts.rewrite_use_dictionary {
-            match dictionary::load_dictionary(&data_dir) {
-                Ok(file) => {
-                    let section =
-                        dictionary::dictionary_context_section(&file, dictionary::dictionary_context_budget_chars());
-                    if section.is_empty() {
-                        None
-                    } else {
-                        Some(section)
-                    }
-                }
-                Err(e) => {
-                    crate::trace::event(
-                        &data_dir,
-                        Some(&task_id),
-                        "Dictionary",
-                        "DICT.load",
-                        "err",
-                        Some(serde_json::json!({"error": e.to_string()})),
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
         crate::trace::event(
             &data_dir,
             Some(&task_id),
@@ -559,7 +531,6 @@ impl TaskManager {
                 "has_template": opts.template_id.is_some(),
                 "rewrite_entered": rewrite_entered,
                 "template_id": opts.template_id.as_deref(),
-                "rewrite_use_dictionary": opts.rewrite_use_dictionary,
             })),
         );
         if opts.rewrite_enabled {
@@ -587,9 +558,6 @@ impl TaskManager {
                     let mut prepared = context_pack::prepare(&asr_text, &ctx_snap, &ctx_cfg.budget);
                     if !ctx_cfg.llm_supports_vision {
                         prepared.screenshot = None;
-                    }
-                    if let Some(dictionary_text) = &dictionary_text {
-                        prepared.dictionary_text = Some(dictionary_text.clone());
                     }
                     let token = {
                         let g = self.inner.lock().unwrap();
