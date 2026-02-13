@@ -92,27 +92,48 @@ def ffprobe_duration_seconds(path: str) -> float:
     return float(out)
 
 
+def _ffmpeg_preprocess_args(
+    input_path: str,
+    output_path: str,
+    silence_trim_enabled: bool = False,
+    silence_threshold_db: float = -50.0,
+    silence_start_ms: int = 300,
+    silence_end_ms: int = 300,
+) -> list[str]:
+    args = [
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        input_path,
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-c:a",
+        "pcm_s16le",
+    ]
+    if silence_trim_enabled:
+        start = silence_start_ms / 1000.0
+        end = silence_end_ms / 1000.0
+        args.extend(
+            [
+                "-af",
+                "silenceremove="
+                f"start_periods=1:start_duration={start:.3f}:start_threshold={silence_threshold_db:.2f}dB"
+                f":stop_periods=-1:stop_duration={end:.3f}:stop_threshold={silence_threshold_db:.2f}dB",
+            ]
+        )
+    args.extend(["-vn", output_path])
+    return args
+
+
 def ffmpeg_preprocess_to_wav(input_path: str, output_path: str) -> int:
     """Convert audio to 16kHz mono PCM WAV. Returns elapsed ms."""
     ffmpeg = resolve_tool_binary_or_fail("TYPEVOICE_FFMPEG", "ffmpeg.exe" if os.name == "nt" else "ffmpeg")
     t0 = now_ms()
-    subprocess.check_call(
-        [
-            ffmpeg,
-            "-y",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-i",
-            input_path,
-            "-ac",
-            "1",
-            "-ar",
-            "16000",
-            "-vn",
-            output_path,
-        ]
-    )
+    subprocess.check_call([ffmpeg, *_ffmpeg_preprocess_args(input_path, output_path)])
     t1 = now_ms()
     return t1 - t0
 
@@ -121,21 +142,7 @@ def cancel_ffmpeg_preprocess(input_path: str, output_path: str, delay_ms: int = 
     """Start ffmpeg preprocess then kill; return cancel latency in ms."""
     ffmpeg = resolve_tool_binary_or_fail("TYPEVOICE_FFMPEG", "ffmpeg.exe" if os.name == "nt" else "ffmpeg")
     proc = subprocess.Popen(
-        [
-            ffmpeg,
-            "-y",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-i",
-            input_path,
-            "-ac",
-            "1",
-            "-ar",
-            "16000",
-            "-vn",
-            output_path,
-        ],
+        [ffmpeg, *_ffmpeg_preprocess_args(input_path, output_path)],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         text=True,

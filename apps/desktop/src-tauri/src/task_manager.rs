@@ -43,6 +43,7 @@ pub struct TaskDone {
 pub struct StartOpts {
     pub rewrite_enabled: bool,
     pub template_id: Option<String>,
+    pub asr_preprocess: pipeline::PreprocessConfig,
     pub rewrite_glossary: Vec<String>,
     pub rewrite_include_glossary: bool,
     pub context_cfg: context_capture::ContextConfig,
@@ -333,13 +334,17 @@ impl TaskManager {
             "TASK.start_opts",
             "ok",
             Some(serde_json::json!({
-                "rewrite_requested": opts.rewrite_enabled,
-                "template_id": opts.template_id.as_deref(),
-                "rewrite_include_glossary": opts.rewrite_include_glossary,
-                "context_include_prev_window_meta": ctx_cfg.include_prev_window_meta,
+                    "rewrite_requested": opts.rewrite_enabled,
+                    "template_id": opts.template_id.as_deref(),
+                    "rewrite_include_glossary": opts.rewrite_include_glossary,
+                    "context_include_prev_window_meta": ctx_cfg.include_prev_window_meta,
                 "context_include_prev_window_screenshot": ctx_cfg.include_prev_window_screenshot,
                 "context_include_history": ctx_cfg.include_history,
                 "context_include_clipboard": ctx_cfg.include_clipboard,
+                "asr_preprocess_silence_trim_enabled": opts.asr_preprocess.silence_trim_enabled,
+                "asr_preprocess_threshold_db": opts.asr_preprocess.silence_threshold_db,
+                "asr_preprocess_trim_start_ms": opts.asr_preprocess.silence_trim_start_ms,
+                "asr_preprocess_trim_end_ms": opts.asr_preprocess.silence_trim_end_ms,
             })),
         );
 
@@ -362,8 +367,14 @@ impl TaskManager {
         }
 
         // Preprocess
-        emit_started(&app, &data_dir, &task_id, "Preprocess", "ffmpeg");
+        let preprocess_label = if opts.asr_preprocess.silence_trim_enabled {
+            "ffmpeg (silence_trim)"
+        } else {
+            "ffmpeg"
+        };
+        emit_started(&app, &data_dir, &task_id, "Preprocess", preprocess_label);
         let wav_path = pipeline::preprocess_to_temp_wav(&task_id, &input)?;
+        let asr_preprocess_cfg = opts.asr_preprocess.clone();
         let preprocess_ms = {
             let inner = self.inner.clone();
             let data_dir2 = data_dir.clone();
@@ -381,6 +392,7 @@ impl TaskManager {
                     &wav2,
                     &a.token,
                     &a.ffmpeg_pid,
+                    &asr_preprocess_cfg,
                 )?;
                 Ok::<_, anyhow::Error>(ms)
             })
@@ -738,6 +750,10 @@ impl TaskManager {
                 "device_used": done.device_used,
                 "asr_model_id": asr_model_id,
                 "asr_model_version": asr_model_version,
+                "asr_preprocess_silence_trim_enabled": opts.asr_preprocess.silence_trim_enabled,
+                "asr_preprocess_threshold_db": opts.asr_preprocess.silence_threshold_db,
+                "asr_preprocess_trim_start_ms": opts.asr_preprocess.silence_trim_start_ms,
+                "asr_preprocess_trim_end_ms": opts.asr_preprocess.silence_trim_end_ms,
                 "asr_warmup_ms": self.asr.warmup_ms(),
             }),
         ) {

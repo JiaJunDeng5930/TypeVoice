@@ -34,6 +34,25 @@ pub struct TranscribeResult {
     pub asr_ms: u128,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct PreprocessConfig {
+    pub silence_trim_enabled: bool,
+    pub silence_threshold_db: f64,
+    pub silence_trim_start_ms: u64,
+    pub silence_trim_end_ms: u64,
+}
+
+impl Default for PreprocessConfig {
+    fn default() -> Self {
+        Self {
+            silence_trim_enabled: false,
+            silence_threshold_db: -50.0,
+            silence_trim_start_ms: 300,
+            silence_trim_end_ms: 300,
+        }
+    }
+}
+
 fn repo_root() -> Result<PathBuf> {
     if let Ok(p) = std::env::var("TYPEVOICE_REPO_ROOT") {
         return Ok(PathBuf::from(p));
@@ -82,6 +101,70 @@ fn stderr_excerpt_from_child(mut stderr: Option<std::process::ChildStderr>) -> S
     String::from_utf8_lossy(&buf).trim().to_string()
 }
 
+fn clamp_preprocess_config(mut cfg: PreprocessConfig) -> PreprocessConfig {
+    if !cfg.silence_threshold_db.is_finite() {
+        cfg.silence_threshold_db = -50.0;
+    }
+    if cfg.silence_threshold_db > 0.0 {
+        cfg.silence_threshold_db = 0.0;
+    }
+    if cfg.silence_trim_start_ms > 60_000 {
+        cfg.silence_trim_start_ms = 60_000;
+    }
+    if cfg.silence_trim_end_ms > 60_000 {
+        cfg.silence_trim_end_ms = 60_000;
+    }
+    cfg
+}
+
+fn build_ffmpeg_preprocess_args(
+    input: &Path,
+    output: &Path,
+    cfg: &PreprocessConfig,
+) -> Result<Vec<String>> {
+    let input_s = input
+        .to_str()
+        .ok_or_else(|| anyhow!("non-utf8 input path"))?
+        .to_string();
+    let output_s = output
+        .to_str()
+        .ok_or_else(|| anyhow!("non-utf8 output path"))?
+        .to_string();
+
+    let cfg = clamp_preprocess_config(cfg.clone());
+    let mut args = vec![
+        "-y".to_string(),
+        "-hide_banner".to_string(),
+        "-loglevel".to_string(),
+        "error".to_string(),
+        "-i".to_string(),
+        input_s,
+        "-ac".to_string(),
+        "1".to_string(),
+        "-ar".to_string(),
+        "16000".to_string(),
+        "-c:a".to_string(),
+        "pcm_s16le".to_string(),
+    ];
+
+    if cfg.silence_trim_enabled {
+        let start = (cfg.silence_trim_start_ms as f64) / 1000.0;
+        let end = (cfg.silence_trim_end_ms as f64) / 1000.0;
+        let filter = format!(
+            "silenceremove=start_periods=1:start_duration={start:.3}:start_threshold={thr}dB:stop_periods=-1:stop_duration={end:.3}:stop_threshold={thr}dB",
+            start = start,
+            end = end,
+            thr = cfg.silence_threshold_db,
+        );
+        args.push("-af".to_string());
+        args.push(filter);
+    }
+
+    args.push("-vn".to_string());
+    args.push(output_s);
+    Ok(args)
+}
+
 pub fn fixture_path(name: &str) -> Result<PathBuf> {
     let root = repo_root()?;
     Ok(root.join("fixtures").join(name))
@@ -101,28 +184,12 @@ pub fn save_base64_file(task_id: &str, b64: &str, ext: &str) -> Result<PathBuf> 
     Ok(input)
 }
 
-pub fn preprocess_ffmpeg(input: &Path, output: &Path) -> Result<u128> {
+pub fn preprocess_ffmpeg(input: &Path, output: &Path, cfg: &PreprocessConfig) -> Result<u128> {
     let t0 = Instant::now();
     let cmd = ffmpeg_cmd()?;
+    let args = build_ffmpeg_preprocess_args(input, output, cfg)?;
     let out = Command::new(&cmd)
-        .args([
-            "-y",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-i",
-            input
-                .to_str()
-                .ok_or_else(|| anyhow!("non-utf8 input path"))?,
-            "-ac",
-            "1",
-            "-ar",
-            "16000",
-            "-vn",
-            output
-                .to_str()
-                .ok_or_else(|| anyhow!("non-utf8 output path"))?,
-        ])
+        .args(args)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .output()
@@ -394,6 +461,7 @@ pub fn preprocess_ffmpeg_cancellable(
     output: &Path,
     token: &tokio_util::sync::CancellationToken,
     pid_slot: &std::sync::Arc<std::sync::Mutex<Option<u32>>>,
+    cfg: &PreprocessConfig,
 ) -> Result<u128> {
     let cmd = ffmpeg_cmd()?;
     let span = Span::start(
@@ -407,36 +475,16 @@ pub fn preprocess_ffmpeg_cancellable(
     );
 
     let t0 = Instant::now();
-    let input_s = match input.to_str() {
-        Some(s) => s,
-        None => {
-            span.err("io", "E_PATH_UTF8", "non-utf8 input path", None);
-            return Err(anyhow!("non-utf8 input path"));
-        }
-    };
-    let output_s = match output.to_str() {
-        Some(s) => s,
-        None => {
-            span.err("io", "E_PATH_UTF8", "non-utf8 output path", None);
-            return Err(anyhow!("non-utf8 output path"));
+    let args = match build_ffmpeg_preprocess_args(input, output, cfg) {
+        Ok(v) => v,
+        Err(e) => {
+            span.err("io", "E_PATH_UTF8", &e.to_string(), None);
+            return Err(e);
         }
     };
 
     let mut child = match Command::new(&cmd)
-        .args([
-            "-y",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-i",
-            input_s,
-            "-ac",
-            "1",
-            "-ar",
-            "16000",
-            "-vn",
-            output_s,
-        ])
+        .args(args)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
@@ -530,6 +578,7 @@ pub fn run_audio_pipeline_with_task_id(
     task_id: String,
     input_audio: &Path,
     model_id: &str,
+    preprocess_cfg: &PreprocessConfig,
 ) -> Result<TranscribeResult> {
     let root = repo_root()?;
     if !input_audio.exists() {
@@ -539,7 +588,7 @@ pub fn run_audio_pipeline_with_task_id(
     std::fs::create_dir_all(&tmp).ok();
     let wav = tmp.join(format!("{task_id}.wav"));
 
-    let preprocess_ms = preprocess_ffmpeg(input_audio, &wav)?;
+    let preprocess_ms = preprocess_ffmpeg(input_audio, &wav, preprocess_cfg)?;
     let (text, rtf, device_used, asr_ms) = transcribe_with_python_runner(&wav, model_id)?;
 
     let _ = cleanup_audio_artifacts(input_audio, &wav);
@@ -554,9 +603,13 @@ pub fn run_audio_pipeline_with_task_id(
     })
 }
 
-pub fn run_fixture_pipeline(fixture_name: &str) -> Result<TranscribeResult> {
+pub fn run_fixture_pipeline(
+    fixture_name: &str,
+    model_id: &str,
+    preprocess_cfg: &PreprocessConfig,
+) -> Result<TranscribeResult> {
     let input = fixture_path(fixture_name)?;
-    run_audio_pipeline_with_task_id(Uuid::new_v4().to_string(), &input, "Qwen/Qwen3-ASR-0.6B")
+    run_audio_pipeline_with_task_id(Uuid::new_v4().to_string(), &input, model_id, preprocess_cfg)
 }
 
 // Intentionally no generic "run_audio_pipeline" helper to keep call sites explicit.

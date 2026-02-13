@@ -141,14 +141,39 @@ fn start_opts_from_settings(data_dir: &std::path::Path) -> Result<task_manager::
     let s = settings::load_settings_strict(data_dir).map_err(|e| e.to_string())?;
     let (rewrite_enabled, template_id) =
         settings::resolve_rewrite_start_config(&s).map_err(|e| e.to_string())?;
+    let asr_preprocess = resolve_asr_preprocess_config(&s);
     Ok(task_manager::StartOpts {
         rewrite_enabled,
         template_id,
         context_cfg: context_capture::config_from_settings(&s),
         rewrite_glossary: sanitize_rewrite_glossary(s.rewrite_glossary),
         rewrite_include_glossary: s.rewrite_include_glossary.unwrap_or(true),
+        asr_preprocess,
         pre_captured_context: None,
     })
+}
+
+fn resolve_asr_preprocess_config(s: &settings::Settings) -> pipeline::PreprocessConfig {
+    let mut cfg = pipeline::PreprocessConfig::default();
+    if let Some(v) = s.asr_preprocess_silence_trim_enabled {
+        cfg.silence_trim_enabled = v;
+    }
+    if let Some(v) = s.asr_preprocess_silence_threshold_db {
+        cfg.silence_threshold_db = v;
+    }
+    if let Some(v) = s.asr_preprocess_silence_start_ms {
+        cfg.silence_trim_start_ms = v;
+    }
+    if let Some(v) = s.asr_preprocess_silence_end_ms {
+        cfg.silence_trim_end_ms = v;
+    }
+    cfg
+}
+
+fn resolve_asr_preprocess_config_strict(
+    data_dir: &std::path::Path,
+) -> anyhow::Result<pipeline::PreprocessConfig> {
+    settings::load_settings_strict(data_dir).map(|s| resolve_asr_preprocess_config(&s))
 }
 
 fn sanitize_rewrite_glossary(glossary: Option<Vec<String>>) -> Vec<String> {
@@ -178,7 +203,21 @@ fn transcribe_fixture(
         span.err("config", code, &msg, None);
         return Err(msg);
     }
-    match pipeline::run_fixture_pipeline(fixture_name) {
+    let model_id = match pipeline::resolve_asr_model_id(&dir) {
+        Ok(v) => v,
+        Err(e) => {
+            span.err_anyhow("pipeline", "E_PIPELINE_RESOLVE_ASR", &e, None);
+            return Err(e.to_string());
+        }
+    };
+    let preprocess_cfg = match resolve_asr_preprocess_config_strict(&dir) {
+        Ok(v) => v,
+        Err(e) => {
+            span.err_anyhow("pipeline", "E_CMD_RESOLVE_ASR_PREPROCESS", &e, None);
+            return Err(e.to_string());
+        }
+    };
+    match pipeline::run_fixture_pipeline(fixture_name, &model_id, &preprocess_cfg) {
         Ok(r) => {
             span.ok(None);
             Ok(r)
@@ -215,7 +254,21 @@ fn transcribe_recording_base64(
             return Err(e.to_string());
         }
     };
-    match pipeline::run_audio_pipeline_with_task_id(task_id, &input, "Qwen/Qwen3-ASR-0.6B") {
+    let model_id = match pipeline::resolve_asr_model_id(&dir) {
+        Ok(v) => v,
+        Err(e) => {
+            span.err_anyhow("pipeline", "E_PIPELINE_RESOLVE_ASR", &e, None);
+            return Err(e.to_string());
+        }
+    };
+    let preprocess_cfg = match resolve_asr_preprocess_config_strict(&dir) {
+        Ok(v) => v,
+        Err(e) => {
+            span.err_anyhow("pipeline", "E_CMD_RESOLVE_ASR_PREPROCESS", &e, None);
+            return Err(e.to_string());
+        }
+    };
+    match pipeline::run_audio_pipeline_with_task_id(task_id, &input, &model_id, &preprocess_cfg) {
         Ok(r) => {
             span.ok(None);
             Ok(r)
@@ -307,6 +360,7 @@ async fn start_transcribe_recording_base64(
             "has_capture_id": capture_id.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false),
             "context_include_prev_window_screenshot": opts.context_cfg.include_prev_window_screenshot,
             "context_include_prev_window_meta": opts.context_cfg.include_prev_window_meta,
+            "asr_preprocess_silence_trim_enabled": opts.asr_preprocess.silence_trim_enabled,
             "source": "settings",
         })),
     );
@@ -729,6 +783,12 @@ fn update_settings(
         "hotkey_ptt": patch.hotkey_ptt.is_some(),
         "hotkey_toggle": patch.hotkey_toggle.is_some(),
         "hotkeys_show_overlay": patch.hotkeys_show_overlay.is_some(),
+        "asr_preprocess_silence_trim_enabled": patch.asr_preprocess_silence_trim_enabled.is_some(),
+        "asr_preprocess_silence_threshold_db": patch
+            .asr_preprocess_silence_threshold_db
+            .is_some(),
+        "asr_preprocess_silence_start_ms": patch.asr_preprocess_silence_start_ms.is_some(),
+        "asr_preprocess_silence_end_ms": patch.asr_preprocess_silence_end_ms.is_some(),
     });
     let span = cmd_span(&dir, None, "CMD.update_settings", Some(patch_summary));
     let cur = match settings::load_settings_strict(&dir) {
@@ -785,8 +845,10 @@ fn asr_model_status() -> Result<ModelStatus, String> {
             model_version: None,
         }
     };
-    let ok = st.ok;
-    span.ok(Some(serde_json::json!({"ok": st.ok, "reason": st.reason, "model_version": st.model_version})));
+    let _ok = st.ok;
+    span.ok(Some(
+        serde_json::json!({"ok": st.ok, "reason": st.reason, "model_version": st.model_version}),
+    ));
     Ok(st)
 }
 

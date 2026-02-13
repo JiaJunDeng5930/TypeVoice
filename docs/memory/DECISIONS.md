@@ -44,3 +44,9 @@
 - 决策：`asr_model_status` 的模型来源以配置解析链路为准，使用 `pipeline::resolve_asr_model_id` 对齐实际运行模型；`manifest.json` 缺失不再作为 ASR 可用性的致命错误。
 - 依据：当前实现的转写依赖模型可加载能力，不依赖 `manifest.json` 本身；该文件仅用于完整性可追溯性。
 - 执行：`manifest.json_missing` 保留为告警信息返回，且 UI 应显示“可用但建议补齐 manifest.json”。
+
+## ASR 预处理参数不做缺省回退
+
+- 决策：预处理阶段的行为（静音裁剪开关与参数）仅使用 `settings.json` 中显式配置，不再对字段缺失或解析失败进行额外回退；缺失项由默认值体现，settings 解析失败按现有 fail-fast 模式返回错误。
+- 依据：用户要求不引入兼容/回退路径，统一从 settings 作为单一真源驱动 ASR 预处理行为。
+- 执行：`resolve_asr_preprocess_config_strict` + `transcribe_fixture` / `transcribe_recording_base64` 中使用 strict 读取设置并记录 `E_CMD_RESOLVE_ASR_PREPROCESS` 失败码。

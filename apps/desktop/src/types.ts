@@ -28,6 +28,10 @@ export type PromptTemplate = {
 
 export type Settings = {
   asr_model?: string | null;
+  asr_preprocess_silence_trim_enabled?: boolean | null;
+  asr_preprocess_silence_threshold_db?: number | null;
+  asr_preprocess_silence_start_ms?: number | null;
+  asr_preprocess_silence_end_ms?: number | null;
   llm_base_url?: string | null;
   llm_model?: string | null;
   llm_reasoning_effort?: string | null;

@@ -11,6 +11,10 @@ use crate::trace::Span;
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
     pub asr_model: Option<String>, // local dir or HF repo id
+    pub asr_preprocess_silence_trim_enabled: Option<bool>,
+    pub asr_preprocess_silence_threshold_db: Option<f64>,
+    pub asr_preprocess_silence_start_ms: Option<u64>,
+    pub asr_preprocess_silence_end_ms: Option<u64>,
 
     // LLM settings (non-sensitive). API key is stored in OS keyring.
     pub llm_base_url: Option<String>, // e.g. https://api.openai.com/v1
@@ -44,6 +48,10 @@ pub struct SettingsPatch {
     // Outer Option: whether to update this field.
     // Inner Option: Some(value)=set, None=clear.
     pub asr_model: Option<Option<String>>,
+    pub asr_preprocess_silence_trim_enabled: Option<Option<bool>>,
+    pub asr_preprocess_silence_threshold_db: Option<Option<f64>>,
+    pub asr_preprocess_silence_start_ms: Option<Option<u64>>,
+    pub asr_preprocess_silence_end_ms: Option<Option<u64>>,
 
     pub llm_base_url: Option<Option<String>>,
     pub llm_model: Option<Option<String>>,
@@ -71,6 +79,18 @@ pub struct SettingsPatch {
 pub fn apply_patch(mut s: Settings, p: SettingsPatch) -> Settings {
     if let Some(v) = p.asr_model {
         s.asr_model = v;
+    }
+    if let Some(v) = p.asr_preprocess_silence_trim_enabled {
+        s.asr_preprocess_silence_trim_enabled = v;
+    }
+    if let Some(v) = p.asr_preprocess_silence_threshold_db {
+        s.asr_preprocess_silence_threshold_db = v;
+    }
+    if let Some(v) = p.asr_preprocess_silence_start_ms {
+        s.asr_preprocess_silence_start_ms = v;
+    }
+    if let Some(v) = p.asr_preprocess_silence_end_ms {
+        s.asr_preprocess_silence_end_ms = v;
     }
     if let Some(v) = p.llm_base_url {
         s.llm_base_url = v;
@@ -248,9 +268,9 @@ mod tests {
             llm_model: Some("m1".to_string()),
             llm_reasoning_effort: Some("low".to_string()),
             rewrite_enabled: Some(false),
-        rewrite_template_id: Some("t1".to_string()),
-        rewrite_glossary: None,
-        context_include_history: None,
+            rewrite_template_id: Some("t1".to_string()),
+            rewrite_glossary: None,
+            context_include_history: None,
             context_history_n: None,
             context_history_window_ms: None,
             context_include_prev_window_meta: None,
@@ -262,6 +282,7 @@ mod tests {
             hotkey_ptt: None,
             hotkey_toggle: None,
             hotkeys_show_overlay: None,
+            ..Default::default()
         };
 
         let p = SettingsPatch {

@@ -31,6 +31,10 @@ export function SettingsScreen({
   onHistoryCleared,
 }: Props) {
   const [asrModel, setAsrModel] = useState("");
+  const [asrPreprocessTrimEnabled, setAsrPreprocessTrimEnabled] = useState(false);
+  const [asrPreprocessThresholdDb, setAsrPreprocessThresholdDb] = useState("-50");
+  const [asrPreprocessStartMs, setAsrPreprocessStartMs] = useState("300");
+  const [asrPreprocessEndMs, setAsrPreprocessEndMs] = useState("300");
   const [llmBaseUrl, setLlmBaseUrl] = useState("");
   const [llmModel, setLlmModel] = useState("");
   const [reasoning, setReasoning] = useState("default");
@@ -63,6 +67,20 @@ export function SettingsScreen({
   useEffect(() => {
     if (!settings) return;
     setAsrModel(settings.asr_model ?? "");
+    setAsrPreprocessTrimEnabled(settings.asr_preprocess_silence_trim_enabled ?? false);
+    setAsrPreprocessThresholdDb(
+      String(
+        settings.asr_preprocess_silence_threshold_db ??
+          -50,
+      ),
+    );
+    setAsrPreprocessStartMs(
+      String(
+        settings.asr_preprocess_silence_start_ms ??
+          300,
+      ),
+    );
+    setAsrPreprocessEndMs(String(settings.asr_preprocess_silence_end_ms ?? 300));
     setLlmBaseUrl(settings.llm_base_url ?? "");
     setLlmModel(settings.llm_model ?? "");
     setReasoning(settings.llm_reasoning_effort ?? "default");
@@ -160,6 +178,39 @@ export function SettingsScreen({
       await savePatch({ asr_model: asrModel.trim() ? asrModel.trim() : null });
       pushToast("SAVED", "ok");
       await refreshModelStatus();
+    } catch {
+      pushToast("SAVE FAILED", "danger");
+    }
+  }
+
+  async function savePreprocessConfig() {
+    const thresholdDb = Number(asrPreprocessThresholdDb);
+    const trimStartMs = Number(asrPreprocessStartMs);
+    const trimEndMs = Number(asrPreprocessEndMs);
+    if (!Number.isFinite(thresholdDb) || !Number.isFinite(trimStartMs) || !Number.isFinite(trimEndMs)) {
+      pushToast("INVALID PREPROCESS INPUT", "danger");
+      return;
+    }
+    if (thresholdDb > 0) {
+      pushToast("SILENCE THRESHOLD SHOULD NOT BE ABOVE 0", "danger");
+      return;
+    }
+    if (trimStartMs < 0 || trimEndMs < 0) {
+      pushToast("TRIM MS SHOULD BE >= 0", "danger");
+      return;
+    }
+    try {
+      await savePatch({
+        asr_preprocess_silence_trim_enabled: asrPreprocessTrimEnabled,
+        asr_preprocess_silence_threshold_db: thresholdDb,
+        asr_preprocess_silence_start_ms: Number.isInteger(trimStartMs)
+          ? trimStartMs
+          : Math.round(trimStartMs),
+        asr_preprocess_silence_end_ms: Number.isInteger(trimEndMs)
+          ? trimEndMs
+          : Math.round(trimEndMs),
+      });
+      pushToast("SAVED", "ok");
     } catch {
       pushToast("SAVE FAILED", "danger");
     }
@@ -366,6 +417,48 @@ export function SettingsScreen({
           />
           <div className="row" style={{ justifyContent: "flex-end" }}>
             <PixelButton onClick={saveAsr} tone="accent">
+              SAVE
+            </PixelButton>
+          </div>
+        </div>
+        <div className="sectionTitle" style={{ marginTop: 18 }}>
+          PREPROCESS
+        </div>
+        <div className="stack">
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <div className="muted">{asrPreprocessTrimEnabled ? "SILENCE TRIM ON" : "SILENCE TRIM OFF"}</div>
+            <PixelToggle
+              value={asrPreprocessTrimEnabled}
+              onChange={setAsrPreprocessTrimEnabled}
+              label="silence trim"
+            />
+          </div>
+          <div className="row">
+            <div className="muted">阈值（dB）</div>
+            <PixelInput
+              value={asrPreprocessThresholdDb}
+              onChange={setAsrPreprocessThresholdDb}
+              placeholder="-50"
+            />
+          </div>
+          <div className="row">
+            <div className="muted">前段静音 (ms)</div>
+            <PixelInput
+              value={asrPreprocessStartMs}
+              onChange={setAsrPreprocessStartMs}
+              placeholder="300"
+            />
+          </div>
+          <div className="row">
+            <div className="muted">末段静音 (ms)</div>
+            <PixelInput
+              value={asrPreprocessEndMs}
+              onChange={setAsrPreprocessEndMs}
+              placeholder="300"
+            />
+          </div>
+          <div className="row" style={{ justifyContent: "flex-end" }}>
+            <PixelButton onClick={savePreprocessConfig} tone="accent">
               SAVE
             </PixelButton>
           </div>

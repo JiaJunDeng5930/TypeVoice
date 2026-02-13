@@ -483,7 +483,11 @@ fn build_rewrite_glossary_section(rewrite_glossary: &[String]) -> Option<String>
         out.push_str(v);
         out.push('\n');
     }
-    if out.is_empty() { None } else { Some(out) }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 fn bool_text(v: bool) -> &'static str {
