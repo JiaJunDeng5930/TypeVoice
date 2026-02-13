@@ -1,4 +1,4 @@
-# Fixtures 音频来源 v0.1
+# Fixtures 音频来源
 
 说明：
 
@@ -17,4 +17,3 @@
 - `fixtures/zh_5m.ogg`（297.723s）
   - 上游：`Zh-展開 (幾何).ogg`
   - 链接：`https://commons.wikimedia.org/wiki/Special:FilePath/Zh-%E5%B1%95%E9%96%8B%20(%E5%B9%BE%E4%BD%95).ogg`
-

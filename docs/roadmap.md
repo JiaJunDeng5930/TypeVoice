@@ -1,17 +1,17 @@
-# TypeVoice 里程碑与 Gate v0.1（Windows MVP）
+# TypeVoice 里程碑与 Gate（Windows MVP）
 
 原则：
 
 - 里程碑以“可用切片（vertical slice）+ 风险优先（risk-first）”推进。
-- 每个里程碑都有明确 Gate；Gate 绑定 `docs/verification-v0.1.md` 的 `quick/full`。
+- 每个里程碑都有明确 Gate；Gate 绑定 `docs/verification.md` 的 `quick/full`。
 - 自用工具：Gate 输出只需要控制台摘要 + 机器可读指标（JSONL），不做长报告。
 
 ## M0：规格冻结（已完成）
 
 完成条件：
 
-- `docs/base-spec-v0.1.md`、`docs/tech-spec-v0.1.md`、`docs/verification-v0.1.md` 已冻结
-- fixtures 本机可用且来源记录完整（`docs/fixtures-sources-v0.1.md`）
+- `docs/base-spec.md`、`docs/tech-spec.md`、`docs/verification.md` 已冻结
+- fixtures 本机可用且来源记录完整（`docs/fixtures-sources.md`）
 
 Gate：
 
@@ -35,7 +35,7 @@ Gate：
   - `zh_10s`：text 非空 + `device_used=cuda` + 输出包含 rtf
   - 取消：转录中取消 <=300ms 且计算停止
 - `full`：
-  - `zh_60s` 与 `zh_5m`：RTF 达到 `docs/base-spec-v0.1.md` 的必须阈值
+  - `zh_60s` 与 `zh_5m`：RTF 达到 `docs/base-spec.md` 的必须阈值
   - 任一用例若 `device_used!=cuda` 直接 FAIL（不允许 CPU 降级）
 
 ## M2：FFmpeg 预处理切片（与 ASR 串联）

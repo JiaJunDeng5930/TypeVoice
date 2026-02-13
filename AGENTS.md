@@ -60,41 +60,46 @@ Local-only artifacts (gitignored): `fixtures/` (audio), `models/` (downloaded mo
 你将以“串行多階段”方式工作：每个阶段结束后视为会清空上下文。不要依赖聊天记录
 来记住规格、进度、偏好、经验。
 
-工程的外置记忆文件（若存在则以其为准）：
+## docs 管理规则（适用于 `docs/` 下所有文档）
 
-- SPEC.md：系统规格与验收标准（唯一真源）
-- CONTINUITY.md：当前进度与工作集（唯一真源）
-- USER_PREFS.md：用户的长期要求 / 偏好（必须持续生效）
-- PITFALLS.md：踩坑与经验（必须可复用），这里说的“踩坑”，既包括代码层面的问题，比如出现的 Bug，也包括工程方面。
-- DECISIONS.md：关键决策与理由（用于处理冲突与版本漂移）
+- `docs/` 下仅保留 `.md` 文档。
+- 所有文档应无内部冲突；若发现冲突，先确认后统一修订。
+- 文档不得记录猜测内容。
+- 文档不得记录历史信息、失效信息、错误信息。
+- 不允许在文档里保留未验证的传闻、时间戳、变更记录、复盘证据。
+- 新增会影响后续工作的信息必须立即写回对应文件，不允许“后补”。
+- 文件名应清晰反映内容，避免版本号与冗余词。
+- 维护文档摘要与索引：按 `indexed-markdown-navigation` 风格在 `docs/index.md` 记录文档目录与用途摘要。
+- `docs/memory` 是特殊路径，优先级最高。
 
-回合开始：
+## 外置记忆层级（若存在则以其为准）
 
-1. 读取上述文件中存在的部分，恢复“当前有效规格、当前进度、用户要求、已知坑 / 经
-   验”。
-2. 若发现冲突或不确定：不要猜，把冲突点 / 不确定点写入 CONTINUITY.md 的
-   Open Questions，并向用户请求确认或执行验证。
+- `SPEC.md`：系统规格与验收标准（唯一真源）
+- `CONTINUITY.md`：当前进度与工作集（唯一真源）
+- `USER_PREFS.md`：用户长期要求 / 偏好（必须持续生效）
+- `PITFALLS.md`：踩坑与经验（可复用规则）
+- `DECISIONS.md`：关键决策与理由（用于处理冲突与版本漂移）
 
-持续更新：
+## 读写约定
 
-1. 任何会影响后续工作的新增信息，必须写回外置记忆文件：
+- 回合开始前，先完整阅读 `docs/memory` 的全部文件。
+- 若出现冲突或不确定：写入 `docs/memory/CONTINUITY.md` 的 `UNCONFIRMED` 后再行动。
 
-- 规格变化 -> SPEC.md
-- 进度 / 下一步 / 工作集 -> CONTINUITY.md
-- 新偏好 / 硬性要求 -> USER_PREFS.md
-- 新踩坑 / 经验教训 -> PITFALLS.md
-- 关键取舍 / 冲突裁决 -> DECISIONS.md
+## 记录约定
 
-2. 写入时必须区分 VERIFIED 与 UNCONFIRMED，避免把猜测固化为长期记忆。
+1. 任何会影响后续工作的新增信息，按影响域写回：
 
-外置记忆是长期资产，必须防污染：
+- 规格变化 -> `docs/memory/SPEC.md`
+- 进度 / 下一步 / 工作集 -> `docs/memory/CONTINUITY.md`
+- 新偏好 / 硬性要求 -> `docs/memory/USER_PREFS.md`
+- 新踩坑 / 经验教训 -> `docs/memory/PITFALLS.md`
+- 关键取舍 / 冲突裁决 -> `docs/memory/DECISIONS.md`
 
-- 任何从工具输出 / 推断得到的内容，若未验证，写入时标 UNCONFIRMED，并记录验证路
-  径（文件 / 命令 / 来源）。
-- 一旦发现之前的记忆条目错误：不要覆盖抹掉，使用“更正”方式记录（原条目 + 更正
-  条目 + 生效时间 / 原因），防止未来冲突与误用。
+2. 记忆条目必须区分 `VERIFIED` 与 `UNCONFIRMED`。
+3. 未验证内容只允许标注 `UNCONFIRMED`，并保留校验路径。
+4. 错误信息出现时，不覆盖旧条目，追加更正记录。
 
-对于这些文件，在符合上述要求时自行修改，不需要询问用户或者争取用户同意
+对于这些文件，在符合要求时自行修改。
 
 <!-- BEGIN AGENTS_MD_PROJECT_INDEX -->
 ```text
@@ -105,7 +110,7 @@ Local-only artifacts (gitignored): `fixtures/` (audio), `models/` (downloaded mo
 |.:{apps/,asr_runner/,docs/,scripts/,tests/,.gitattributes,.gitignore,AGENTS.md,pytest.ini,README.md}
 |apps:{desktop/}
 |asr_runner:{__init__.py,runner.py}
-|docs:{memory/,architecture-v0.1.md,base-spec-v0.1.md,fixtures-sources-v0.1.md,llm-prompt-lab-v0.1.md,perf-spike-plan-v0.1.md,roadmap-v0.1.md,tasks-v0.1.md,tech-spec-v0.1.md,verification-v0.1.md,windows-dev-from-wsl-v0.1.md,windows-gate-v0.1.md}
+|docs:{index.md,memory/,architecture.md,base-spec.md,fixtures-sources.md,llm-prompt-lab.md,perf-spike.md,roadmap.md,tasks.md,tech-spec.md,verification.md,windows-dev.md,windows-gate.md}
 |scripts:{windows/,_verify_util.py,download_asr_model.py,download_ffmpeg_toolchain.sh,llm_prompt_lab.py,verify_full.py,verify_quick.py}
 |tests:{test_asr_protocol.py}
 |apps/desktop:{public/,src-tauri/,src/,.gitignore,index.html,package-lock.json,package.json,README.md,tsconfig.json,tsconfig.node.json,vite.config.ts}

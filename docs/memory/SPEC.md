@@ -1,74 +1,37 @@
 # SPEC（外置记忆）
 
-说明：
-
-- 本仓库“冻结规格”的真源在 `docs/`（例如 `docs/base-spec-v0.1.md`、`docs/tech-spec-v0.1.md`、`docs/verification-v0.1.md`、`docs/roadmap-v0.1.md`）。
-- 本文件只维护“最小可用”的目标/范围/验收提要与显式未知项，避免重复抄写造成漂移。
-- 本文件内容必须标注 `VERIFIED` / `UNCONFIRMED`。若与冻结文档冲突，以冻结文档为准（VERIFIED：见 `README.md`）。
+- 本文件是 `docs/` 目录中冻结规格的最小索引，不承载实现历史。
+- 真源仍是：`docs/base-spec.md`、`docs/tech-spec.md`、`docs/verification.md`、`docs/roadmap.md`。
 
 ## 1. 目标
 
-VERIFIED
-
-- 面向中文输入场景的 Windows 桌面“录完再出稿”语音打字工具：录音结束后本地 ASR 转录，再可选调用 LLM API 改写，最后一键复制文本。来源：`README.md`、`docs/base-spec-v0.1.md`。
-- MVP 优先：可用性、稳定性、速度、可取消、可观测（阶段与耗时可见）。来源：`docs/base-spec-v0.1.md`。
-
-UNCONFIRMED
-
-- 是否需要在 `SPEC.md` 内写入更细的“验收检查表”全文，或仅保留索引与最小摘要（当前采取“最小摘要 + 指向冻结文档”策略）。
+- Windows 桌面端“录完再出稿”语音输入工具：本地录音转写后可选 LLM 改写并可复制文本。
+- 目标优先级：可用性、稳定性、可取消、可观测、性能。
 
 ## 2. 范围（MVP）
 
-VERIFIED
+- 平台：Windows 桌面端（其他平台不在本 MVP 范围）。
+- 流程：Record -> Preprocess(FFmpeg) -> Transcribe(ASR) -> Rewrite(LLM，可选) -> Persist -> Export。
+- ASR：`Qwen/Qwen3-ASR-0.6B`，PyTorch CUDA，禁止 CPU 降级。
+- LLM 改写：仅在用户启用时发送转录文本与必要上下文，不上传音频。
+- 历史记录：仅保存文本与元信息，不保存音频文件。
 
-- 平台：Windows 桌面端（MVP 仅 Windows）。来源：`docs/base-spec-v0.1.md`。
-- 交互：非流式（不是边说边出字），录完再处理。来源：`docs/base-spec-v0.1.md`。
-- 核心流水线阶段：Record -> Preprocess(FFmpeg) -> Transcribe(ASR) -> Rewrite(LLM，可选) -> Persist(历史文本) -> Export(复制)。来源：`docs/tech-spec-v0.1.md`。
-- 本地 ASR：模型 `Qwen/Qwen3-ASR-0.6B`；推理后端 PyTorch CUDA；不允许 CPU 降级。来源：`docs/base-spec-v0.1.md`、`docs/tech-spec-v0.1.md`、`docs/verification-v0.1.md`。
-- LLM 改写：仅在启用时上传“转录文本 + 相关上下文”（例如剪贴板/最近历史/上一外部窗口截图等），不上传音频；失败必须回退保留 ASR 原文可复制；配置需可在 UI 内设置。来源：`docs/base-spec-v0.1.md`、`docs/tech-spec-v0.1.md`。
-- 历史记录：仅保存文本与元信息，不保存音频。来源：`docs/base-spec-v0.1.md`、`docs/tech-spec-v0.1.md`。
+## 3. 明确不做（MVP Out of Scope）
 
-## 3. 明确不做（MVP Out Of Scope）
+- 流式转录、说话人分离、端上离线 LLM、自动输入、全局托盘常驻（作为未来扩展）。
 
-VERIFIED
+## 4. 验收与门禁（摘要）
 
-- 流式转录、说话人分离、端上离线 LLM、自动输入/热键/托盘常驻。来源：`docs/base-spec-v0.1.md`。
+- 分级验收：`quick`（<=60s）与 `full`（<=10min）。
+- 核心硬约束：
+  - `device_used == cuda`。
+  - `cancel_latency_ms <= 300ms`。
+  - `full` 验收包含 `full` 固定样本、轻压测、失败率与临时目录清理。
+  - 默认不要求真实 LLM 调用；如需 `llm_smoke` 为可选校验。
+- 可观测性要求：错误链路必须有稳定 `step_id` 与 `code`，并记录可定位的上下文与回溯信息。
 
-VERIFIED（2026-02-10，新增需求，不改变 MVP 冻结范围）
+## 5. 依赖文档
 
-- 在不修改冻结的 MVP 约束前提下，开始实现“全局快捷键录音输入 + 小悬浮指示”的后续需求，用于减少必须切换到 UI 的操作成本。
-  - 仍不做“自动输入（模拟键盘输入）”，输出仍以复制到剪贴板为主。
-
-## 4. 验收与 Gate
-
-VERIFIED
-
-- 验证分级：`quick`（<=60s）与 `full`（<=10min）。来源：`docs/verification-v0.1.md`。
-- 关键硬约束：`device_used == cuda`；取消 <= 300ms；`full` 覆盖 RTF 阈值与轻压测；默认不跑真实 LLM。来源：`docs/verification-v0.1.md`、`docs/base-spec-v0.1.md`。
-- 里程碑与 Gate：见 `docs/roadmap-v0.1.md`、`docs/tasks-v0.1.md`。
-
-## 4.1 可诊断性（Observability / Debuggability）
-
-VERIFIED（2026-02-10，用户要求）
-
-- 对于所有错误路径（包括 best-effort 分支与跨线程任务），必须落盘可定位的诊断信息，而不是仅在少数 event 打日志。
-- 每个失败必须至少包含：
-  - 稳定的步骤标识（`step_id`）
-  - 稳定的错误码（`code`）
-  - 错误链（error chain，能看到从外层到根因的层级）
-  - 调用栈/回溯（backtrace 或等价机制），用于定位到具体出错位置（无需手工维护 `file:line` 常量）
-  - 与根因定位相关的上下文信息（需脱敏；不得包含 API key；不得写入截图像素/base64）
-- Windows release 无控制台：不得依赖 stdout/stderr；诊断日志必须写入数据目录（例如 `TYPEVOICE_DATA_DIR/trace.jsonl` 与 `TYPEVOICE_DATA_DIR/debug/`）。
-
-UNCONFIRMED
-
-- Windows 原生验收 Gate（M12）当前是否已在目标 Windows 机器上跑通并记录结果（`docs/tasks-v0.1.md` 里仍未勾选）。
-
-## 5. 待确认/待验证清单（从冻结文档抽取）
-
-UNCONFIRMED
-
-- 模型下载源与镜像策略。来源：`docs/base-spec-v0.1.md`、`docs/tech-spec-v0.1.md`。
-- 模型版本升级策略（多版本共存/回滚）。来源：`docs/base-spec-v0.1.md`。
-- FFmpeg 版本、构建选项与许可证声明写法。来源：`docs/tech-spec-v0.1.md`。
-- PyTorch CUDA 打包策略与 ASR Runner 分发形式。来源：`docs/tech-spec-v0.1.md`。
+- 流程与结构由 `docs/base-spec.md`、`docs/tech-spec.md` 管理。
+- 执行计划由 `docs/roadmap.md`、`docs/tasks.md` 管理。
+- 验收脚本与指标由 `docs/verification.md`、`docs/fixtures-sources.md`、`docs/perf-spike.md` 管理。

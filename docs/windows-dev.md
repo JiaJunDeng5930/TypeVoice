@@ -1,4 +1,4 @@
-# Windows Dev From WSL v0.1
+# Windows Dev From WSL
 
 Goal: reliably build and run the Windows desktop app while keeping the main development workflow inside WSL.
 

@@ -1,4 +1,4 @@
-# TypeVoice 性能验证计划 v0.1（Perf Spike）
+# TypeVoice 性能验证计划（Perf Spike）
 
 目标：在进入功能开发前，用可复现的数据验证本地 ASR 在 RTX 4060 Laptop 环境是否达成“非常顺畅”的速度要求，并为后续优化路径提供决策依据。
 
@@ -35,7 +35,7 @@
 
 备注：样本音频内容不需要入库到历史记录，样本仅用于开发阶段性能测试。
 
-本机样本文件约定与来源见：`docs/fixtures-sources-v0.1.md`（音频文件放在本机 `fixtures/`，不提交到 git）。
+本机样本文件约定与来源见：`docs/fixtures-sources.md`（音频文件放在本机 `fixtures/`，不提交到 git）。
 
 ## 5. 预处理口径（冻结建议）
 

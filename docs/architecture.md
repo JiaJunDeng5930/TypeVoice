@@ -1,6 +1,6 @@
-# TypeVoice 架构 v0.1（Windows MVP）
+# TypeVoice 架构（Windows MVP）
 
-目标：在满足 `docs/base-spec-v0.1.md` 与 `docs/verification-v0.1.md` 的前提下，给出可实现、可取消、可度量、可扩展（热键/托盘/自动输入）的最小架构。
+目标：在满足 `docs/base-spec.md` 与 `docs/verification.md` 的前提下，给出可实现、可取消、可度量、可扩展（热键/托盘/自动输入）的最小架构。
 
 ## 1. 分层与依赖方向（冻结）
 
@@ -84,7 +84,7 @@
 
 - 将 asr_text + 模板渲染后的 prompt 发给 API
 - 失败必须回退：保留 asr_text，final_text=asr_text，并返回结构化错误
-- 默认验证不调用真实 API（见 `docs/verification-v0.1.md`）
+- 默认验证不调用真实 API（见 `docs/verification.md`）
 
 ### 2.6 TemplateStore / SettingsStore / HistoryStore（适配器）
 
@@ -129,4 +129,3 @@
 - 所有阶段必须产出结构化 metrics（至少：task_id、stage、elapsed_ms、result_code、device_used、rtf）。
 - 取消必须是跨阶段的一等公民（CancelToken + 可终止外部进程）。
 - fixtures 路径约定必须固定（`fixtures/zh_10s.ogg` 等），且通过 FFmpeg 预处理统一格式，避免样本格式差异影响结果。
-

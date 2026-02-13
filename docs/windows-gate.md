@@ -1,10 +1,10 @@
-# Windows Gate v0.1
+# Windows Gate
 
 This repo is primarily developed in WSL, but the target runtime for the MVP is Windows desktop.
 
 For a detailed, manual, repeatable workflow (including how WSL triggers Windows builds), see:
 
-- `docs/windows-dev-from-wsl-v0.1.md`
+- `docs/windows-dev.md`
 
 ## One-Command Gate (PowerShell)
 

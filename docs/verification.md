@@ -1,4 +1,4 @@
-# TypeVoice 分级验证规格 v0.1
+# TypeVoice 分级验证规格
 
 目标：为“自用工具”定义轻量、可复现的验收机制。发布合规、审计留档、面向人类的详细报告均不在本规格范围内。
 
@@ -9,7 +9,7 @@
 
 ## 2. 通用度量对象（冻结）
 
-- 固定样本音频：本机 `fixtures/` 下的 `zh_10s.ogg`、`zh_60s.ogg`、`zh_5m.ogg`（来源与时长见 `docs/fixtures-sources-v0.1.md`；音频不提交到 git）。
+- 固定样本音频：本机 `fixtures/` 下的 `zh_10s.ogg`、`zh_60s.ogg`、`zh_5m.ogg`（来源与时长见 `docs/fixtures-sources.md`；音频不提交到 git）。
 - 结构化指标：每次验证输出关键指标（RTF、device_used、cancel_latency_ms、成功/失败与错误码）。只需要机器可读记录 + 控制台摘要，不需要长报告。
 
 ## 3. 关键约束（冻结）
@@ -47,7 +47,7 @@
 - 全部单元测试
 - ASR 性能套件（`fixtures/zh_10s.ogg`、`fixtures/zh_60s.ogg`、`fixtures/zh_5m.ogg`）
 - 断言：`device_used == cuda`（任一用例跑到 CPU 视为失败）
-- 断言：RTF 达到基础规格阈值（见 `docs/base-spec-v0.1.md`）
+- 断言：RTF 达到基础规格阈值（见 `docs/base-spec.md`）
 - 取消覆盖：至少覆盖预处理阶段与转录阶段各一次
 - 断言：`cancel_latency_ms <= 300` 且计算停止
 - 稳定性轻压测（时间盒）：建议 3 分钟循环转录 `zh_10s.ogg`

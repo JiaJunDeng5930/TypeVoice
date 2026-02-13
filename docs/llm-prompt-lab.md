@@ -1,4 +1,4 @@
-# LLM Prompt Lab v0.1
+# LLM Prompt Lab
 
 目标：把“测试 LLM 返回 -> 调整 prompt -> 再测”的流程固化为可复用的脚本，不做自动判定（人工判断输出是否符合预期）。
 
@@ -77,4 +77,3 @@ python3 scripts/llm_prompt_lab.py \
 
 - 本脚本不做“输出是否正确”的自动判定：你需要人工判断 `response.txt` 是否符合预期。
 - 脚本不会将 API Key 写入磁盘（但若你用 `--api-key`，它仍可能出现在终端历史中）。
-
