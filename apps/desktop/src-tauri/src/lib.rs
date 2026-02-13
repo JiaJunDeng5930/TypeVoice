@@ -385,9 +385,10 @@ async fn start_transcribe_recording_base64(
             "source": "settings",
         })),
     );
+    let session_id_for_cleanup = opts.recording_session_id.clone();
     if let Some((code, msg)) = runtime_not_ready(&runtime) {
         span.err("config", code, &msg, None);
-        abort_recording_session_if_present(&state, &opts.recording_session_id);
+        abort_recording_session_if_present(&state, &session_id_for_cleanup);
         return Err(msg);
     }
     match state.start_recording_base64(app, b64.to_string(), ext.to_string(), opts) {
@@ -397,7 +398,7 @@ async fn start_transcribe_recording_base64(
         }
         Err(e) => {
             span.err_anyhow("task", "E_CMD_START_B64", &e, None);
-            abort_recording_session_if_present(&state, &opts.recording_session_id);
+            abort_recording_session_if_present(&state, &session_id_for_cleanup);
             Err(e.to_string())
         }
     }
