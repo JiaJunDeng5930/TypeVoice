@@ -509,7 +509,12 @@ async fn rewrite_text(template_id: &str, asr_text: &str) -> Result<String, Strin
         Ok(s) => sanitize_rewrite_glossary(s.rewrite_glossary),
         Err(e) => {
             let ae = format!("rewrite_text load settings failed: {e}");
-            span.err_anyhow("settings", "E_CMD_REWRITE_SETTINGS", &anyhow::anyhow!(ae), None);
+            span.err_anyhow(
+                "settings",
+                "E_CMD_REWRITE_SETTINGS",
+                &anyhow::anyhow!(ae.as_str()),
+                None,
+            );
             return Err(ae);
         }
     };
