@@ -1,6 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
-import type { ApiKeyStatus, ModelStatus, PromptTemplate, Settings } from "../types";
+import type {
+  ApiKeyStatus,
+  DictionaryEntry,
+  ModelStatus,
+  PromptTemplate,
+  Settings,
+} from "../types";
 import { PixelButton } from "../ui/PixelButton";
 import { PixelDialog } from "../ui/PixelDialog";
 import { PixelInput, PixelTextarea } from "../ui/PixelInput";
@@ -36,6 +42,7 @@ export function SettingsScreen({
   const [reasoning, setReasoning] = useState("default");
   const [rewriteEnabled, setRewriteEnabled] = useState(false);
   const [rewriteTemplateId, setRewriteTemplateId] = useState("");
+  const [rewriteUseDictionary, setRewriteUseDictionary] = useState(true);
 
   const [hotkeysEnabled, setHotkeysEnabled] = useState(true);
   const [hotkeyPtt, setHotkeyPtt] = useState("F9");
@@ -47,6 +54,7 @@ export function SettingsScreen({
   const [templates, setTemplates] = useState<PromptTemplate[]>([]);
   const [tplId, setTplId] = useState("");
   const [tplDraft, setTplDraft] = useState("");
+  const [dictionaryJson, setDictionaryJson] = useState("[]");
 
   const [keyDraft, setKeyDraft] = useState("");
   const [templatesJson, setTemplatesJson] = useState("");
@@ -66,6 +74,7 @@ export function SettingsScreen({
     }
     setRewriteEnabled(settings.rewrite_enabled);
     setRewriteTemplateId(settings.rewrite_template_id ?? "");
+    setRewriteUseDictionary(settings.rewrite_use_dictionary ?? true);
 
     if (typeof settings.hotkeys_enabled !== "boolean") {
       pushToast("SETTINGS INVALID: hotkeys_enabled missing", "danger");
@@ -85,6 +94,7 @@ export function SettingsScreen({
     (async () => {
       await refreshModelStatus();
       await refreshTemplates();
+      await refreshDictionary();
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -103,6 +113,19 @@ export function SettingsScreen({
     return t?.name || "";
   }, [rewriteTemplateId, templates]);
 
+  function parseDictionaryPayload(json: string): DictionaryEntry[] {
+    const parsed = JSON.parse(json) as unknown;
+    const raw = Array.isArray(parsed)
+      ? parsed
+      : parsed && typeof parsed === "object" && "entries" in parsed && Array.isArray((parsed as { entries?: unknown[] }).entries)
+        ? (parsed as { entries: unknown[] }).entries
+        : null;
+    if (!raw) {
+      throw new Error("dictionary json must be an array or { entries: [...] }");
+    }
+    return raw as DictionaryEntry[];
+  }
+
   async function refreshTemplates() {
     try {
       const t = (await invoke("list_templates")) as PromptTemplate[];
@@ -116,6 +139,15 @@ export function SettingsScreen({
     } catch {
       // templates are optional
       setTemplates([]);
+    }
+  }
+
+  async function refreshDictionary() {
+    try {
+      const d = (await invoke("dictionary_list")) as DictionaryEntry[];
+      setDictionaryJson(JSON.stringify(d, null, 2));
+    } catch {
+      setDictionaryJson("[]");
     }
   }
 
@@ -171,10 +203,44 @@ export function SettingsScreen({
       await savePatch({
         rewrite_enabled: rewriteEnabled,
         rewrite_template_id: rewriteTemplateId.trim() ? rewriteTemplateId.trim() : null,
+        rewrite_use_dictionary: rewriteUseDictionary,
       });
       pushToast("SAVED", "ok");
     } catch {
       pushToast("SAVE FAILED", "danger");
+    }
+  }
+
+  async function exportDictionary() {
+    try {
+      const s = (await invoke("dictionary_export_json")) as string;
+      setDictionaryJson(s);
+      pushToast("DICTIONARY EXPORTED", "ok");
+    } catch {
+      pushToast("DICTIONARY EXPORT FAILED", "danger");
+    }
+  }
+
+  async function saveDictionary() {
+    try {
+      const entries = parseDictionaryPayload(dictionaryJson);
+      await invoke("dictionary_save", { entries });
+      await refreshDictionary();
+      pushToast("DICTIONARY SAVED", "ok");
+    } catch {
+      pushToast("DICTIONARY SAVE FAILED", "danger");
+    }
+  }
+
+  async function importDictionary(mode: "merge" | "replace") {
+    if (!dictionaryJson.trim()) return;
+    try {
+      const payload = dictionaryJson.trim();
+      await invoke("dictionary_import_json", { json: payload, mode });
+      await refreshDictionary();
+      pushToast("DICTIONARY IMPORTED", "ok");
+    } catch {
+      pushToast("DICTIONARY IMPORT FAILED", "danger");
     }
   }
 
@@ -368,6 +434,46 @@ export function SettingsScreen({
               SAVE
             </PixelButton>
           </div>
+        </div>
+        <div className="row" style={{ justifyContent: "space-between", marginTop: 12 }}>
+          <div className="muted">
+            {rewriteUseDictionary ? "DICTIONARY ON" : "DICTIONARY OFF"}
+          </div>
+          <PixelToggle
+            value={rewriteUseDictionary}
+            onChange={setRewriteUseDictionary}
+            label="rewrite dictionary"
+          />
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="sectionTitle">DICTIONARY</div>
+        <PixelTextarea
+          value={dictionaryJson}
+          onChange={setDictionaryJson}
+          placeholder='[{ "source_term": "词", "preferred_term": "词条", "note": "..." }, ...]'
+          rows={9}
+        />
+        <div className="row" style={{ justifyContent: "flex-end" }}>
+          <PixelButton onClick={saveDictionary} tone="accent" disabled={!dictionaryJson.trim()}>
+            SAVE
+          </PixelButton>
+          <PixelButton onClick={exportDictionary}>EXPORT</PixelButton>
+          <PixelButton
+            onClick={() => importDictionary("merge")}
+            tone="accent"
+            disabled={!dictionaryJson.trim()}
+          >
+            IMPORT MERGE
+          </PixelButton>
+          <PixelButton
+            onClick={() => importDictionary("replace")}
+            tone="danger"
+            disabled={!dictionaryJson.trim()}
+          >
+            IMPORT REPLACE
+          </PixelButton>
         </div>
       </div>
 

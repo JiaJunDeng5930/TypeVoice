@@ -56,6 +56,7 @@ impl Default for ContextBudget {
 pub struct PreparedContext {
     pub user_text: String,
     pub screenshot: Option<ScreenshotPng>,
+    pub dictionary_text: Option<String>,
 }
 
 fn clamp_chars(s: &str, max_chars: usize) -> String {
@@ -178,6 +179,7 @@ pub fn prepare(asr_text: &str, snap: &ContextSnapshot, budget: &ContextBudget) -
     PreparedContext {
         user_text: out.trim_end().to_string(),
         screenshot: snap.screenshot.clone(),
+        dictionary_text: None,
     }
 }
 

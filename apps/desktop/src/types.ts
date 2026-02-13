@@ -26,6 +26,14 @@ export type PromptTemplate = {
   system_prompt: string;
 };
 
+export type DictionaryEntry = {
+  id: string;
+  source_term: string;
+  preferred_term: string;
+  note?: string | null;
+  enabled: boolean;
+};
+
 export type Settings = {
   asr_model?: string | null;
   llm_base_url?: string | null;
@@ -33,6 +41,7 @@ export type Settings = {
   llm_reasoning_effort?: string | null;
   rewrite_enabled?: boolean | null;
   rewrite_template_id?: string | null;
+  rewrite_use_dictionary?: boolean | null;
 
   context_include_history?: boolean | null;
   context_history_n?: number | null;

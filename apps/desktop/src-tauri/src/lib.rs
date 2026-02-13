@@ -12,6 +12,7 @@ mod metrics;
 mod model;
 mod panic_log;
 mod pipeline;
+mod dictionary;
 mod python_runtime;
 mod safe_print;
 mod settings;
@@ -141,9 +142,11 @@ fn start_opts_from_settings(data_dir: &std::path::Path) -> Result<task_manager::
     let s = settings::load_settings_strict(data_dir).map_err(|e| e.to_string())?;
     let (rewrite_enabled, template_id) =
         settings::resolve_rewrite_start_config(&s).map_err(|e| e.to_string())?;
+    let rewrite_use_dictionary = s.rewrite_use_dictionary.unwrap_or(true);
     Ok(task_manager::StartOpts {
         rewrite_enabled,
         template_id,
+        rewrite_use_dictionary,
         context_cfg: context_capture::config_from_settings(&s),
         pre_captured_context: None,
     })
@@ -238,6 +241,7 @@ async fn start_transcribe_fixture(
             "fixture_name": fixture_name,
             "rewrite_enabled": opts.rewrite_enabled,
             "template_id": opts.template_id.as_deref(),
+            "rewrite_use_dictionary": opts.rewrite_use_dictionary,
             "source": "settings",
         })),
     );
@@ -290,6 +294,7 @@ async fn start_transcribe_recording_base64(
             "b64_chars": b64.len(),
             "rewrite_enabled": opts.rewrite_enabled,
             "template_id": opts.template_id.as_deref(),
+            "rewrite_use_dictionary": opts.rewrite_use_dictionary,
             "capture_required": capture_required.unwrap_or(false),
             "has_capture_id": capture_id.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false),
             "source": "settings",
@@ -471,6 +476,87 @@ fn templates_import_json(json: &str, mode: &str) -> Result<usize, String> {
         }
         Err(e) => {
             span.err_anyhow("templates", "E_CMD_TPL_IMPORT", &e, None);
+            Err(e.to_string())
+        }
+    }
+}
+
+#[tauri::command]
+fn dictionary_list() -> Result<Vec<dictionary::DictionaryEntry>, String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(&dir, None, "CMD.dictionary_list", None);
+    match dictionary::load_dictionary(&dir) {
+        Ok(file) => {
+            let count = file.entries.len();
+            span.ok(Some(serde_json::json!({"count": count})));
+            Ok(file.entries)
+        }
+        Err(e) => {
+            span.err_anyhow("dictionary", "E_CMD_DICT_LIST", &e, None);
+            Err(e.to_string())
+        }
+    }
+}
+
+#[tauri::command]
+fn dictionary_export_json() -> Result<String, String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(&dir, None, "CMD.dictionary_export_json", None);
+    match dictionary::export_dictionary_json(&dir) {
+        Ok(s) => {
+            span.ok(Some(serde_json::json!({"bytes": s.len()})));
+            Ok(s)
+        }
+        Err(e) => {
+            span.err_anyhow("dictionary", "E_CMD_DICT_EXPORT", &e, None);
+            Err(e.to_string())
+        }
+    }
+}
+
+#[tauri::command]
+fn dictionary_import_json(json: &str, mode: &str) -> Result<usize, String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(
+        &dir,
+        None,
+        "CMD.dictionary_import_json",
+        Some(serde_json::json!({"mode": mode, "json_chars": json.len()})),
+    );
+    match dictionary::import_dictionary_json(&dir, json, mode) {
+        Ok(n) => {
+            span.ok(Some(serde_json::json!({"count": n})));
+            Ok(n)
+        }
+        Err(e) => {
+            span.err_anyhow("dictionary", "E_CMD_DICT_IMPORT", &e, None);
+            Err(e.to_string())
+        }
+    }
+}
+
+#[tauri::command]
+fn dictionary_save(entries: Vec<dictionary::DictionaryEntry>) -> Result<usize, String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(
+        &dir,
+        None,
+        "CMD.dictionary_save",
+        Some(serde_json::json!({"count": entries.len()})),
+    );
+    let file = dictionary::DictionaryFile {
+        version: 1,
+        entries,
+        updated_at_ms: 0,
+    };
+    match dictionary::save_dictionary(&dir, file) {
+        Ok(saved) => {
+            let count = saved.entries.len();
+            span.ok(Some(serde_json::json!({"count": count})));
+            Ok(count)
+        }
+        Err(e) => {
+            span.err_anyhow("dictionary", "E_CMD_DICT_SAVE", &e, None);
             Err(e.to_string())
         }
     }
@@ -669,6 +755,7 @@ fn update_settings(
         "llm_reasoning_effort": patch.llm_reasoning_effort.is_some(),
         "rewrite_enabled": patch.rewrite_enabled.is_some(),
         "rewrite_template_id": patch.rewrite_template_id.is_some(),
+        "rewrite_use_dictionary": patch.rewrite_use_dictionary.is_some(),
         "context_include_history": patch.context_include_history.is_some(),
         "context_history_n": patch.context_history_n.is_some(),
         "context_history_window_ms": patch.context_history_window_ms.is_some(),
@@ -904,6 +991,10 @@ pub fn run() {
             delete_template,
             templates_export_json,
             templates_import_json,
+            dictionary_list,
+            dictionary_export_json,
+            dictionary_import_json,
+            dictionary_save,
             rewrite_text,
             set_llm_api_key,
             clear_llm_api_key,

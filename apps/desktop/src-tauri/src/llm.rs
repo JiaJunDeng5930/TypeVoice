@@ -445,7 +445,15 @@ fn build_user_content(
     };
 
     // Prefer the prepared text (it already includes transcript + context).
-    let text = c.user_text.clone();
+    let mut text = c.user_text.clone();
+    if let Some(dict_text) = c.dictionary_text.as_deref() {
+        let dict_text = dict_text.trim();
+        if !dict_text.is_empty() {
+            text.push_str("\n\n");
+            text.push_str(dict_text);
+        }
+    }
+
     let Some(sc) = &c.screenshot else {
         return (
             MessageContent::Text(text.clone()),
