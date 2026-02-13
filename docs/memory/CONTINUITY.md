@@ -17,6 +17,7 @@
 - `docs/` 文档索引与命名清洗已完成，历史版本后缀已移除。
 - 可复用的执行索引文件已新增：`docs/index.md`。
 - 词汇表重写入口已完成：新增 `rewrite_glossary` 配置持久化与 rewrite content 透传，默认提示词已加入 `### GLOSSARY` 约束说明。
+- [VERIFIED] Windows 侧补齐“最新源码构建并启动”流程：新增 `scripts/windows/run-latest.ps1`，并在 `docs/windows-dev.md` / `docs/windows-gate.md` 固化一键执行路径。
 - [VERIFIED] ASR 预处理新增可配置项已接通：新增 `asr_preprocess_silence_*` 设置字段，`Settings` 与 `SettingsPatch` 持久化，并在 `SettingsScreen` 新增 `PREPROCESS` 开关/参数面板（静音裁剪开关、阈值、首尾静音时长）。
 - [VERIFIED] 预处理配置已纳入运行链路：`task_manager::StartOpts`、`StartOpts` 组装、FFmpeg 预处理阶段与日志指标（`task_perf`）均记录 `asr_preprocess_*`，用于比对配置对 ASR 时延的影响。
 
