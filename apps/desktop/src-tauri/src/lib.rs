@@ -466,7 +466,7 @@ fn start_backend_recording(
         }
     };
 
-    let child = std::process::Command::new(&ffmpeg)
+    let child = match std::process::Command::new(&ffmpeg)
         .args([
             "-y",
             "-hide_banner",
@@ -488,11 +488,14 @@ fn start_backend_recording(
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .map_err(|e| {
+    {
+        Ok(child) => child,
+        Err(e) => {
             let msg = format!("E_RECORD_START_FAILED: failed to start ffmpeg recorder: {e}");
             span.err("process", "E_RECORD_START_FAILED", &msg, None);
-            msg
-        })?;
+            return Err(msg);
+        }
+    };
 
     g.active = Some(ActiveBackendRecording {
         recording_id: recording_id.clone(),
