@@ -36,6 +36,7 @@ export function SettingsScreen({
   const [reasoning, setReasoning] = useState("default");
   const [rewriteEnabled, setRewriteEnabled] = useState(false);
   const [rewriteTemplateId, setRewriteTemplateId] = useState("");
+  const [rewriteGlossaryDraft, setRewriteGlossaryDraft] = useState("");
 
   const [hotkeysEnabled, setHotkeysEnabled] = useState(true);
   const [hotkeyPtt, setHotkeyPtt] = useState("F9");
@@ -66,6 +67,7 @@ export function SettingsScreen({
     }
     setRewriteEnabled(settings.rewrite_enabled);
     setRewriteTemplateId(settings.rewrite_template_id ?? "");
+    setRewriteGlossaryDraft((settings.rewrite_glossary || []).join("\n"));
 
     if (typeof settings.hotkeys_enabled !== "boolean") {
       pushToast("SETTINGS INVALID: hotkeys_enabled missing", "danger");
@@ -173,6 +175,19 @@ export function SettingsScreen({
         rewrite_template_id: rewriteTemplateId.trim() ? rewriteTemplateId.trim() : null,
       });
       pushToast("SAVED", "ok");
+    } catch {
+      pushToast("SAVE FAILED", "danger");
+    }
+  }
+
+  async function saveGlossary() {
+    const items = rewriteGlossaryDraft
+      .split("\n")
+      .map((x) => x.trim())
+      .filter((x) => x.length > 0);
+    try {
+      await savePatch({ rewrite_glossary: items });
+      pushToast("GLOSSARY SAVED", "ok");
     } catch {
       pushToast("SAVE FAILED", "danger");
     }
@@ -365,6 +380,26 @@ export function SettingsScreen({
           />
           <div className="row" style={{ justifyContent: "flex-end" }}>
             <PixelButton onClick={saveRewrite} tone="accent">
+              SAVE
+            </PixelButton>
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="sectionTitle">GLOSSARY</div>
+        <div className="muted">
+          每行一个词；空行会自动忽略。用于 rewrite 阶段作为“上下文词汇/术语”约束模型遵循。
+        </div>
+        <div style={{ marginTop: 12 }} className="stack">
+          <PixelTextarea
+            value={rewriteGlossaryDraft}
+            onChange={setRewriteGlossaryDraft}
+            placeholder={"比如：QPSK\nTypeScript\nOAuth"}
+            rows={8}
+          />
+          <div className="row" style={{ justifyContent: "flex-end" }}>
+            <PixelButton onClick={saveGlossary} tone="accent">
               SAVE
             </PixelButton>
           </div>

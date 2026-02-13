@@ -221,7 +221,7 @@ pub async fn rewrite(
     system_prompt: &str,
     asr_text: &str,
 ) -> Result<String> {
-    rewrite_with_context(data_dir, task_id, system_prompt, asr_text, None).await
+    rewrite_with_context(data_dir, task_id, system_prompt, asr_text, None, &[]).await
 }
 
 pub async fn rewrite_with_context(
@@ -230,6 +230,7 @@ pub async fn rewrite_with_context(
     system_prompt: &str,
     asr_text: &str,
     ctx: Option<&PreparedContext>,
+    rewrite_glossary: &[String],
 ) -> Result<String> {
     let span = Span::start(
         data_dir,
@@ -259,7 +260,8 @@ pub async fn rewrite_with_context(
     let client = Client::new();
     let url = format!("{}/chat/completions", cfg.base_url);
 
-    let (user_content_send, user_content_debug) = build_user_content(asr_text, ctx);
+    let (user_content_send, user_content_debug) =
+        build_user_content(asr_text, ctx, rewrite_glossary);
 
     // Record the exact request "shape" the model will receive (text vs multimodal parts).
     let (kind, has_image_url) = user_content_shape(&user_content_send);
@@ -274,6 +276,7 @@ pub async fn rewrite_with_context(
             "has_image_url": has_image_url,
             "asr_chars": asr_text.len(),
             "system_prompt_chars": system_prompt.len(),
+            "glossary_count": rewrite_glossary.len(),
         })),
     );
     let req_send = ChatReq {
@@ -433,14 +436,41 @@ fn user_content_shape(content: &MessageContent) -> (&'static str, bool) {
     }
 }
 
+fn apply_rewrite_glossary_to_user_text(base: &str, rewrite_glossary: &[String]) -> String {
+    if rewrite_glossary.is_empty() {
+        return base.to_string();
+    }
+
+    let mut out = String::new();
+    out.push_str(base);
+    out.push_str("\n\n### GLOSSARY\n");
+    let mut wrote_any = false;
+    for item in rewrite_glossary {
+        let v = item.trim();
+        if v.is_empty() {
+            continue;
+        }
+        out.push_str("- ");
+        out.push_str(v);
+        out.push('\n');
+        wrote_any = true;
+    }
+    if wrote_any {
+        out
+    } else {
+        base.to_string()
+    }
+}
+
 fn build_user_content(
     asr_text: &str,
     ctx: Option<&PreparedContext>,
+    rewrite_glossary: &[String],
 ) -> (MessageContent, MessageContent) {
     let Some(c) = ctx else {
         return (
-            MessageContent::Text(asr_text.to_string()),
-            MessageContent::Text(asr_text.to_string()),
+            MessageContent::Text(apply_rewrite_glossary_to_user_text(asr_text, rewrite_glossary)),
+            MessageContent::Text(apply_rewrite_glossary_to_user_text(asr_text, rewrite_glossary)),
         );
     };
 
@@ -448,13 +478,23 @@ fn build_user_content(
     let text = c.user_text.clone();
     let Some(sc) = &c.screenshot else {
         return (
-            MessageContent::Text(text.clone()),
-            MessageContent::Text(text),
+            MessageContent::Text(apply_rewrite_glossary_to_user_text(
+                &text,
+                rewrite_glossary,
+            )),
+            MessageContent::Text(apply_rewrite_glossary_to_user_text(
+                &text,
+                rewrite_glossary,
+            )),
         );
     };
 
-    let mut parts_send = vec![ContentPart::Text { text: text.clone() }];
-    let mut parts_debug = vec![ContentPart::Text { text }];
+    let text_send = apply_rewrite_glossary_to_user_text(&text, rewrite_glossary);
+    let mut parts_send = vec![ContentPart::Text {
+        text: text_send.clone(),
+    }];
+    let text_debug = apply_rewrite_glossary_to_user_text(&text, rewrite_glossary);
+    let mut parts_debug = vec![ContentPart::Text { text: text_debug }];
 
     // Send the real data URL, but redact in debug payload.
     let b64 = base64::engine::general_purpose::STANDARD.encode(&sc.png_bytes);

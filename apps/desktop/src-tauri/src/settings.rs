@@ -20,6 +20,7 @@ pub struct Settings {
     // UX settings
     pub rewrite_enabled: Option<bool>,
     pub rewrite_template_id: Option<String>,
+    pub rewrite_glossary: Option<Vec<String>>,
 
     // Context settings (for LLM rewrite)
     pub context_include_history: Option<bool>,
@@ -48,6 +49,7 @@ pub struct SettingsPatch {
 
     pub rewrite_enabled: Option<Option<bool>>,
     pub rewrite_template_id: Option<Option<String>>,
+    pub rewrite_glossary: Option<Option<Vec<String>>>,
 
     pub context_include_history: Option<Option<bool>>,
     pub context_history_n: Option<Option<i64>>,
@@ -80,6 +82,9 @@ pub fn apply_patch(mut s: Settings, p: SettingsPatch) -> Settings {
     }
     if let Some(v) = p.rewrite_template_id {
         s.rewrite_template_id = v;
+    }
+    if let Some(v) = p.rewrite_glossary {
+        s.rewrite_glossary = v;
     }
     if let Some(v) = p.context_include_history {
         s.context_include_history = v;
@@ -233,8 +238,9 @@ mod tests {
             llm_model: Some("m1".to_string()),
             llm_reasoning_effort: Some("low".to_string()),
             rewrite_enabled: Some(false),
-            rewrite_template_id: Some("t1".to_string()),
-            context_include_history: None,
+        rewrite_template_id: Some("t1".to_string()),
+        rewrite_glossary: None,
+        context_include_history: None,
             context_history_n: None,
             context_history_window_ms: None,
             context_include_clipboard: None,
@@ -262,6 +268,7 @@ mod tests {
         assert_eq!(next.llm_reasoning_effort, None);
         assert_eq!(next.rewrite_enabled, Some(true));
         assert_eq!(next.rewrite_template_id, None);
+        assert_eq!(next.rewrite_glossary.as_deref(), None);
         assert_eq!(next.context_history_n, Some(5));
     }
 }

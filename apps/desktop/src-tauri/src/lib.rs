@@ -145,8 +145,20 @@ fn start_opts_from_settings(data_dir: &std::path::Path) -> Result<task_manager::
         rewrite_enabled,
         template_id,
         context_cfg: context_capture::config_from_settings(&s),
+        rewrite_glossary: sanitize_rewrite_glossary(s.rewrite_glossary),
         pre_captured_context: None,
     })
+}
+
+fn sanitize_rewrite_glossary(glossary: Option<Vec<String>>) -> Vec<String> {
+    let mut out = Vec::new();
+    for item in glossary.unwrap_or_default() {
+        let v = item.trim();
+        if !v.is_empty() {
+            out.push(v.to_string());
+        }
+    }
+    out
 }
 
 #[tauri::command]
@@ -493,7 +505,15 @@ async fn rewrite_text(template_id: &str, asr_text: &str) -> Result<String, Strin
             return Err(e.to_string());
         }
     };
-    match llm::rewrite(&dir, &task_id, &tpl.system_prompt, asr_text).await {
+    let glossary = match settings::load_settings_strict(&dir) {
+        Ok(s) => sanitize_rewrite_glossary(s.rewrite_glossary),
+        Err(e) => {
+            let ae = format!("rewrite_text load settings failed: {e}");
+            span.err_anyhow("settings", "E_CMD_REWRITE_SETTINGS", &anyhow::anyhow!(ae), None);
+            return Err(ae);
+        }
+    };
+    match llm::rewrite(&dir, &task_id, &tpl.system_prompt, asr_text, &glossary).await {
         Ok(s) => {
             span.ok(Some(serde_json::json!({"out_chars": s.len()})));
             Ok(s)
@@ -669,6 +689,7 @@ fn update_settings(
         "llm_reasoning_effort": patch.llm_reasoning_effort.is_some(),
         "rewrite_enabled": patch.rewrite_enabled.is_some(),
         "rewrite_template_id": patch.rewrite_template_id.is_some(),
+        "rewrite_glossary": patch.rewrite_glossary.is_some(),
         "context_include_history": patch.context_include_history.is_some(),
         "context_history_n": patch.context_history_n.is_some(),
         "context_history_window_ms": patch.context_history_window_ms.is_some(),

@@ -43,6 +43,7 @@ pub struct TaskDone {
 pub struct StartOpts {
     pub rewrite_enabled: bool,
     pub template_id: Option<String>,
+    pub rewrite_glossary: Vec<String>,
     pub context_cfg: context_capture::ContextConfig,
     pub pre_captured_context: Option<context_pack::ContextSnapshot>,
 }
@@ -565,7 +566,14 @@ impl TaskManager {
                     };
                     let rewrite_res = tokio::select! {
                             _ = token.cancelled() => Err(anyhow!("cancelled")),
-                        r = llm::rewrite_with_context(&data_dir, &task_id, &tpl.system_prompt, &asr_text, Some(&prepared)) => r,
+                        r = llm::rewrite_with_context(
+                            &data_dir,
+                            &task_id,
+                            &tpl.system_prompt,
+                            &asr_text,
+                            Some(&prepared),
+                            &opts.rewrite_glossary,
+                        ) => r,
                     };
                     match rewrite_res {
                         Ok(txt) => {

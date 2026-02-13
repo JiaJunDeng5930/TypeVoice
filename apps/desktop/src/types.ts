@@ -33,6 +33,7 @@ export type Settings = {
   llm_reasoning_effort?: string | null;
   rewrite_enabled?: boolean | null;
   rewrite_template_id?: string | null;
+  rewrite_glossary?: string[] | null;
 
   context_include_history?: boolean | null;
   context_history_n?: number | null;
