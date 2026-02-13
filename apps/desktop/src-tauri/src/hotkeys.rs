@@ -60,7 +60,7 @@ fn normalized_shortcut(raw: &str) -> String {
 }
 
 #[tauri::command]
-fn check_hotkey_available(
+pub fn check_hotkey_available(
     app: AppHandle,
     shortcut: &str,
     ignore_self: Option<&str>,
