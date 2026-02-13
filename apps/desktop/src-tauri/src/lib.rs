@@ -1041,6 +1041,7 @@ pub fn run() {
             get_settings,
             set_settings,
             update_settings,
+            hotkeys::check_hotkey_available,
             runtime_toolchain_status,
             runtime_python_status,
             overlay_set_state,

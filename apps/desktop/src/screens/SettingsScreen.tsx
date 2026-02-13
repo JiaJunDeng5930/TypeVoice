@@ -24,6 +24,49 @@ const REASONING: PixelSelectOption[] = [
   { value: "xhigh", label: "xhigh" },
 ];
 
+type RecordingHotkey = "ptt" | "toggle";
+
+type HotkeyAvailability = {
+  available: boolean;
+  reason?: string | null;
+  reason_code?: string | null;
+};
+
+const MODIFIER_ONLY_KEY_CODES = new Set([
+  "ControlLeft",
+  "ControlRight",
+  "ShiftLeft",
+  "ShiftRight",
+  "AltLeft",
+  "AltRight",
+  "MetaLeft",
+  "MetaRight",
+]);
+
+function isModifierOnlyCode(code: string): boolean {
+  return MODIFIER_ONLY_KEY_CODES.has(code);
+}
+
+function shortcutFromKeyboardEvent(event: KeyboardEvent): string | null {
+  if (isModifierOnlyCode(event.code)) {
+    return null;
+  }
+
+  const parts: string[] = [];
+  if (event.ctrlKey) parts.push("CTRL");
+  if (event.shiftKey) parts.push("SHIFT");
+  if (event.altKey) parts.push("ALT");
+  if (event.metaKey) parts.push("SUPER");
+  const base = event.code.trim();
+  if (!base) return null;
+  parts.push(base.toUpperCase());
+  return parts.join("+");
+}
+
+function isSameHotkey(a: string, b: string): boolean {
+  return a.trim().toUpperCase() === b.trim().toUpperCase();
+}
+
 export function SettingsScreen({
   settings,
   savePatch,
@@ -45,6 +88,7 @@ export function SettingsScreen({
   const [hotkeysEnabled, setHotkeysEnabled] = useState(true);
   const [hotkeyPtt, setHotkeyPtt] = useState("F9");
   const [hotkeyToggle, setHotkeyToggle] = useState("F10");
+  const [recordingHotkey, setRecordingHotkey] = useState<RecordingHotkey | null>(null);
   const [hotkeysShowOverlay, setHotkeysShowOverlay] = useState(true);
   const [contextIncludeHistory, setContextIncludeHistory] = useState(true);
   const [contextIncludeClipboard, setContextIncludeClipboard] = useState(true);
@@ -63,6 +107,7 @@ export function SettingsScreen({
   const [templatesJson, setTemplatesJson] = useState("");
 
   const [confirmClear, setConfirmClear] = useState(false);
+  const [isCheckingHotkey, setIsCheckingHotkey] = useState(false);
 
   useEffect(() => {
     if (!settings) return;
@@ -136,6 +181,16 @@ export function SettingsScreen({
     const t = templates.find((x) => x.id === rewriteTemplateId);
     return t?.name || "";
   }, [rewriteTemplateId, templates]);
+
+  async function startRecording(target: RecordingHotkey) {
+    if (!hotkeysEnabled) return;
+    if (recordingHotkey === target) {
+      setRecordingHotkey(null);
+      return;
+    }
+    setRecordingHotkey(target);
+    pushToast("PRESS A KEYBOARD SHORTCUT", "default");
+  }
 
   async function refreshTemplates() {
     try {
@@ -274,15 +329,21 @@ export function SettingsScreen({
   }
 
   async function saveHotkeys() {
-    if (hotkeysEnabled && (!hotkeyPtt.trim() || !hotkeyToggle.trim())) {
+    const ptt = hotkeyPtt.trim();
+    const toggle = hotkeyToggle.trim();
+    if (hotkeysEnabled && (!ptt || !toggle)) {
       pushToast("HOTKEYS REQUIRE PTT/TOGGLE", "danger");
+      return;
+    }
+    if (hotkeysEnabled && isSameHotkey(ptt, toggle)) {
+      pushToast("HOTKEYS PTT and TOGGLE cannot be the same", "danger");
       return;
     }
     try {
       await savePatch({
         hotkeys_enabled: hotkeysEnabled,
-        hotkey_ptt: hotkeyPtt.trim() ? hotkeyPtt.trim() : null,
-        hotkey_toggle: hotkeyToggle.trim() ? hotkeyToggle.trim() : null,
+        hotkey_ptt: ptt || null,
+        hotkey_toggle: toggle || null,
         hotkeys_show_overlay: hotkeysShowOverlay,
       });
       pushToast("SAVED", "ok");
@@ -372,6 +433,74 @@ export function SettingsScreen({
       setConfirmClear(false);
     }
   }
+
+  useEffect(() => {
+    if (!recordingHotkey) return;
+    if (!hotkeysEnabled) {
+      setRecordingHotkey(null);
+      return;
+    }
+
+    const onKeyDown = async (event: KeyboardEvent) => {
+      if (event.repeat) return;
+      event.preventDefault();
+
+      const candidate = shortcutFromKeyboardEvent(event);
+      if (!candidate) {
+        pushToast("HOTKEY NOT AVAILABLE: modifier-only keys are not valid", "danger");
+        return;
+      }
+
+      const otherKey = recordingHotkey === "ptt" ? hotkeyToggle : hotkeyPtt;
+      if (otherKey && isSameHotkey(candidate, otherKey)) {
+        pushToast("HOTKEY NOT AVAILABLE: PTT and TOGGLE must be different", "danger");
+        return;
+      }
+
+      setIsCheckingHotkey(true);
+
+      try {
+        const ignoreSelf = recordingHotkey === "ptt" ? hotkeyPtt : hotkeyToggle;
+        const result = (await invoke("check_hotkey_available", {
+          shortcut: candidate,
+          ignore_self: ignoreSelf?.trim() || null,
+        })) as HotkeyAvailability;
+
+        if (!result.available) {
+          const code = result.reason_code ? ` (${result.reason_code})` : "";
+          pushToast(
+            `HOTKEY NOT AVAILABLE: ${result.reason || "Unavailable"}${code}`,
+            "danger",
+          );
+          return;
+        }
+
+        const normalized = candidate.toUpperCase();
+        if (recordingHotkey === "ptt") {
+          setHotkeyPtt(normalized);
+        } else {
+          setHotkeyToggle(normalized);
+        }
+        setRecordingHotkey(null);
+      } catch {
+        pushToast("HOTKEY CHECK FAILED", "danger");
+      } finally {
+        setIsCheckingHotkey(false);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [
+    recordingHotkey,
+    hotkeysEnabled,
+    hotkeyPtt,
+    hotkeyToggle,
+    pushToast,
+    invoke,
+  ]);
 
   const asrStatusText = useMemo(() => {
     if (!modelStatus) return "UNKNOWN";
@@ -608,18 +737,46 @@ export function SettingsScreen({
           <PixelToggle value={hotkeysEnabled} onChange={setHotkeysEnabled} label="hotkeys" />
         </div>
         <div style={{ marginTop: 12 }} className="stack">
-          <PixelInput
-            value={hotkeyPtt}
-            onChange={setHotkeyPtt}
-            placeholder="PTT (press to talk) e.g. F9"
-            disabled={!hotkeysEnabled}
-          />
-          <PixelInput
-            value={hotkeyToggle}
-            onChange={setHotkeyToggle}
-            placeholder="TOGGLE e.g. F10"
-            disabled={!hotkeysEnabled}
-          />
+          <div className="row">
+            <PixelInput
+              value={hotkeyPtt}
+              onChange={setHotkeyPtt}
+              placeholder="PTT (press to talk) e.g. F9"
+              disabled={!hotkeysEnabled}
+              readOnly
+            />
+            <PixelButton
+              onClick={() => startRecording("ptt")}
+              disabled={!hotkeysEnabled || (recordingHotkey !== null && recordingHotkey !== "ptt")}
+              tone={recordingHotkey === "ptt" ? "accent" : "default"}
+            >
+              {recordingHotkey === "ptt"
+                ? isCheckingHotkey
+                  ? "CHECKING..."
+                  : "WAITING"
+                : "RECORD"}
+            </PixelButton>
+          </div>
+          <div className="row">
+            <PixelInput
+              value={hotkeyToggle}
+              onChange={setHotkeyToggle}
+              placeholder="TOGGLE e.g. F10"
+              disabled={!hotkeysEnabled}
+              readOnly
+            />
+            <PixelButton
+              onClick={() => startRecording("toggle")}
+              disabled={!hotkeysEnabled || (recordingHotkey !== null && recordingHotkey !== "toggle")}
+              tone={recordingHotkey === "toggle" ? "accent" : "default"}
+            >
+              {recordingHotkey === "toggle"
+                ? isCheckingHotkey
+                  ? "CHECKING..."
+                  : "WAITING"
+                : "RECORD"}
+            </PixelButton>
+          </div>
           <div className="row" style={{ justifyContent: "space-between" }}>
             <div className="muted">{hotkeysShowOverlay ? "OVERLAY ON" : "OVERLAY OFF"}</div>
             <PixelToggle

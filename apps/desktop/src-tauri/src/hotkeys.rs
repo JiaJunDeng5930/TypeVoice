@@ -36,12 +36,80 @@ pub struct HotkeyRecordEvent {
     pub capture_error_message: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct HotkeyAvailability {
+    pub available: bool,
+    pub reason: Option<String>,
+    pub reason_code: Option<String>,
+}
+
 fn now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+fn normalized_shortcut(raw: &str) -> String {
+    raw.split('+')
+        .map(|part| part.trim().to_ascii_uppercase())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
+#[tauri::command]
+fn check_hotkey_available(
+    app: AppHandle,
+    shortcut: &str,
+    ignore_self: Option<&str>,
+) -> Result<HotkeyAvailability, String> {
+    let candidate = normalized_shortcut(shortcut);
+    if candidate.is_empty() {
+        return Ok(HotkeyAvailability {
+            available: false,
+            reason: Some("shortcut is empty".to_string()),
+            reason_code: Some("E_HOTKEY_SHORTCUT_EMPTY".to_string()),
+        });
+    }
+
+    if let Some(ignore_self) = ignore_self {
+        if !ignore_self.trim().is_empty()
+            && candidate.eq_ignore_ascii_case(&normalized_shortcut(ignore_self))
+        {
+            return Ok(HotkeyAvailability {
+                available: true,
+                reason: None,
+                reason_code: None,
+            });
+        }
+    }
+
+    let gs = app.global_shortcut();
+
+    match gs.register(candidate.as_str()) {
+        Ok(()) => match gs.unregister(candidate.as_str()) {
+            Ok(()) => Ok(HotkeyAvailability {
+                available: true,
+                reason: None,
+                reason_code: None,
+            }),
+            Err(e) => Ok(HotkeyAvailability {
+                available: false,
+                reason: Some(format!(
+                    "registered but cleanup failed: {}",
+                    e
+                )),
+                reason_code: Some("E_HOTKEY_CLEANUP_FAILED".to_string()),
+            }),
+        },
+        Err(e) => Ok(HotkeyAvailability {
+            available: false,
+            reason: Some(e.to_string()),
+            reason_code: Some("E_HOTKEY_REGISTER_FAILED".to_string()),
+        }),
+    }
 }
 
 pub struct HotkeyManager {

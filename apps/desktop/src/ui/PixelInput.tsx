@@ -3,9 +3,16 @@ type Props = {
   onChange: (v: string) => void;
   placeholder?: string;
   disabled?: boolean;
+  readOnly?: boolean;
 };
 
-export function PixelInput({ value, onChange, placeholder, disabled }: Props) {
+export function PixelInput({
+  value,
+  onChange,
+  placeholder,
+  disabled,
+  readOnly,
+}: Props) {
   return (
     <input
       className="pxInput"
@@ -13,6 +20,7 @@ export function PixelInput({ value, onChange, placeholder, disabled }: Props) {
       onChange={(e) => onChange(e.currentTarget.value)}
       placeholder={placeholder}
       disabled={disabled}
+      readOnly={readOnly}
       spellCheck={false}
       autoCapitalize="none"
       autoCorrect="off"
@@ -47,4 +55,3 @@ export function PixelTextarea({
     />
   );
 }
-
