@@ -24,6 +24,8 @@
   - 热键触发链路的 rewrite 一致性（`rewrite_enabled/template_id` 与设置一致）。
   - 关键 Windows-only 改动后的本机 `Windows` `npm run tauri dev` 与 `quick/full` 可回归。
 - 进行中更新点：`docs/memory` 由复盘内容转为“当前事实清单”。
+- ASR 设置页状态来源修正：状态检查已改为按 `settings` 解析后的实际 ASR 模型来源（本地路径或远端模型 id）执行，不再固定指向仓库默认目录。
+- 完整性告警策略调整：`manifest.json_missing` 仍可见，但不再阻断 ASR 可用性，状态面板会明确标注为“可用但未做完整性清单校验”。
 
 ## 下一步建议
 
@@ -32,6 +34,13 @@
   - 异常：将复现条件与处理思路写入 `docs/memory/PITFALLS.md`。
 - 在本仓执行 `git status` 与 `./.venv/bin/python scripts/verify_full.py` 前后对照文档约定。
 - 避免改动 `docs/memory` 以外文档时引入重复事实，若新增约束立即写回对应文件。
+
+## 变更后固定执行流程
+
+- 所有代码修复/功能更新完成后，Windows 侧必须按以下顺序执行：
+  1. 同步源码（拉取当前分支最新提交）。
+  2. 重新编译（推荐按项目文档链路执行）。
+  3. 以 Debug 模式启动进程并复测相关链路。
 
 ## 关键文件（当前可直接核验）
 

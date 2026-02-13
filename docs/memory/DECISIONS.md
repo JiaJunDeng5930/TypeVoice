@@ -38,3 +38,9 @@
 - 决策：发生影响后续工作的新增事实时，必须立刻更新 `docs/` 与 `docs/memory/*`，不得延后。
 - 依据：文档复用场景下，延后会导致跨会话恢复时使用过时约束。
 - 执行：以 `docs/memory/CONTINUITY.md`（状态）与对应文件（SPEC/DECISIONS/PITFALLS/USER_PREFS）同步记录。
+
+## ASR 状态口径与清单文件处理
+
+- 决策：`asr_model_status` 的模型来源以配置解析链路为准，使用 `pipeline::resolve_asr_model_id` 对齐实际运行模型；`manifest.json` 缺失不再作为 ASR 可用性的致命错误。
+- 依据：当前实现的转写依赖模型可加载能力，不依赖 `manifest.json` 本身；该文件仅用于完整性可追溯性。
+- 执行：`manifest.json_missing` 保留为告警信息返回，且 UI 应显示“可用但建议补齐 manifest.json”。
