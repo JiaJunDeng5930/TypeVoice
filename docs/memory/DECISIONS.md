@@ -103,3 +103,9 @@
 
 - 更正：此前条目中提到的旧录音转写命令链路已删除，不再作为 settings strict 读取的执行入口。
 - 当前口径：settings strict 读取路径由 `start_task`（及历史保留的非命令内部路径）承接，错误码仍维持 `E_CMD_RESOLVE_ASR_PREPROCESS` 族。
+
+## dshow 录音输入自动探测与固化
+
+- 决策：当 `record_input_spec` 为空时，录音启动前自动枚举 dshow 音频设备并进行可录制探测，选中可用输入后回写 `settings.json` 固化为 `audio="@device_cm_{...}\\wave_{...}"`。
+- 依据：`audio=default` 在部分 Windows 设备/驱动组合下不可解析，且默认输入会随蓝牙设备连接切换导致录音源漂移。
+- 执行：`start_backend_recording` 通过 ffmpeg `-list_devices` + 探测选择输入，后续录音稳定使用已固化输入源。
