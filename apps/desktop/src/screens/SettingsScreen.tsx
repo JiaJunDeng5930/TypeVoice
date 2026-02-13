@@ -293,6 +293,29 @@ export function SettingsScreen({
     }
   }
 
+  const asrStatusText = useMemo(() => {
+    if (!modelStatus) return "UNKNOWN";
+
+    const version = modelStatus.model_version ? `  ${modelStatus.model_version}` : "";
+    const location = `  ${modelStatus.model_dir}`;
+
+    if (modelStatus.ok) {
+      switch (modelStatus.reason) {
+        case "manifest.json_missing":
+          return `OK${version}  manifest.json_missing (integrity checks skipped, ASR still usable)${location}`;
+        case "remote_model_not_locally_verified":
+          return `OK${version}  remote model id, not locally verified${location}`;
+        case null:
+        case undefined:
+          return `OK${version}${location}`;
+        default:
+          return `OK${version}  ${modelStatus.reason}${location}`;
+      }
+    }
+
+    return `FAILED${version}  ${modelStatus.reason || ""}${location}`;
+  }, [modelStatus]);
+
   return (
     <div className="stack">
       <div className="card">
@@ -303,11 +326,7 @@ export function SettingsScreen({
           </PixelButton>
           <PixelButton onClick={refreshModelStatus}>REFRESH</PixelButton>
           <div className="muted">
-            {modelStatus
-              ? modelStatus.ok
-                ? `OK${modelStatus.model_version ? `  ${modelStatus.model_version}` : ""}  ${modelStatus.model_dir}`
-                : `MISSING  ${modelStatus.reason || ""}`
-              : "UNKNOWN"}
+            {asrStatusText}
           </div>
         </div>
         <div style={{ marginTop: 12 }} className="stack">

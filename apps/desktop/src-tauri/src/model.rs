@@ -95,7 +95,7 @@ pub fn verify_model_dir(model_dir: &Path) -> Result<ModelStatus> {
     if !manifest_path.exists() {
         return Ok(ModelStatus {
             model_dir: model_dir.display().to_string(),
-            ok: false,
+            ok: true,
             reason: Some("manifest.json_missing".to_string()),
             model_version: read_model_version(model_dir),
         });

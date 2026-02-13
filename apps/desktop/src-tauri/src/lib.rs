@@ -730,20 +730,35 @@ fn update_settings(
 
 #[tauri::command]
 fn asr_model_status() -> Result<ModelStatus, String> {
-    let root = repo_root()?;
-    let model_dir = model::default_model_dir(&root);
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let span = cmd_span(&dir, None, "CMD.asr_model_status", None);
-    match model::verify_model_dir(&model_dir) {
-        Ok(st) => {
-            span.ok(Some(serde_json::json!({"ok": st.ok, "reason": st.reason, "model_version": st.model_version})));
-            Ok(st)
-        }
+    let model_id = match pipeline::resolve_asr_model_id(&dir) {
+        Ok(v) => v,
         Err(e) => {
-            span.err_anyhow("model", "E_CMD_MODEL_STATUS", &e, None);
-            Err(e.to_string())
+            span.err_anyhow("model", "E_CMD_MODEL_ID", &e, None);
+            return Err(e.to_string());
         }
-    }
+    };
+
+    let st = if std::path::Path::new(&model_id).exists() {
+        match model::verify_model_dir(std::path::Path::new(&model_id)) {
+            Ok(st) => st,
+            Err(e) => {
+                span.err_anyhow("model", "E_CMD_MODEL_STATUS", &e, None);
+                return Err(e.to_string());
+            }
+        }
+    } else {
+        ModelStatus {
+            model_dir: model_id,
+            ok: true,
+            reason: Some("remote_model_not_locally_verified".to_string()),
+            model_version: None,
+        }
+    };
+    let ok = st.ok;
+    span.ok(Some(serde_json::json!({"ok": st.ok, "reason": st.reason, "model_version": st.model_version})));
+    Ok(st)
 }
 
 #[tauri::command]
