@@ -4,7 +4,37 @@ Goal: reliably build and run the Windows desktop app while keeping the main deve
 
 This doc records the exact method we used during debugging sessions, so it can be repeated without relying on memory.
 
-## 0. Mental Model
+## 0. Authoritative one-command run (recommended)
+
+Use this command whenever you want to ensure the Windows runtime is launched from the latest code:
+
+From Windows PowerShell (from your Windows repo root, for example `D:\Projects\TypeVoice`):
+
+```powershell
+Set-Location D:\Projects\TypeVoice
+.\scripts\windows\run-latest.ps1
+```
+
+From WSL (Windows runtime):
+
+```bash
+/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Set-Location D:\Projects\TypeVoice; .\scripts\windows\run-latest.ps1"
+```
+
+This command does exactly:
+
+- kill stale `typevoice-desktop.exe` and stale `node.exe` processes tied to your repo root;
+- run `npm run build`;
+- start `npm run tauri dev`;
+- print PID + executable path + latest log tail for verification.
+
+If the command fails, read:
+
+```bash
+tail -n 120 /path/to/repo/tmp/typevoice-logs/tauri-latest-run.txt
+```
+
+## 1. Mental Model
 
 There are two separate environments:
 
@@ -13,7 +43,7 @@ There are two separate environments:
 
 Tauri dev must run with the Windows toolchain to launch a real Windows `typevoice-desktop.exe`.
 
-## 1. Repo Layout (Two Working Copies)
+## 2. Repo Layout (Two Working Copies)
 
 Keep a Windows-side working copy (recommended path uses `D:` to avoid `C:` space pressure):
 
@@ -22,7 +52,7 @@ Keep a Windows-side working copy (recommended path uses `D:` to avoid `C:` space
 
 Do not run Windows builds from a UNC path like `\\wsl.localhost\...` (it causes `cmd.exe` issues and is fragile).
 
-## 2. How Windows Repo Syncs From WSL Repo
+## 3. How Windows Repo Syncs From WSL Repo
 
 The Windows repo uses the WSL repo as a Git remote (via UNC path).
 
@@ -50,7 +80,7 @@ Notes:
   - Example: `git checkout -- apps/desktop/src-tauri/Cargo.toml`
 - Line ending warnings (`LF will be replaced by CRLF`) can appear on Windows. Avoid manual edits in Windows unless needed.
 
-## 3. Run The App On Windows (Direct Windows Terminal)
+## 4. Run The App On Windows (Direct Windows Terminal)
 
 Run from Windows PowerShell or Windows Terminal (non-admin is fine):
 
@@ -69,11 +99,11 @@ What happens:
 - Runs `cargo run` for the Tauri Rust backend.
 - Launches `target\debug\typevoice-desktop.exe`.
 
-## 4. Run The App On Windows (Triggered From Inside WSL)
+## 5. Run The App On Windows (Triggered From Inside WSL)
 
 This is the exact pattern used in debugging sessions: WSL calls Windows shells and runs the Windows toolchain.
 
-### 4.1 Start dev (interactive console)
+### 5.1 Start dev (interactive console)
 
 From WSL:
 
@@ -92,7 +122,7 @@ Why `cd /d`:
 - Windows `cmd.exe` must switch drive (`D:`) explicitly.
 - It avoids UNC cwd issues.
 
-### 4.2 Start dev and write logs to D:
+### 5.2 Start dev and write logs to repo tmp log dir
 
 From WSL:
 
@@ -103,12 +133,12 @@ From WSL:
 Read the log from WSL:
 
 ```bash
-tail -n 200 /mnt/d/typevoice-logs/tauri-dev-run.txt
+tail -n 200 /path/to/repo/tmp/typevoice-logs/tauri-dev-run.txt
 ```
 
 This is the recommended method when chasing crashes, because the dev console can disappear when the process aborts.
 
-## 5. Check Whether The App Is Running
+## 6. Check Whether The App Is Running
 
 In Windows (PowerShell):
 
@@ -124,7 +154,7 @@ From WSL, you can invoke the same command:
 /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Get-Process -Name typevoice-desktop -ErrorAction SilentlyContinue | Select-Object -First 1 | Format-List -Property Id,StartTime,Responding"
 ```
 
-## 6. Stop All Dev Processes (Windows)
+## 7. Stop All Dev Processes (Windows)
 
 Useful when Vite/Node/Rust watchers get stuck.
 
@@ -139,9 +169,9 @@ From WSL:
 /mnt/c/Windows/System32/cmd.exe /d /c "cd /d D:\ && taskkill /IM typevoice-desktop.exe /F >nul 2>&1 & taskkill /IM node.exe /F >nul 2>&1 & exit /b 0"
 ```
 
-## 7. Common Pitfalls And Fixes
+## 8. Common Pitfalls And Fixes
 
-### 7.1 `cmd.exe` says UNC paths are not supported
+### 8.1 `cmd.exe` says UNC paths are not supported
 
 Symptom:
 
@@ -151,7 +181,7 @@ Fix:
 
 - Always start Windows commands with `cd /d D:\...` (never rely on inherited cwd from WSL).
 
-### 7.2 "Works in WSL but not in Windows"
+### 8.2 "Works in WSL but not in Windows"
 
 Root cause:
 
@@ -161,7 +191,7 @@ Fix:
 
 - Treat Windows as the source of truth for runtime: always run `npm run tauri dev` in the Windows repo.
 
-### 7.3 Dev console disappears after crash
+### 8.3 Dev console disappears after crash
 
 Fix:
 

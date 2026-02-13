@@ -15,6 +15,13 @@ Set-Location C:\path\to\TypeVoice
 powershell -ExecutionPolicy Bypass -File .\scripts\windows\windows_gate.ps1
 ```
 
+For day-to-day latest-code launch/debug, use:
+
+```powershell
+Set-Location D:\Projects\TypeVoice
+.\scripts\windows\run-latest.ps1
+```
+
 该脚本会先下载并校验受控 FFmpeg 工具链（`apps/desktop/src-tauri/toolchain/bin/...`），不再依赖系统 PATH 里的 `ffmpeg/ffprobe`。
 
 ## Fast Gate: Windows Compile Check
