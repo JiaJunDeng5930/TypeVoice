@@ -328,8 +328,20 @@ fn score_audio_device_name(name: &str) -> i32 {
     score
 }
 
-fn quote_dshow_value(v: &str) -> String {
-    format!("\"{}\"", v.replace('"', "\\\""))
+fn normalize_record_input_spec(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if let Some(rest) = trimmed.strip_prefix("audio=") {
+        let value = rest.trim();
+        if value.len() >= 2 {
+            let bytes = value.as_bytes();
+            let first = bytes[0] as char;
+            let last = bytes[value.len() - 1] as char;
+            if (first == '"' && last == '"') || (first == '\'' && last == '\'') {
+                return format!("audio={}", &value[1..value.len() - 1]);
+            }
+        }
+    }
+    trimmed.to_string()
 }
 
 fn probe_record_input_spec(ffmpeg: &std::path::Path, spec: &str) -> Result<(), String> {
@@ -379,7 +391,7 @@ fn auto_resolve_record_input_spec(ffmpeg: &std::path::Path) -> Result<String, St
         .map(|(i, (name, alt))| {
             let target = alt.unwrap_or_else(|| name.clone());
             Candidate {
-                spec: format!("audio={}", quote_dshow_value(&target)),
+                spec: format!("audio={target}"),
                 name,
                 score: score_audio_device_name(&target),
                 order: i,
@@ -451,7 +463,12 @@ fn record_input_spec_from_settings(
         .filter(|v| !v.is_empty())
         .map(ToOwned::to_owned)
     {
-        return Ok(configured);
+        let normalized = normalize_record_input_spec(&configured);
+        if normalized != configured {
+            s.record_input_spec = Some(normalized.clone());
+            let _ = settings::save_settings(data_dir, &s);
+        }
+        return Ok(normalized);
     }
 
     let auto = auto_resolve_record_input_spec(ffmpeg_path)?;

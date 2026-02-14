@@ -31,6 +31,7 @@
 - [UNCONFIRMED] 录音停止诊断链路已增强：`start_backend_recording` 增加 ffmpeg 早退探测（避免“启动已失败但在 stop 才暴露”），`stop_backend_recording` 在失败时附带 stderr 末行，前端停止失败提示改为展示真实错误提示（不再固定 `STOP FAILED`）；待校验路径：Windows 下复现一次录音设备异常并确认错误文案含 `E_RECORD_*` 与 stderr 线索。
 - [VERIFIED] Windows 侧已定位 `Recording failed` 根因为 dshow 输入规格 `audio=default` 在当前设备集上不可解析；`ffmpeg` 直接探测显示 `Error opening input files: I/O error`。固定为设备 `Alternative name`（如 `audio="@device_cm_{...}\\wave_{...}"`）后可稳定录制，且不受蓝牙耳机连接导致默认设备切换的影响。
 - [UNCONFIRMED] 后端录音输入已改为“自动探测并固化”机制：当 `record_input_spec` 为空时，后端使用 `ffmpeg -list_devices` 枚举 dshow 音频设备并按可录制探测选择可用设备，将选中的 `audio="@device_cm_{...}\\wave_{...}"` 回写到 `settings.json`；待校验路径：清空 `record_input_spec` 后首次录音自动成功，随后蓝牙设备连接/断开不改变已固化输入源。
+- [UNCONFIRMED] 已修正自动探测规格转义错误：`Process::Command` 场景下不再给 dshow 设备名附加内层引号（避免把引号当作设备名字面量导致 `I/O error`），并在读取已配置 `record_input_spec` 时自动归一化 `audio=\"...\"` 旧格式。
 
 ### 当前工作集
 
