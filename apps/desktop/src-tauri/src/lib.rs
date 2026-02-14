@@ -110,7 +110,7 @@ struct OverlayState {
 #[serde(rename_all = "camelCase")]
 struct StartTaskRequest {
     trigger_source: String, // ui|hotkey|fixture
-    record_mode: String, // recording_asset|fixture
+    record_mode: String,    // recording_asset|fixture
     recording_asset_id: Option<String>,
     fixture_name: Option<String>,
     recording_session_id: Option<String>,
@@ -365,12 +365,22 @@ fn probe_record_input_spec(ffmpeg: &std::path::Path, spec: &str) -> Result<(), S
 
 fn auto_resolve_record_input_spec(ffmpeg: &std::path::Path) -> Result<String, String> {
     let list_out = std::process::Command::new(ffmpeg)
-        .args(["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"])
+        .args([
+            "-hide_banner",
+            "-list_devices",
+            "true",
+            "-f",
+            "dshow",
+            "-i",
+            "dummy",
+        ])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .output()
-        .map_err(|e| format!("E_RECORD_INPUT_DISCOVERY_FAILED: enumerate dshow device failed: {e}"))?;
+        .map_err(|e| {
+            format!("E_RECORD_INPUT_DISCOVERY_FAILED: enumerate dshow device failed: {e}")
+        })?;
     let stderr = String::from_utf8_lossy(&list_out.stderr);
     let devices = parse_dshow_audio_devices(&stderr);
     if devices.is_empty() {
@@ -417,7 +427,10 @@ fn auto_resolve_record_input_spec(ffmpeg: &std::path::Path) -> Result<String, St
     ))
 }
 
-fn take_recording_asset(recorder: &tauri::State<'_, BackendRecordingState>, asset_id: &str) -> Option<RecordedAsset> {
+fn take_recording_asset(
+    recorder: &tauri::State<'_, BackendRecordingState>,
+    asset_id: &str,
+) -> Option<RecordedAsset> {
     let mut g = recorder.inner.lock().unwrap();
     g.assets.remove(asset_id)
 }
@@ -560,17 +573,28 @@ async fn start_task(
             let asset = match take_recording_asset(&recorder, recording_asset_id.trim()) {
                 Some(v) => v,
                 None => {
-                    span.err("io", "E_RECORD_ASSET_NOT_FOUND", "recording asset not found", None);
+                    span.err(
+                        "io",
+                        "E_RECORD_ASSET_NOT_FOUND",
+                        "recording asset not found",
+                        None,
+                    );
                     abort_recording_session_if_present(&state, &session_id_for_cleanup);
                     return Err(
-                        "E_RECORD_ASSET_NOT_FOUND: recording asset not found or expired".to_string()
+                        "E_RECORD_ASSET_NOT_FOUND: recording asset not found or expired"
+                            .to_string(),
                     );
                 }
             };
             opts.record_elapsed_ms = asset.record_elapsed_ms;
             opts.record_label = "Record (backend)".to_string();
             if !asset.output_path.exists() {
-                span.err("io", "E_RECORD_OUTPUT_MISSING", "recorded file missing", None);
+                span.err(
+                    "io",
+                    "E_RECORD_OUTPUT_MISSING",
+                    "recorded file missing",
+                    None,
+                );
                 abort_recording_session_if_present(&state, &session_id_for_cleanup);
                 return Err("E_RECORD_OUTPUT_MISSING: recorded file missing".to_string());
             }
@@ -597,16 +621,16 @@ async fn start_task(
             state.start_fixture(app, fixture_name, opts)
         }
         _ => {
-                span.err(
-                    "config",
-                    "E_START_TASK_MODE_INVALID",
-                    "record_mode must be recording_asset|fixture",
-                    None,
-                );
-                abort_recording_session_if_present(&state, &session_id_for_cleanup);
-                return Err("E_START_TASK_MODE_INVALID: invalid record_mode".to_string());
-            }
-        };
+            span.err(
+                "config",
+                "E_START_TASK_MODE_INVALID",
+                "record_mode must be recording_asset|fixture",
+                None,
+            );
+            abort_recording_session_if_present(&state, &session_id_for_cleanup);
+            return Err("E_START_TASK_MODE_INVALID: invalid record_mode".to_string());
+        }
+    };
 
     match start_res {
         Ok(task_id) => {
@@ -924,7 +948,7 @@ fn cancel_task(state: tauri::State<TaskManager>, task_id: &str) -> Result<(), St
         }
         Err(e) => {
             span.err_anyhow("task", "E_CMD_CANCEL", &e, None);
-            Err(e.to_string())
+            Err(format!("E_CMD_CANCEL: {e}"))
         }
     }
 }
@@ -939,7 +963,9 @@ fn abort_recording_session(
         &dir,
         None,
         "CMD.abort_recording_session",
-        Some(serde_json::json!({"has_recording_session_id": !recording_session_id.trim().is_empty()})),
+        Some(
+            serde_json::json!({"has_recording_session_id": !recording_session_id.trim().is_empty()}),
+        ),
     );
     if recording_session_id.trim().is_empty() {
         span.ok(Some(serde_json::json!({"removed": false})));

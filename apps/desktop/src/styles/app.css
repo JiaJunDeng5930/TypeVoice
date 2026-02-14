@@ -500,6 +500,24 @@ body.isOverlay {
   color: var(--muted);
 }
 
+.mainDiag {
+  width: min(720px, 92vw);
+  min-height: 0;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0;
+}
+
+.mainDiag.isVisible {
+  min-height: 16px;
+  opacity: 1;
+}
+
 .lastLine {
   appearance: none;
   width: min(720px, 92vw);

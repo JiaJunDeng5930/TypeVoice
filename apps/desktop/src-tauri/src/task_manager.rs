@@ -266,12 +266,7 @@ impl TaskManager {
         }
     }
 
-    fn start_audio(
-        &self,
-        app: AppHandle,
-        input: PathBuf,
-        opts: StartOpts,
-    ) -> Result<String> {
+    fn start_audio(&self, app: AppHandle, input: PathBuf, opts: StartOpts) -> Result<String> {
         let task_id = Uuid::new_v4().to_string();
         self.start_audio_with_task_id(app, task_id, input, opts)
     }
@@ -284,7 +279,8 @@ impl TaskManager {
         mut opts: StartOpts,
     ) -> Result<String> {
         if let Some(session_id) = opts.recording_session_id.clone() {
-            opts.pre_captured_context = self.bind_recording_session_to_task(&session_id, &task_id)?;
+            opts.pre_captured_context =
+                self.bind_recording_session_to_task(&session_id, &task_id)?;
         }
 
         {
@@ -332,14 +328,7 @@ impl TaskManager {
                             } else {
                                 let _ = app.emit(
                                     "task_event",
-                                    TaskEvent {
-                                        task_id: task_id.clone(),
-                                        stage: "Internal".to_string(),
-                                        status: "failed".to_string(),
-                                        message: e.to_string(),
-                                        elapsed_ms: None,
-                                        error_code: Some("E_INTERNAL".to_string()),
-                                    },
+                                    internal_failure_event(&task_id, e.to_string()),
                                 );
                             }
                         }
@@ -355,6 +344,12 @@ impl TaskManager {
                 Err(e) => {
                     // Best-effort cleanup; we might not have a data_dir to emit metrics.
                     crate::safe_eprintln!("failed to create tokio runtime for task {task_id}: {e}");
+                    let msg = format!("tokio_runtime_create_failed:{e}");
+                    if let Ok(dir) = data_dir::data_dir() {
+                        emit_failed(&app, &dir, &task_id, "Internal", None, "E_INTERNAL", &msg);
+                    } else {
+                        let _ = app.emit("task_event", internal_failure_event(&task_id, msg));
+                    }
                     let mut g = this.inner.lock().unwrap();
                     if g.as_ref().map(|a| &a.task_id) == Some(&task_id) {
                         *g = None;
@@ -964,6 +959,17 @@ fn emit_cancelled(app: &AppHandle, data_dir: &Path, task_id: &str, stage: &str) 
     );
 }
 
+fn internal_failure_event(task_id: &str, message: String) -> TaskEvent {
+    TaskEvent {
+        task_id: task_id.to_string(),
+        stage: "Internal".to_string(),
+        status: "failed".to_string(),
+        message,
+        elapsed_ms: None,
+        error_code: Some("E_INTERNAL".to_string()),
+    }
+}
+
 fn emit_event(app: &AppHandle, data_dir: &Path, ev: TaskEvent) {
     let _ = app.emit("task_event", ev.clone());
     if let Err(e) = metrics::append_jsonl(
@@ -1011,4 +1017,19 @@ fn kill_pid(pid: u32) -> Result<()> {
         return Err(anyhow!("taskkill exit={status}"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::internal_failure_event;
+
+    #[test]
+    fn internal_failure_event_has_error_code_and_terminal_status() {
+        let ev = internal_failure_event("task-1", "tokio runtime failed".to_string());
+        assert_eq!(ev.task_id, "task-1");
+        assert_eq!(ev.stage, "Internal");
+        assert_eq!(ev.status, "failed");
+        assert_eq!(ev.error_code.as_deref(), Some("E_INTERNAL"));
+        assert!(ev.elapsed_ms.is_none());
+    }
 }

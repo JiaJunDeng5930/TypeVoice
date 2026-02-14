@@ -97,10 +97,7 @@ pub fn check_hotkey_available(
             }),
             Err(e) => Ok(HotkeyAvailability {
                 available: false,
-                reason: Some(format!(
-                    "registered but cleanup failed: {}",
-                    e
-                )),
+                reason: Some(format!("registered but cleanup failed: {}", e)),
                 reason_code: Some("E_HOTKEY_CLEANUP_FAILED".to_string()),
             }),
         },
@@ -197,25 +194,29 @@ impl HotkeyManager {
             let ctx_cfg = crate::context_capture::config_from_settings(s);
             let data_dir_buf = data_dir.to_path_buf();
             if let Err(e) = gs.on_shortcut(ptt.as_str(), move |app, shortcut, event| {
-                let (recording_session_id, capture_status, capture_error_code, capture_error_message) =
-                    if event.state == ShortcutState::Pressed {
-                        let tm = app.state::<crate::task_manager::TaskManager>();
-                        if tm.has_active_task() {
-                            (None, None, None, None)
-                        } else {
-                            match tm.open_recording_session(&data_dir_buf, &ctx_cfg, capture_required) {
-                                Ok(id) => (Some(id), Some("ok".to_string()), None, None),
-                                Err(e) => (
-                                    None,
-                                    Some("err".to_string()),
-                                    Some("E_RECORDING_SESSION_OPEN".to_string()),
-                                    Some(e.to_string()),
-                                ),
-                            }
-                        }
-                    } else {
+                let (
+                    recording_session_id,
+                    capture_status,
+                    capture_error_code,
+                    capture_error_message,
+                ) = if event.state == ShortcutState::Pressed {
+                    let tm = app.state::<crate::task_manager::TaskManager>();
+                    if tm.has_active_task() {
                         (None, None, None, None)
-                    };
+                    } else {
+                        match tm.open_recording_session(&data_dir_buf, &ctx_cfg, capture_required) {
+                            Ok(id) => (Some(id), Some("ok".to_string()), None, None),
+                            Err(e) => (
+                                None,
+                                Some("err".to_string()),
+                                Some("E_RECORDING_SESSION_OPEN".to_string()),
+                                Some(e.to_string()),
+                            ),
+                        }
+                    }
+                } else {
+                    (None, None, None, None)
+                };
                 let payload = HotkeyRecordEvent {
                     kind: "ptt".to_string(),
                     state: match event.state {
@@ -254,20 +255,24 @@ impl HotkeyManager {
                     return;
                 }
                 let tm = app.state::<crate::task_manager::TaskManager>();
-                let (recording_session_id, capture_status, capture_error_code, capture_error_message) =
-                    if tm.has_active_task() {
-                        (None, None, None, None)
-                    } else {
-                        match tm.open_recording_session(&data_dir_buf, &ctx_cfg, capture_required) {
-                            Ok(id) => (Some(id), Some("ok".to_string()), None, None),
-                            Err(e) => (
-                                None,
-                                Some("err".to_string()),
-                                Some("E_RECORDING_SESSION_OPEN".to_string()),
-                                Some(e.to_string()),
-                            ),
-                        }
-                    };
+                let (
+                    recording_session_id,
+                    capture_status,
+                    capture_error_code,
+                    capture_error_message,
+                ) = if tm.has_active_task() {
+                    (None, None, None, None)
+                } else {
+                    match tm.open_recording_session(&data_dir_buf, &ctx_cfg, capture_required) {
+                        Ok(id) => (Some(id), Some("ok".to_string()), None, None),
+                        Err(e) => (
+                            None,
+                            Some("err".to_string()),
+                            Some("E_RECORDING_SESSION_OPEN".to_string()),
+                            Some(e.to_string()),
+                        ),
+                    }
+                };
                 let payload = HotkeyRecordEvent {
                     kind: "toggle".to_string(),
                     state: "Pressed".to_string(),

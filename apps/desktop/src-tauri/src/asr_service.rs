@@ -1,5 +1,5 @@
 use std::{
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::{Arc, Mutex},
@@ -13,6 +13,8 @@ use tokio_util::sync::CancellationToken;
 use crate::trace::Span;
 use crate::{debug_log, pipeline};
 
+const READY_STDERR_MAX_CHARS: usize = 1_024;
+
 fn model_id_hint_for_trace(model_id: &str) -> String {
     let t = model_id.trim();
     if t.is_empty() {
@@ -24,6 +26,54 @@ fn model_id_hint_for_trace(model_id: &str) -> String {
     }
     // Otherwise assume it's a repo-like id and keep as-is.
     t.to_string()
+}
+
+fn clamp_chars(s: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    let mut out = String::with_capacity(std::cmp::min(s.len(), max_chars));
+    for (i, ch) in s.chars().enumerate() {
+        if i >= max_chars {
+            break;
+        }
+        if ch == '\0' {
+            continue;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn stderr_tail_from_child(child: &mut Child, max_chars: usize) -> Option<String> {
+    let mut stderr = child.stderr.take()?;
+    let mut buf = String::new();
+    if stderr.read_to_string(&mut buf).is_err() {
+        return None;
+    }
+    let tail = buf
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+    if tail.is_empty() {
+        return None;
+    }
+    Some(clamp_chars(tail, max_chars))
+}
+
+fn parse_runner_error_from_value(v: &serde_json::Value) -> Option<(String, String)> {
+    if v.get("ok").and_then(|x| x.as_bool()) != Some(false) {
+        return None;
+    }
+    let err = v.get("error")?;
+    let code = err.get("code")?.as_str()?.trim();
+    let message = err.get("message")?.as_str()?.trim();
+    if code.is_empty() || message.is_empty() {
+        return None;
+    }
+    Some((code.to_string(), message.to_string()))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -164,7 +214,7 @@ impl AsrService {
             ])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
         {
             Ok(c) => c,
@@ -230,76 +280,100 @@ impl AsrService {
             let n = match reader.read_line(&mut line) {
                 Ok(n) => n,
                 Err(e) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let stderr_tail = stderr_tail_from_child(&mut child, READY_STDERR_MAX_CHARS);
                     span.err(
                         "io",
                         "E_ASR_READY_READ",
                         &format!("failed to read asr_ready line: {e}"),
-                        None,
+                        Some(serde_json::json!({"stderr_tail": stderr_tail})),
                     );
-                    let _ = child.kill();
-                    let _ = child.wait();
                     return Err(anyhow!("failed to read asr_ready line: {e}"));
                 }
             };
             if n == 0 {
                 let _ = child.kill();
                 let _ = child.wait();
+                let stderr_tail = stderr_tail_from_child(&mut child, READY_STDERR_MAX_CHARS);
                 span.err(
                     "io",
                     "E_ASR_READY_EOF",
                     "asr runner daemon stdout EOF before ready",
-                    None,
+                    Some(serde_json::json!({"stderr_tail": stderr_tail})),
                 );
                 return Err(anyhow!("asr runner daemon stdout EOF before ready"));
             }
             let v: serde_json::Value = match serde_json::from_str(line.trim()) {
                 Ok(v) => v,
                 Err(e) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let stderr_tail = stderr_tail_from_child(&mut child, READY_STDERR_MAX_CHARS);
                     span.err(
                         "parse",
                         "E_ASR_READY_PARSE",
                         &format!("invalid json from asr runner during ready: {e}"),
-                        Some(serde_json::json!({"line_len": line.len()})),
+                        Some(
+                            serde_json::json!({"line_len": line.len(), "stderr_tail": stderr_tail}),
+                        ),
                     );
-                    let _ = child.kill();
-                    let _ = child.wait();
                     return Err(anyhow!("invalid json from asr runner during ready: {e}"));
                 }
             };
+            if let Some((code, message)) = parse_runner_error_from_value(&v) {
+                let _ = child.kill();
+                let _ = child.wait();
+                let stderr_tail = stderr_tail_from_child(&mut child, READY_STDERR_MAX_CHARS);
+                span.err(
+                    "process",
+                    &code,
+                    &message,
+                    Some(serde_json::json!({
+                        "line_len": line.len(),
+                        "stderr_tail": stderr_tail,
+                    })),
+                );
+                return Err(anyhow!("{code}: {message}"));
+            }
             if v.get("type").and_then(|x| x.as_str()) == Some("asr_ready") {
                 let ready: AsrReady = match serde_json::from_value(v) {
                     Ok(r) => r,
                     Err(e) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        let stderr_tail =
+                            stderr_tail_from_child(&mut child, READY_STDERR_MAX_CHARS);
                         span.err(
                             "parse",
                             "E_ASR_READY_SCHEMA",
                             &format!("parse asr_ready failed: {e}"),
-                            None,
+                            Some(serde_json::json!({"stderr_tail": stderr_tail})),
                         );
-                        let _ = child.kill();
-                        let _ = child.wait();
                         return Err(anyhow!("parse asr_ready failed: {e}"));
                     }
                 };
                 if !ready.ok {
                     let _ = child.kill();
                     let _ = child.wait();
+                    let stderr_tail = stderr_tail_from_child(&mut child, READY_STDERR_MAX_CHARS);
                     span.err(
                         "process",
                         "E_ASR_READY_NOT_OK",
                         "asr runner ready not ok",
-                        None,
+                        Some(serde_json::json!({"stderr_tail": stderr_tail})),
                     );
                     return Err(anyhow!("asr runner ready not ok"));
                 }
                 if ready.device_used != "cuda" {
                     let _ = child.kill();
                     let _ = child.wait();
+                    let stderr_tail = stderr_tail_from_child(&mut child, READY_STDERR_MAX_CHARS);
                     span.err(
                         "process",
                         "E_ASR_DEVICE",
                         &format!("asr runner ready not cuda: {}", ready.device_used),
-                        None,
+                        Some(serde_json::json!({"stderr_tail": stderr_tail})),
                     );
                     return Err(anyhow!("asr runner ready not cuda: {}", ready.device_used));
                 }
@@ -553,4 +627,32 @@ fn repo_root() -> Result<PathBuf> {
         .nth(3)
         .ok_or_else(|| anyhow!("failed to locate repo root from CARGO_MANIFEST_DIR"))?;
     Ok(root.to_path_buf())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_runner_error_from_value;
+
+    #[test]
+    fn parse_runner_error_from_value_extracts_code_and_message() {
+        let v = serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "E_MODEL_LOAD_FAILED",
+                "message": "cuda unavailable"
+            }
+        });
+        let got = parse_runner_error_from_value(&v).expect("error payload");
+        assert_eq!(got.0, "E_MODEL_LOAD_FAILED");
+        assert_eq!(got.1, "cuda unavailable");
+    }
+
+    #[test]
+    fn parse_runner_error_from_value_ignores_non_error_payloads() {
+        let ok_v = serde_json::json!({"ok": true});
+        assert!(parse_runner_error_from_value(&ok_v).is_none());
+
+        let malformed = serde_json::json!({"ok": false, "error": {"code": "", "message": ""}});
+        assert!(parse_runner_error_from_value(&malformed).is_none());
+    }
 }

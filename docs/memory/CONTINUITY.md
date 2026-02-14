@@ -32,12 +32,18 @@
 - [VERIFIED] Windows 侧已定位 `Recording failed` 根因为 dshow 输入规格 `audio=default` 在当前设备集上不可解析；`ffmpeg` 直接探测显示 `Error opening input files: I/O error`。固定为设备 `Alternative name`（如 `audio="@device_cm_{...}\\wave_{...}"`）后可稳定录制，且不受蓝牙耳机连接导致默认设备切换的影响。
 - [UNCONFIRMED] 后端录音输入已改为“自动探测并固化”机制：当 `record_input_spec` 为空时，后端使用 `ffmpeg -list_devices` 枚举 dshow 音频设备并按可录制探测选择可用设备，将选中的 `audio="@device_cm_{...}\\wave_{...}"` 回写到 `settings.json`；待校验路径：清空 `record_input_spec` 后首次录音自动成功，随后蓝牙设备连接/断开不改变已固化输入源。
 - [UNCONFIRMED] 已修正自动探测规格转义错误：`Process::Command` 场景下不再给 dshow 设备名附加内层引号（避免把引号当作设备名字面量导致 `I/O error`），并在读取已配置 `record_input_spec` 时自动归一化 `audio=\"...\"` 旧格式。
+- [VERIFIED] 可调试性链路补强完成：前端失败提示不再只显示泛化 `ERROR`，已展示 `error_code + 摘要 + 建议动作`；`cancel_task` 失败返回显式带 `E_CMD_CANCEL`。
+- [VERIFIED] ASR 冷启动错误码保真已修复：runner 在 ready 前返回 `ok=false/error.code` 时，后端直接透传真实错误码并记录 stderr tail，不再退化为 `E_ASR_READY_EOF`。
+- [VERIFIED] 任务启动 runtime 创建失败已补发终态：`tokio runtime build Err` 分支会发 `task_event.failed(E_INTERNAL)`，避免 UI 卡住无终态。
+- [VERIFIED] trace 并发写入已加全局互斥，新增并发 JSONL 可解析测试 `trace::tests::concurrent_emit_keeps_jsonl_lines_parseable`。
+- [VERIFIED] gate 已纳入可调试性自动化：`verify_quick/full` 新增 Rust 可调试性契约测试步骤，并要求 ASR 失败时必须有结构化 `error.code`。
+- [VERIFIED] 本仓已完成回归：`cargo check --locked`、`npm run build`、`pytest -q tests`、`verify_quick.py`、`verify_full.py` 全部通过。
 
 ### 当前工作集
 
 - 需要在下一步优先验证：
   - 热键触发链路的 rewrite 一致性（`rewrite_enabled/template_id` 与设置一致）。
-  - 关键 Windows-only 改动后的本机 `Windows` `npm run tauri dev` 与 `quick/full` 可回归。
+  - 关键 Windows-only 改动后的本机 `Windows` `npm run tauri dev` 与 `quick/full` 可回归（当前 Linux 侧已通过）。
 - [UNCONFIRMED] “后端录音替代前端 `MediaRecorder`”已接通：`MainScreen` 调用 `start_backend_recording` / `stop_backend_recording` / `abort_backend_recording`，录音由后端 FFmpeg 进程托管；待校验路径：Windows 默认麦克风 dshow 输入可用性。
 - [UNCONFIRMED] `start_task(recording_bytes)` 已从任务入口移除；当前统一输入模式为 `recording_asset|fixture`。
 - 进行中更新点：`docs/memory` 由复盘内容转为“当前事实清单”。

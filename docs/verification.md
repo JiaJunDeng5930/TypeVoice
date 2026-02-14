@@ -25,6 +25,9 @@
 
 - Windows 编译闸门（当改动涉及 `apps/desktop/src-tauri` 的 Windows/Tauri 相关代码时）：在 Windows PowerShell 中运行 `.\scripts\windows\windows_compile_gate.ps1`，必须通过。
 - 单元测试（仅纯逻辑、无 GPU/无网络部分）
+- 可调试性契约检查（自动化）
+  - 断言：并发写入下 `trace.jsonl` 每行可 JSON 解析。
+  - 断言：ASR 启动失败路径保留结构化错误码（不退化为 EOF 类错误）。
 - ASR 烟雾测试（`fixtures/zh_10s.ogg`）
 - 断言：`text` 非空
 - 断言：`device_used == cuda`
@@ -45,6 +48,9 @@
 必须包含：
 
 - 全部单元测试
+- 可调试性契约检查（完整）
+  - 断言：失败 `task_event` 含 `task_id`/`stage`/`status`/`error_code`/`message`。
+  - 断言：失败 `trace` 含 `error.code` 与 `error.message`，可按 `task_id` 聚合。
 - ASR 性能套件（`fixtures/zh_10s.ogg`、`fixtures/zh_60s.ogg`、`fixtures/zh_5m.ogg`）
 - 断言：`device_used == cuda`（任一用例跑到 CPU 视为失败）
 - 断言：RTF 达到基础规格阈值（见 `docs/base-spec.md`）

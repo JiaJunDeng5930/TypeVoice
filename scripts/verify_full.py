@@ -32,7 +32,11 @@ FIX_5M = os.path.join(REPO_ROOT, "fixtures", "zh_5m.ogg")
 def _check_resp(label: str, resp: dict, max_rtf: float | None) -> list[str]:
     reasons: list[str] = []
     if not resp.get("ok"):
-        reasons.append(f"{label}:asr_failed:{(resp.get('error') or {}).get('code')}")
+        err_code = (resp.get("error") or {}).get("code")
+        if isinstance(err_code, str) and err_code.strip():
+            reasons.append(f"{label}:asr_failed:{err_code}")
+        else:
+            reasons.append(f"{label}:asr_failed:missing_error_code")
         return reasons
     m = resp.get("metrics") or {}
     device = m.get("device_used")
@@ -73,6 +77,29 @@ def main() -> int:
         append_jsonl(
             jsonl,
             {"ts_ms": now_ms(), "level": "full", "status": "FAIL", "fail_reasons": ["cargo_check_failed"]},
+        )
+        return 1
+
+    # Debuggability contract tests (full gate should enforce these invariants).
+    try:
+        subprocess.check_call(
+            ["cargo", "test", "--locked", "concurrent_emit_keeps_jsonl_lines_parseable"],
+            cwd=tauri_dir,
+        )
+        subprocess.check_call(
+            ["cargo", "test", "--locked", "parse_runner_error_from_value"],
+            cwd=tauri_dir,
+        )
+    except Exception:
+        print("FAIL: debuggability contract tests failed")
+        append_jsonl(
+            jsonl,
+            {
+                "ts_ms": now_ms(),
+                "level": "full",
+                "status": "FAIL",
+                "fail_reasons": ["debuggability_contract_tests_failed"],
+            },
         )
         return 1
 

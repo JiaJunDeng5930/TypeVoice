@@ -45,6 +45,20 @@ def main() -> int:
         print("FAIL: cargo check failed (backend compile gate)")
         return 1
 
+    # Debuggability contract tests (lightweight Rust unit checks).
+    try:
+        subprocess.check_call(
+            ["cargo", "test", "--locked", "concurrent_emit_keeps_jsonl_lines_parseable"],
+            cwd=tauri_dir,
+        )
+        subprocess.check_call(
+            ["cargo", "test", "--locked", "parse_runner_error_from_value_extracts_code_and_message"],
+            cwd=tauri_dir,
+        )
+    except Exception:
+        print("FAIL: debuggability contract tests failed")
+        return 1
+
     # Unit tests (fast subset)
     try:
         subprocess.check_call(
@@ -66,7 +80,11 @@ def main() -> int:
 
     fail_reasons: list[str] = []
     if not ok:
-        fail_reasons.append(f"asr_failed:{(resp.get('error') or {}).get('code')}")
+        err_code = (resp.get("error") or {}).get("code")
+        if isinstance(err_code, str) and err_code.strip():
+            fail_reasons.append(f"asr_failed:{err_code}")
+        else:
+            fail_reasons.append("asr_failed:missing_error_code")
     if not isinstance(text, str) or not text.strip():
         fail_reasons.append("empty_text")
     if device_used != "cuda":

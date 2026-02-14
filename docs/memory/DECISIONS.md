@@ -109,3 +109,23 @@
 - 决策：当 `record_input_spec` 为空时，录音启动前自动枚举 dshow 音频设备并进行可录制探测，选中可用输入后回写 `settings.json` 固化为 `audio="@device_cm_{...}\\wave_{...}"`。
 - 依据：`audio=default` 在部分 Windows 设备/驱动组合下不可解析，且默认输入会随蓝牙设备连接切换导致录音源漂移。
 - 执行：`start_backend_recording` 通过 ffmpeg `-list_devices` + 探测选择输入，后续录音稳定使用已固化输入源。
+
+## 可调试性失败展示契约
+
+- 决策：前端失败提示必须展示 `error_code + 摘要 + 建议动作`，禁止仅展示泛化 `ERROR` / `CANCEL FAILED`。
+- 依据：仅有泛化失败文案会让用户无法直接定位根因，违背“可观测”目标。
+- 执行：`MainScreen` 统一错误归一化，失败事件与命令异常都生成可见诊断行。
+
+## ASR 冷启动错误码保真
+
+- 决策：ASR runner 在 ready 前返回 `ok=false/error.code` 时，后端直接透传该错误码并附带 stderr tail 诊断。
+- 依据：此前会退化为 `E_ASR_READY_EOF`，导致真正根因（如 `E_MODEL_LOAD_FAILED`）丢失。
+- 执行：`asr_service::restart` 在 ready 读取循环识别结构化错误行；spawn 改为 `stderr` 可读并限长记录。
+
+## 可调试性自动化门禁
+
+- 决策：把可调试性契约并入 `verify_quick` / `verify_full`，作为固定 gate，而非人工抽查。
+- 依据：可调试性回归（吞错、日志损坏）具有高隐蔽性，靠手测难以稳定捕获。
+- 执行：
+  - Rust 单测：`trace` 并发 JSONL 可解析、ASR 错误行解析保真、内部失败事件结构完整。
+  - 脚本 gate：`verify_quick/full` 固定执行上述契约测试，并要求 ASR 失败包含结构化错误码。

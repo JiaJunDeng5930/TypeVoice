@@ -2,6 +2,7 @@ use std::{
     fs::OpenOptions,
     io::Write,
     path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -104,10 +105,16 @@ fn rotate_if_needed_best_effort(data_dir: &Path) {
     let _ = std::fs::rename(&p, &first);
 }
 
+fn trace_write_lock() -> &'static Mutex<()> {
+    static TRACE_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    TRACE_WRITE_LOCK.get_or_init(|| Mutex::new(()))
+}
+
 pub fn emit_best_effort(data_dir: &Path, ev: &TraceEvent) {
     if !enabled() {
         return;
     }
+    let _guard = trace_write_lock().lock().unwrap();
     let _ = std::fs::create_dir_all(data_dir);
     rotate_if_needed_best_effort(data_dir);
 
@@ -119,18 +126,18 @@ pub fn emit_best_effort(data_dir: &Path, ev: &TraceEvent) {
             return;
         }
     };
-    let line = match serde_json::to_string(ev) {
+    let mut line = match serde_json::to_string(ev) {
         Ok(s) => s,
         Err(e) => {
             crate::safe_eprintln!("trace: serialize failed: {e}");
             return;
         }
     };
+    line.push('\n');
     if let Err(e) = f.write_all(line.as_bytes()) {
         crate::safe_eprintln!("trace: write failed: {e}");
         return;
     }
-    let _ = f.write_all(b"\n");
 }
 
 fn clamp_chars(s: &str, max_chars: usize) -> String {
@@ -435,5 +442,52 @@ impl Drop for Span {
                 ctx,
             },
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{fs, thread};
+
+    #[test]
+    fn concurrent_emit_keeps_jsonl_lines_parseable() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let dir = td.path().to_path_buf();
+        let threads = 8;
+        let per_thread = 120;
+
+        let mut joins = Vec::new();
+        for i in 0..threads {
+            let dir2 = dir.clone();
+            joins.push(thread::spawn(move || {
+                for j in 0..per_thread {
+                    event(
+                        &dir2,
+                        Some("task-concurrent"),
+                        "TraceTest",
+                        "TRACE.concurrent_emit",
+                        "ok",
+                        Some(serde_json::json!({"i": i, "j": j})),
+                    );
+                }
+            }));
+        }
+
+        for j in joins {
+            j.join().expect("join");
+        }
+
+        let raw = fs::read_to_string(trace_path(&dir)).expect("read trace");
+        assert!(!raw.is_empty());
+
+        let mut lines = 0usize;
+        for line in raw.lines() {
+            lines += 1;
+            let v: serde_json::Value = serde_json::from_str(line).expect("valid json line");
+            assert!(v.get("step_id").is_some());
+            assert!(v.get("status").is_some());
+        }
+        assert_eq!(lines, threads * per_thread);
     }
 }

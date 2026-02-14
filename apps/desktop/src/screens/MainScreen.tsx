@@ -37,6 +37,13 @@ type Props = {
   onHistoryChanged: () => void;
 };
 
+type DiagnosticView = {
+  title: string;
+  code: string;
+  detail: string;
+  actionHint: string;
+};
+
 function errorMessage(err: unknown): string {
   if (typeof err === "string") return err;
   if (err && typeof err === "object" && "toString" in err) {
@@ -49,22 +56,75 @@ function errorMessage(err: unknown): string {
   return "";
 }
 
-function transcribeErrorHint(err: unknown): string {
+function extractErrorCode(raw: string): string | null {
+  const m = raw.match(/\b(E_[A-Z0-9_]+|HTTP_\d{3})\b/);
+  return m ? m[1] : null;
+}
+
+function compactDetail(raw: string, maxChars = 220): string {
+  const oneLine = raw.replace(/\s+/g, " ").trim();
+  if (!oneLine) return "";
+  if (oneLine.length <= maxChars) return oneLine;
+  return `${oneLine.slice(0, maxChars)}...`;
+}
+
+function titleForCode(code: string, fallback: string): string {
+  if (code.startsWith("E_SETTINGS_")) return "SETTINGS INVALID";
+  if (code === "E_TOOLCHAIN_NOT_READY") return "TOOLCHAIN NOT READY";
+  if (code === "E_TOOLCHAIN_CHECKSUM_MISMATCH") return "TOOLCHAIN CHECKSUM ERROR";
+  if (code === "E_TOOLCHAIN_VERSION_MISMATCH") return "TOOLCHAIN VERSION ERROR";
+  if (code === "E_PYTHON_NOT_READY") return "PYTHON NOT READY";
+  if (code === "E_CONTEXT_CAPTURE_REQUIRED") return "CONTEXT CAPTURE REQUIRED";
+  if (code === "E_CONTEXT_CAPTURE_NOT_FOUND") return "CONTEXT CAPTURE EXPIRED";
+  if (code === "E_CONTEXT_CAPTURE_INVALID") return "CONTEXT CAPTURE INVALID";
+  if (code === "E_RECORDING_SESSION_OPEN") return "RECORDING SESSION FAILED";
+  if (code === "E_RECORD_ALREADY_ACTIVE") return "RECORDING BUSY";
+  if (code === "E_TASK_ALREADY_ACTIVE") return "TASK BUSY";
+  if (code === "E_RECORD_UNSUPPORTED") return "RECORDING UNSUPPORTED";
+  if (code.startsWith("E_RECORD_")) return "RECORDING FAILED";
+  if (code === "E_CMD_CANCEL") return "CANCEL FAILED";
+  if (code.startsWith("HTTP_")) return "LLM REQUEST FAILED";
+  return fallback;
+}
+
+function actionHintForCode(code: string): string {
+  if (code.startsWith("E_TOOLCHAIN_")) return "RUN WINDOWS GATE TO REPAIR TOOLCHAIN";
+  if (code === "E_PYTHON_NOT_READY") return "CHECK PYTHON ENV (.venv / TYPEVOICE_PYTHON)";
+  if (code.startsWith("E_RECORD_")) return "CHECK MICROPHONE INPUT SPEC / DEVICE";
+  if (code.startsWith("E_FFMPEG_")) return "CHECK FFMPEG TOOLCHAIN";
+  if (code.startsWith("E_ASR_") || code === "E_MODEL_LOAD_FAILED") {
+    return "CHECK ASR MODEL + CUDA RUNTIME";
+  }
+  if (code.startsWith("HTTP_")) return "CHECK LLM ENDPOINT / API KEY";
+  if (code === "E_TASK_ALREADY_ACTIVE" || code === "E_RECORD_ALREADY_ACTIVE") {
+    return "WAIT FOR CURRENT TASK OR RECORDING TO FINISH";
+  }
+  return "CHECK TRACE.JSONL WITH THIS ERROR CODE";
+}
+
+function buildDiagnostic(err: unknown, fallbackTitle: string): DiagnosticView {
   const raw = errorMessage(err);
-  if (raw.includes("E_SETTINGS_")) return "SETTINGS INVALID";
-  if (raw.includes("E_TOOLCHAIN_NOT_READY")) return "TOOLCHAIN NOT READY";
-  if (raw.includes("E_TOOLCHAIN_CHECKSUM_MISMATCH")) return "TOOLCHAIN CHECKSUM ERROR";
-  if (raw.includes("E_TOOLCHAIN_VERSION_MISMATCH")) return "TOOLCHAIN VERSION ERROR";
-  if (raw.includes("E_PYTHON_NOT_READY")) return "PYTHON NOT READY";
-  if (raw.includes("E_CONTEXT_CAPTURE_REQUIRED")) return "CONTEXT CAPTURE REQUIRED";
-  if (raw.includes("E_CONTEXT_CAPTURE_NOT_FOUND")) return "CONTEXT CAPTURE EXPIRED";
-  if (raw.includes("E_CONTEXT_CAPTURE_INVALID")) return "CONTEXT CAPTURE INVALID";
-  if (raw.includes("E_RECORDING_SESSION_OPEN")) return "RECORDING SESSION FAILED";
-  if (raw.includes("E_RECORD_ALREADY_ACTIVE")) return "RECORDING BUSY";
-  if (raw.includes("E_TASK_ALREADY_ACTIVE")) return "TASK BUSY";
-  if (raw.includes("E_RECORD_UNSUPPORTED")) return "RECORDING UNSUPPORTED";
-  if (raw.includes("E_RECORD_")) return "RECORDING FAILED";
-  return "TRANSCRIBE FAILED";
+  const code = extractErrorCode(raw) ?? "E_UNKNOWN";
+  return {
+    title: titleForCode(code, fallbackTitle),
+    code,
+    detail: compactDetail(raw || fallbackTitle),
+    actionHint: actionHintForCode(code),
+  };
+}
+
+function buildTaskEventDiagnostic(ev: TaskEvent, fallbackTitle: string): DiagnosticView {
+  const code = ev.error_code?.trim() || extractErrorCode(ev.message) || "E_UNKNOWN";
+  return {
+    title: ev.stage === "Rewrite" ? "REWRITE FAILED" : titleForCode(code, fallbackTitle),
+    code,
+    detail: compactDetail(ev.message || fallbackTitle),
+    actionHint: actionHintForCode(code),
+  };
+}
+
+function toDiagnosticLine(diag: DiagnosticView): string {
+  return `[${diag.code}] ${diag.detail} | ${diag.actionHint}`;
 }
 
 function hotkeyCaptureHint(errCode?: string | null): string {
@@ -78,6 +138,7 @@ function hotkeyCaptureHint(errCode?: string | null): string {
 export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
   const [ui, setUi] = useState<UiState>("idle");
   const [hover, setHover] = useState(false);
+  const [diagnosticLine, setDiagnosticLine] = useState<string>("");
 
   const [lastText, setLastText] = useState<string>("");
   const [lastMeta, setLastMeta] = useState<string>("NO LAST RESULT");
@@ -207,6 +268,7 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
         if (done.task_id !== activeTaskIdRef.current) return;
         activeTaskIdRef.current = "";
         setUi("idle");
+        setDiagnosticLine("");
 
         const text = done.final_text || done.asr_text || "";
         setLastText(text);
@@ -233,19 +295,24 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
         if (ev.status === "failed" && ev.stage !== "Rewrite") {
           activeTaskIdRef.current = "";
           setUi("idle");
-          pushToastRef.current("ERROR", "danger");
+          const diag = buildTaskEventDiagnostic(ev, "TRANSCRIBE FAILED");
+          pushToastRef.current(diag.title, "danger");
+          setDiagnosticLine(toDiagnosticLine(diag));
           if (hotkeySessionRef.current) {
-            overlayFlash("ERROR", 1200);
+            overlayFlash("ERROR", 1400, diag.code);
             hotkeySessionRef.current = false;
           }
         }
         if (ev.status === "failed" && ev.stage === "Rewrite") {
-          pushToastRef.current("REWRITE FAILED", "danger");
+          const diag = buildTaskEventDiagnostic(ev, "REWRITE FAILED");
+          pushToastRef.current(diag.title, "danger");
+          setDiagnosticLine(toDiagnosticLine(diag));
         }
         if (ev.status === "cancelled") {
           activeTaskIdRef.current = "";
           setUi("idle");
           pushToastRef.current("CANCELLED", "default");
+          setDiagnosticLine("");
           if (hotkeySessionRef.current) {
             overlayFlash("CANCELLED", 800);
             hotkeySessionRef.current = false;
@@ -268,6 +335,12 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
           if (hk.state === "Pressed" && cur === "idle") {
             if (hk.capture_status !== "ok" || !hk.recording_session_id) {
               const hint = hotkeyCaptureHint(hk.capture_error_code);
+              const detail = compactDetail(
+                [hk.capture_error_code || "E_HOTKEY_CAPTURE", hk.capture_error_message || hint]
+                  .filter(Boolean)
+                  .join(": "),
+              );
+              setDiagnosticLine(detail);
               pushToastRef.current(hint, "danger");
               void overlaySet(true, "ERROR", hint);
               window.setTimeout(() => {
@@ -288,6 +361,12 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
         if (cur === "idle") {
           if (hk.capture_status !== "ok" || !hk.recording_session_id) {
             const hint = hotkeyCaptureHint(hk.capture_error_code);
+            const detail = compactDetail(
+              [hk.capture_error_code || "E_HOTKEY_CAPTURE", hk.capture_error_message || hint]
+                .filter(Boolean)
+                .join(": "),
+            );
+            setDiagnosticLine(detail);
             pushToastRef.current(hint, "danger");
             void overlaySet(true, "ERROR", hint);
             window.setTimeout(() => {
@@ -327,6 +406,7 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
   async function startRecording(source: "ui" | "hotkey" = "ui", recordingSessionId: string | null = null) {
     hotkeySessionRef.current = source === "hotkey";
     pendingRecordingSessionIdRef.current = source === "hotkey" ? recordingSessionId : null;
+    setDiagnosticLine("");
     if (hotkeySessionRef.current) void overlaySet(true, "REC");
     try {
       const rid = (await invoke("start_backend_recording")) as string;
@@ -336,10 +416,12 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
       const staleSessionId = pendingRecordingSessionIdRef.current;
       void abortRecordingSessionBestEffort(staleSessionId);
       setUi("idle");
-      pushToastRef.current(transcribeErrorHint(err), "danger");
+      const diag = buildDiagnostic(err, "RECORDING FAILED");
+      pushToastRef.current(diag.title, "danger");
+      setDiagnosticLine(toDiagnosticLine(diag));
       pendingRecordingSessionIdRef.current = null;
       if (hotkeySessionRef.current) {
-        overlayFlash("ERROR", 1200);
+        overlayFlash("ERROR", 1200, diag.code);
         hotkeySessionRef.current = false;
       }
     }
@@ -362,10 +444,11 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
       void abortRecordingSessionBestEffort(staleSessionId);
       setUi("idle");
       pendingRecordingSessionIdRef.current = null;
-      const hint = transcribeErrorHint(err);
-      pushToastRef.current(hint, "danger");
+      const diag = buildDiagnostic(err, "RECORDING FAILED");
+      pushToastRef.current(diag.title, "danger");
+      setDiagnosticLine(toDiagnosticLine(diag));
       if (hotkeySessionRef.current) {
-        overlayFlash("ERROR", 1200, hint);
+        overlayFlash("ERROR", 1200, diag.code);
         hotkeySessionRef.current = false;
       }
       return;
@@ -389,9 +472,11 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
       void abortRecordingSessionBestEffort(staleSessionId);
       setUi("idle");
       pendingRecordingSessionIdRef.current = null;
-      pushToastRef.current(transcribeErrorHint(err), "danger");
+      const diag = buildDiagnostic(err, "TRANSCRIBE FAILED");
+      pushToastRef.current(diag.title, "danger");
+      setDiagnosticLine(toDiagnosticLine(diag));
       if (hotkeySessionRef.current) {
-        overlayFlash("ERROR", 1200);
+        overlayFlash("ERROR", 1200, diag.code);
         hotkeySessionRef.current = false;
       }
     }
@@ -404,12 +489,15 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
     try {
       await invoke("cancel_task", { taskId: id });
       pushToastRef.current("CANCELLING...", "default");
+      setDiagnosticLine("");
       if (hotkeySessionRef.current) void overlaySet(true, "CANCELLING");
-    } catch {
+    } catch (err) {
       setUi("transcribing");
-      pushToastRef.current("CANCEL FAILED", "danger");
+      const diag = buildDiagnostic(err, "CANCEL FAILED");
+      pushToastRef.current(diag.title, "danger");
+      setDiagnosticLine(toDiagnosticLine(diag));
       if (hotkeySessionRef.current) {
-        overlayFlash("ERROR", 1200, "CANCEL FAILED");
+        overlayFlash("ERROR", 1200, diag.code);
         hotkeySessionRef.current = false;
       }
     }
@@ -459,6 +547,12 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
 
         <div className="mainHint" aria-hidden={!hover && ui !== "transcribing"}>
           {hover || ui === "transcribing" ? hint : ""}
+        </div>
+        <div
+          className={`mainDiag ${diagnosticLine ? "isVisible" : ""}`}
+          aria-hidden={!diagnosticLine}
+        >
+          {diagnosticLine || ""}
         </div>
 
         <button

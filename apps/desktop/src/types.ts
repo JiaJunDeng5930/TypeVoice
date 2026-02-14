@@ -5,6 +5,8 @@ export type TaskEvent = {
   message: string;
   elapsed_ms?: number | null;
   error_code?: string | null;
+  diagnostic?: string | null;
+  step_id?: string | null;
 };
 
 export type TaskDone = {
