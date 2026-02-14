@@ -17,6 +17,7 @@
 
 - WSL 下调用 Windows 命令时，不能默认信任父 shell 的 PATH；需确认 `cargo`、`node`、`ffmpeg` 在调用链可见。
 - PowerShell 参数中 `$`、反引号等特殊字符需在传递层面转义，避免命令在执行前被当前 shell 污染。
+- `run-latest.ps1` 若报 `tauri-latest-run.txt is being used by another process`，说明旧会话未清理干净；先执行文档中的停止命令清理 `typevoice-desktop.exe` 与 `node.exe`，再重跑同一命令。
 
 ## 4. 全局热键链路
 

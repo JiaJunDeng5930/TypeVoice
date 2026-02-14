@@ -38,6 +38,7 @@
 - [VERIFIED] trace 并发写入已加全局互斥，新增并发 JSONL 可解析测试 `trace::tests::concurrent_emit_keeps_jsonl_lines_parseable`。
 - [VERIFIED] gate 已纳入可调试性自动化：`verify_quick/full` 新增 Rust 可调试性契约测试步骤，并要求 ASR 失败时必须有结构化 `error.code`。
 - [VERIFIED] 本仓已完成回归：`cargo check --locked`、`npm run build`、`pytest -q tests`、`verify_quick.py`、`verify_full.py` 全部通过。
+- [VERIFIED] 2026-02-14：已清理错误路径 `/home/atticusdeng/Projects/TypeVoice` 下误拉取产物（`.venv`、`models`、`apps/desktop/node_modules`、toolchain 可执行）；随后按文档在 `D:\Projects\TypeVoice` 执行 `.\scripts\windows\run-latest.ps1`，成功拉起 Windows runtime（`typevoice-desktop.exe`, PID `38500`）。
 
 ### 当前工作集
 
