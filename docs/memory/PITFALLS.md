@@ -19,6 +19,7 @@
 - PowerShell 参数中 `$`、反引号等特殊字符需在传递层面转义，避免命令在执行前被当前 shell 污染。
 - `run-latest.ps1` 若报 `tauri-latest-run.txt is being used by another process`，说明旧会话未清理干净；先执行文档中的停止命令清理 `typevoice-desktop.exe` 与 `node.exe`，再重跑同一命令。
 - `verify_quick.py` 会在本地模型缺失时直接失败（`models/Qwen3-ASR-0.6B`）；在无模型环境中先补齐模型资产再跑 gate，避免把环境缺失误判为代码回归。
+- `verify_quick.py` 在仓库根目录缺失 `./.venv` 时会直接失败（`FAIL: .venv missing`）；在执行 gate 之前先恢复项目本地虚拟环境。
 
 ## 4. 全局热键链路
 

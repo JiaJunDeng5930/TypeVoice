@@ -125,6 +125,16 @@ impl WindowsContext {
         })
     }
 
+    pub fn last_external_hwnd_best_effort(&self) -> Option<isize> {
+        self.tracker.ensure_started();
+        let snap = self.tracker.last_external_snapshot();
+        let hwnd = snap.hwnd?;
+        if unsafe { IsWindow(hwnd as HWND) } == 0 {
+            return None;
+        }
+        Some(hwnd)
+    }
+
     pub fn foreground_window_info_best_effort(&self) -> Option<WindowInfo> {
         let hwnd = unsafe { GetForegroundWindow() };
         if hwnd.is_null() {

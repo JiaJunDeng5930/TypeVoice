@@ -264,6 +264,12 @@ impl ContextService {
             .map(|v| v.snapshot)
     }
 
+    #[cfg(windows)]
+    pub fn last_external_hwnd_best_effort(&self) -> Option<isize> {
+        let g = self.inner.lock().unwrap();
+        g.win.last_external_hwnd_best_effort()
+    }
+
     #[cfg(not(windows))]
     pub fn capture_hotkey_context_now(
         &self,
@@ -277,6 +283,11 @@ impl ContextService {
 
     #[cfg(not(windows))]
     pub fn take_hotkey_context_once(&self, _capture_id: &str) -> Option<ContextSnapshot> {
+        None
+    }
+
+    #[cfg(not(windows))]
+    pub fn last_external_hwnd_best_effort(&self) -> Option<isize> {
         None
     }
 

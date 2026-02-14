@@ -5,7 +5,7 @@
 
 ## 当前有效目标
 
-- 保持 MVP 核心能力的稳定可用性：录音、预处理、转录、可选改写、复制、可观测。
+- 保持 MVP 核心能力的稳定可用性：录音、预处理、转录、可选改写、复制、自动粘贴、可观测。
 - 继续压实可复用的上下文与错误诊断链路，支持热键与 UI 两条路径行为一致。
 
 ## 当前状态（进行中）
@@ -43,6 +43,11 @@
 - [VERIFIED] 前端已接入运行时端口层：新增 `src/infra/runtimePorts.ts`，`MainScreen`/`SettingsScreen`/`HistoryScreen`/`OverlayApp` 通过 `TauriGateway`/`TimerPort`/`ClipboardPort` 访问平台能力。
 - [VERIFIED] 诊断逻辑已从 UI 抽离：新增 `src/domain/diagnostic.ts`，`MainScreen` 仅消费纯函数输出，降低组件内业务逻辑耦合。
 - [VERIFIED] `asr_runner/runner.py` 已移除全局 `_should_exit`，改为 `RunnerRuntime` 实例状态；并引入 `ProbePort`/`ModelPort` 注入缝隙。
+- [VERIFIED] 新增导出命令 `export_text`：后端统一执行复制与自动粘贴开关判定，返回结构化导出结果（`copied/auto_paste_*` 与错误码）。
+- [VERIFIED] 设置链路新增 `auto_paste_enabled` 并接入 UI（`SettingsScreen` 新增 `EXPORT` 开关，默认开启）。
+- [VERIFIED] 平台实现已接通：Windows 路径使用 `WM_PASTE`；Linux 路径使用 AT-SPI 焦点可编辑对象写入；均不使用快捷键模拟。
+- [UNCONFIRMED] Windows 端自动粘贴实机闭环待验证：`task_done -> export_text -> WM_PASTE` 在记事本/浏览器输入框可稳定工作。
+- [UNCONFIRMED] Linux 端自动粘贴实机闭环待验证：X11/Wayland 会话下 AT-SPI 焦点对象写入行为待验证。
 - [VERIFIED] 本轮本机回归结果：`cargo test -q`（通过）、`npm run build`（通过）、`./.venv/bin/python -m pytest -q tests`（通过）。
 - [VERIFIED] `verify_quick.py` 在当前环境失败：缺少本地模型目录 `models/Qwen3-ASR-0.6B`；失败原因为环境资产缺失而非编译错误。
 
@@ -51,6 +56,7 @@
 - 需要在下一步优先验证：
   - 热键触发链路的 rewrite 一致性（`rewrite_enabled/template_id` 与设置一致）。
   - 关键 Windows-only 改动后的本机 `Windows` `npm run tauri dev` 与 `quick/full` 可回归（当前 Linux 侧已通过）。
+  - 自动粘贴跨平台闭环（Windows + Linux）与失败码可见性。
 - [UNCONFIRMED] “后端录音替代前端 `MediaRecorder`”已接通：`MainScreen` 调用 `start_backend_recording` / `stop_backend_recording` / `abort_backend_recording`，录音由后端 FFmpeg 进程托管；待校验路径：Windows 默认麦克风 dshow 输入可用性。
 - [UNCONFIRMED] `start_task(recording_bytes)` 已从任务入口移除；当前统一输入模式为 `recording_asset|fixture`。
 - 进行中更新点：`docs/memory` 由复盘内容转为“当前事实清单”。

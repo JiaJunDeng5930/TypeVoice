@@ -5,6 +5,7 @@ mod context_capture_windows;
 mod context_pack;
 mod data_dir;
 mod debug_log;
+mod export;
 mod history;
 mod hotkeys;
 mod llm;
@@ -122,6 +123,22 @@ struct StopBackendRecordingResult {
     recording_id: String,
     recording_asset_id: String,
     ext: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportTextRequest {
+    task_id: Option<String>,
+    text: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct ExportTextResult {
+    copied: bool,
+    auto_paste_attempted: bool,
+    auto_paste_ok: bool,
+    error_code: Option<String>,
+    error_message: Option<String>,
 }
 
 #[tauri::command]
@@ -1193,6 +1210,89 @@ fn history_clear() -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn export_text(
+    state: tauri::State<'_, TaskManager>,
+    req: ExportTextRequest,
+) -> Result<ExportTextResult, String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(
+        &dir,
+        req.task_id.as_deref(),
+        "CMD.export_text",
+        Some(serde_json::json!({
+            "chars": req.text.chars().count(),
+            "has_task_id": req.task_id.as_deref().map(|v| !v.is_empty()).unwrap_or(false),
+        })),
+    );
+
+    if let Err(e) = export::copy_text_to_clipboard(&req.text) {
+        span.err("export", &e.code, &e.message, None);
+        return Err(format!("{}: {}", e.code, e.message));
+    }
+
+    let settings = match settings::load_settings_strict(&dir) {
+        Ok(v) => v,
+        Err(e) => {
+            span.err_anyhow("settings", "E_CMD_EXPORT_SETTINGS", &e, None);
+            return Err(e.to_string());
+        }
+    };
+    let auto_paste_enabled = settings::resolve_auto_paste_enabled(&settings);
+    if !auto_paste_enabled {
+        span.ok(Some(serde_json::json!({
+            "copied": true,
+            "auto_paste_enabled": false,
+            "auto_paste_attempted": false,
+        })));
+        return Ok(ExportTextResult {
+            copied: true,
+            auto_paste_attempted: false,
+            auto_paste_ok: true,
+            error_code: None,
+            error_message: None,
+        });
+    }
+
+    let hwnd_hint = state.last_external_hwnd_best_effort();
+    match export::auto_paste_text(&req.text, hwnd_hint).await {
+        Ok(()) => {
+            span.ok(Some(serde_json::json!({
+                "copied": true,
+                "auto_paste_enabled": true,
+                "auto_paste_attempted": true,
+                "auto_paste_ok": true,
+            })));
+            Ok(ExportTextResult {
+                copied: true,
+                auto_paste_attempted: true,
+                auto_paste_ok: true,
+                error_code: None,
+                error_message: None,
+            })
+        }
+        Err(e) => {
+            span.err(
+                "export",
+                &e.code,
+                &e.message,
+                Some(serde_json::json!({
+                    "copied": true,
+                    "auto_paste_enabled": true,
+                    "auto_paste_attempted": true,
+                })),
+            );
+            Ok(ExportTextResult {
+                copied: true,
+                auto_paste_attempted: true,
+                auto_paste_ok: false,
+                error_code: Some(e.code),
+                error_message: Some(e.message),
+            })
+        }
+    }
+}
+
+#[tauri::command]
 fn get_settings() -> Result<Settings, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let span = cmd_span(&dir, None, "CMD.get_settings", None);
@@ -1242,6 +1342,7 @@ fn update_settings(
         "rewrite_enabled": patch.rewrite_enabled.is_some(),
         "rewrite_template_id": patch.rewrite_template_id.is_some(),
         "rewrite_glossary": patch.rewrite_glossary.is_some(),
+        "auto_paste_enabled": patch.auto_paste_enabled.is_some(),
         "rewrite_include_glossary": patch.rewrite_include_glossary.is_some(),
         "context_include_history": patch.context_include_history.is_some(),
         "context_history_n": patch.context_history_n.is_some(),
@@ -1510,6 +1611,7 @@ pub fn run() {
             history_append,
             history_list,
             history_clear,
+            export_text,
             get_settings,
             set_settings,
             update_settings,

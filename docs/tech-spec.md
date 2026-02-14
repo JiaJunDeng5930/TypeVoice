@@ -6,7 +6,7 @@
 
 ## 1. 总体架构（MVP）
 
-实现目标：将“录音、预处理、ASR、改写、历史记录、复制”组成可取消、可观察、可扩展的本地 Pipeline。
+实现目标：将“录音、预处理、ASR、改写、历史记录、复制、自动粘贴”组成可取消、可观察、可扩展的本地 Pipeline。
 
 推荐模块划分（逻辑划分，不代表最终目录结构必须一致）：
 
@@ -31,7 +31,7 @@
 - Transcribe：ASR 转录，产出文本
 - Rewrite：调用 LLM API 改写（可选）
 - Persist：写入历史记录（文本与元信息）
-- Export：复制到剪贴板
+- Export：复制到剪贴板，并按设置执行自动粘贴（默认开启）
 
 ### 2.2 可取消性
 
@@ -50,6 +50,15 @@
 - 录音会话生命周期必须进入单一终态 `Finalized` 后再释放，禁止悬挂会话。
 - 主录音链路由后端命令托管（`start_backend_recording` / `stop_backend_recording` / `abort_backend_recording`）；`stop_backend_recording` 仅产出 `recording_asset_id`，任务启动统一经 `start_task(req)` 并消费该资产。
 - `recording_asset_id` 必须具备短时租约与自动清理语义，避免“停止录音后未启动任务”造成中间产物悬挂。
+
+### 2.5 Export 约束（冻结）
+
+- 后端提供统一导出命令 `export_text`，负责“复制 + 自动粘贴”。
+- 自动粘贴默认开启，可通过设置项 `auto_paste_enabled` 关闭。
+- 粘贴动作禁止依赖快捷键模拟；必须使用平台能力：
+  - Windows：窗口消息粘贴（如 `WM_PASTE`）。
+  - Linux：AT-SPI 可访问性接口对焦点可编辑对象写入文本。
+- 自动粘贴失败必须返回结构化错误码与摘要，且不影响任务文本产出与历史持久化。
 
 ### 2.3 产物与缓存
 
@@ -164,6 +173,7 @@
 - `llm_base_url`：API Base URL（例如 `https://api.openai.com/v1`）。允许用户粘贴完整 endpoint（`.../chat/completions`），应用需做归一化。
 - `llm_model`：LLM 模型名（写入 Chat Completions 的 `model` 字段）。
 - `llm_reasoning_effort`：推理等级（写入 Chat Completions 的 `reasoning_effort` 字段）。`default`/空表示“不发送该字段”。
+- `auto_paste_enabled`：是否在导出时自动粘贴（默认 `true`）。
 
 敏感配置（不得明文落盘）：
 
@@ -187,6 +197,11 @@
 - `E_ASR_FAILED`
 - `E_LLM_FAILED`
 - `E_CANCELLED`
+- `E_EXPORT_EMPTY_TEXT`
+- `E_EXPORT_COPY_FAILED`
+- `E_EXPORT_TARGET_UNAVAILABLE`
+- `E_EXPORT_TARGET_NOT_EDITABLE`
+- `E_EXPORT_PASTE_FAILED`
 
 约束：UI 必须能将错误码映射为用户可理解文案，并提供一条建议动作。
 - 失败提示不得只显示泛化文案（如仅 `ERROR`）；至少展示 `error_code + 摘要 + 建议动作`。

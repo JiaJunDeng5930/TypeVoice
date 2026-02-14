@@ -22,6 +22,14 @@ export type TaskDone = {
   template_id?: string | null;
 };
 
+export type ExportTextResult = {
+  copied: boolean;
+  auto_paste_attempted: boolean;
+  auto_paste_ok: boolean;
+  error_code?: string | null;
+  error_message?: string | null;
+};
+
 export type PromptTemplate = {
   id: string;
   name: string;
@@ -41,6 +49,7 @@ export type Settings = {
   rewrite_enabled?: boolean | null;
   rewrite_template_id?: string | null;
   rewrite_glossary?: string[] | null;
+  auto_paste_enabled?: boolean | null;
   rewrite_include_glossary?: boolean | null;
 
   context_include_history?: boolean | null;

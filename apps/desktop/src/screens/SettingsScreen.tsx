@@ -86,6 +86,7 @@ export function SettingsScreen({
   const [rewriteEnabled, setRewriteEnabled] = useState(false);
   const [rewriteTemplateId, setRewriteTemplateId] = useState("");
   const [rewriteGlossaryDraft, setRewriteGlossaryDraft] = useState("");
+  const [autoPasteEnabled, setAutoPasteEnabled] = useState(true);
 
   const [hotkeysEnabled, setHotkeysEnabled] = useState(true);
   const [hotkeyPtt, setHotkeyPtt] = useState("F9");
@@ -140,6 +141,7 @@ export function SettingsScreen({
     setRewriteTemplateId(settings.rewrite_template_id ?? "");
     setRewriteGlossaryDraft((settings.rewrite_glossary || []).join("\n"));
     setRewriteIncludeGlossary(settings.rewrite_include_glossary ?? true);
+    setAutoPasteEnabled(settings.auto_paste_enabled ?? true);
 
     if (typeof settings.hotkeys_enabled !== "boolean") {
       pushToast("SETTINGS INVALID: hotkeys_enabled missing", "danger");
@@ -323,6 +325,17 @@ export function SettingsScreen({
         context_include_clipboard: contextIncludeClipboard,
         context_include_prev_window_meta: contextIncludePrevWindowMeta,
         context_include_prev_window_screenshot: contextIncludePrevWindowScreenshot,
+      });
+      pushToast("SAVED", "ok");
+    } catch {
+      pushToast("SAVE FAILED", "danger");
+    }
+  }
+
+  async function saveExportConfig() {
+    try {
+      await savePatch({
+        auto_paste_enabled: autoPasteEnabled,
       });
       pushToast("SAVED", "ok");
     } catch {
@@ -723,6 +736,26 @@ export function SettingsScreen({
           />
           <div className="row" style={{ justifyContent: "flex-end" }}>
             <PixelButton onClick={saveGlossary} tone="accent">
+              SAVE
+            </PixelButton>
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="sectionTitle">EXPORT</div>
+        <div className="stack">
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <div className="muted">{autoPasteEnabled ? "AUTO PASTE ON" : "AUTO PASTE OFF"}</div>
+            <PixelToggle
+              value={autoPasteEnabled}
+              onChange={setAutoPasteEnabled}
+              label="auto paste"
+            />
+          </div>
+          <div className="muted">Use platform APIs to paste automatically (no shortcut simulation).</div>
+          <div className="row" style={{ justifyContent: "flex-end" }}>
+            <PixelButton onClick={saveExportConfig} tone="accent">
               SAVE
             </PixelButton>
           </div>

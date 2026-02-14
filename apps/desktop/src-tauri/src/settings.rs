@@ -26,6 +26,7 @@ pub struct Settings {
     pub rewrite_enabled: Option<bool>,
     pub rewrite_template_id: Option<String>,
     pub rewrite_glossary: Option<Vec<String>>,
+    pub auto_paste_enabled: Option<bool>,
 
     // Context settings (for LLM rewrite)
     pub context_include_prev_window_meta: Option<bool>,
@@ -62,6 +63,7 @@ pub struct SettingsPatch {
     pub rewrite_enabled: Option<Option<bool>>,
     pub rewrite_template_id: Option<Option<String>>,
     pub rewrite_glossary: Option<Option<Vec<String>>>,
+    pub auto_paste_enabled: Option<Option<bool>>,
 
     pub context_include_history: Option<Option<bool>>,
     pub context_history_n: Option<Option<i64>>,
@@ -114,6 +116,9 @@ pub fn apply_patch(mut s: Settings, p: SettingsPatch) -> Settings {
     }
     if let Some(v) = p.rewrite_glossary {
         s.rewrite_glossary = v;
+    }
+    if let Some(v) = p.auto_paste_enabled {
+        s.auto_paste_enabled = v;
     }
     if let Some(v) = p.context_include_history {
         s.context_include_history = v;
@@ -197,6 +202,10 @@ pub fn resolve_rewrite_start_config(s: &Settings) -> Result<(bool, Option<String
         ));
     }
     Ok((rewrite_enabled, template_id))
+}
+
+pub fn resolve_auto_paste_enabled(s: &Settings) -> bool {
+    s.auto_paste_enabled.unwrap_or(true)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -285,6 +294,7 @@ mod tests {
             rewrite_enabled: Some(false),
             rewrite_template_id: Some("t1".to_string()),
             rewrite_glossary: None,
+            auto_paste_enabled: Some(true),
             context_include_history: None,
             context_history_n: None,
             context_history_window_ms: None,
@@ -308,6 +318,7 @@ mod tests {
             context_history_n: Some(Some(5)),
             context_include_prev_window_meta: Some(Some(true)),
             rewrite_include_glossary: Some(Some(false)),
+            auto_paste_enabled: Some(Some(false)),
             ..Default::default()
         };
 
@@ -319,6 +330,7 @@ mod tests {
         assert_eq!(next.rewrite_enabled, Some(true));
         assert_eq!(next.rewrite_template_id, None);
         assert_eq!(next.rewrite_glossary.as_deref(), None);
+        assert_eq!(next.auto_paste_enabled, Some(false));
         assert_eq!(next.context_history_n, Some(5));
         assert_eq!(next.context_include_prev_window_meta, Some(true));
         assert_eq!(next.rewrite_include_glossary, Some(false));

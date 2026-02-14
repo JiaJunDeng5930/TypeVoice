@@ -15,6 +15,7 @@ import {
   toDiagnosticLine,
 } from "../domain/diagnostic";
 import type {
+  ExportTextResult,
   HistoryItem,
   RuntimePythonStatus,
   RuntimeToolchainStatus,
@@ -196,15 +197,43 @@ export function MainScreen({
         const text = done.final_text || done.asr_text || "";
         setLastText(text);
         setLastMeta(new Date().toLocaleString());
+        const fromHotkey = hotkeySessionRef.current;
         try {
-          await clipboard.copyText(text);
-          pushToastRef.current("COPIED", "ok");
-        } catch {
-          pushToastRef.current("COPY FAILED", "danger");
-        }
-        if (hotkeySessionRef.current) {
-          overlayFlash("COPIED", 800);
-          hotkeySessionRef.current = false;
+          const exported = (await gateway.invoke("export_text", {
+            req: {
+              taskId: done.task_id,
+              text,
+            },
+          })) as ExportTextResult;
+
+          if (exported.auto_paste_attempted && !exported.auto_paste_ok) {
+            const code = exported.error_code || "E_EXPORT_PASTE_FAILED";
+            const detail = compactDetail(
+              [code, exported.error_message || "auto paste failed"].filter(Boolean).join(": "),
+            );
+            setDiagnosticLine(detail);
+            pushToastRef.current(`AUTO PASTE FAILED: ${code}`, "danger");
+            if (fromHotkey) {
+              overlayFlash("ERROR", 1400, code);
+            }
+          }
+          else {
+            pushToastRef.current(exported.auto_paste_attempted ? "COPIED + PASTED" : "COPIED", "ok");
+            if (fromHotkey) {
+              overlayFlash(exported.auto_paste_attempted ? "PASTED" : "COPIED", 800);
+            }
+          }
+        } catch (err) {
+          const diag = buildDiagnostic(err, "EXPORT FAILED");
+          pushToastRef.current(diag.title, "danger");
+          setDiagnosticLine(toDiagnosticLine(diag));
+          if (fromHotkey) {
+            overlayFlash("ERROR", 1400, diag.code);
+          }
+        } finally {
+          if (fromHotkey) {
+            hotkeySessionRef.current = false;
+          }
         }
         onHistoryChangedRef.current();
       });

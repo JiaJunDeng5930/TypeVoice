@@ -65,6 +65,7 @@ pub trait ContextCollector: Send + Sync {
         cfg: &context_capture::ContextConfig,
     ) -> Result<String>;
     fn take_hotkey_context_once(&self, capture_id: &str) -> Option<context_pack::ContextSnapshot>;
+    fn last_external_hwnd_best_effort(&self) -> Option<isize>;
     fn capture_snapshot_best_effort_with_config(
         &self,
         data_dir: &Path,
@@ -88,6 +89,10 @@ impl ContextCollector for context_capture::ContextService {
 
     fn take_hotkey_context_once(&self, capture_id: &str) -> Option<context_pack::ContextSnapshot> {
         self.take_hotkey_context_once(capture_id)
+    }
+
+    fn last_external_hwnd_best_effort(&self) -> Option<isize> {
+        self.last_external_hwnd_best_effort()
     }
 
     fn capture_snapshot_best_effort_with_config(
@@ -286,6 +291,10 @@ impl TaskManager {
         capture_id: &str,
     ) -> Option<context_pack::ContextSnapshot> {
         self.ctx.take_hotkey_context_once(capture_id)
+    }
+
+    pub fn last_external_hwnd_best_effort(&self) -> Option<isize> {
+        self.ctx.last_external_hwnd_best_effort()
     }
 
     pub fn open_recording_session(

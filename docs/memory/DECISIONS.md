@@ -142,6 +142,16 @@
 - 依据：业务状态测试需要脱离 Tauri 运行时，避免每次组件测试都 mock IPC/事件总线。
 - 执行：新增 `runtimePorts.ts`（`TauriGateway`/`TimerPort`/`ClipboardPort`），`MainScreen`/`SettingsScreen`/`HistoryScreen`/`OverlayApp` 统一通过端口访问平台能力。
 
+## 导出阶段自动粘贴（非快捷键）
+
+- 决策：导出阶段新增 `export_text`，统一执行“复制 + 自动粘贴”；自动粘贴默认开启，可在设置中关闭。
+- 依据：用户要求在 Linux 与 Windows 下自动粘贴，且粘贴动作不得通过快捷键模拟。
+- 执行：
+  - `settings.json` 新增 `auto_paste_enabled`（默认 `true`）。
+  - Windows 使用窗口消息 `WM_PASTE` 路径，目标窗口优先取“最近外部窗口”句柄。
+  - Linux 使用 AT-SPI 在焦点可编辑对象执行文本写入（不走快捷键）。
+  - 自动粘贴失败返回结构化错误码并在 UI 显示，不静默吞错。
+
 ## Runner 退出状态实例化
 
 - 决策：ASR runner 禁止使用进程级全局退出标记。
