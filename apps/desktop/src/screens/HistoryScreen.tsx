@@ -1,16 +1,27 @@
-import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { copyText } from "../lib/clipboard";
+import {
+  browserClipboard,
+  defaultTauriGateway,
+  type ClipboardPort,
+  type TauriGateway,
+} from "../infra/runtimePorts";
 import type { HistoryItem } from "../types";
 
 type Props = {
   epoch: number;
   pushToast: (msg: string, tone?: "default" | "ok" | "danger") => void;
+  gateway?: TauriGateway;
+  clipboard?: ClipboardPort;
 };
 
 const PAGE = 50;
 
-export function HistoryScreen({ epoch, pushToast }: Props) {
+export function HistoryScreen({
+  epoch,
+  pushToast,
+  gateway = defaultTauriGateway,
+  clipboard = browserClipboard,
+}: Props) {
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [hasMore, setHasMore] = useState(true);
@@ -25,7 +36,7 @@ export function HistoryScreen({ epoch, pushToast }: Props) {
     setLoading(true);
     setHasMore(true);
     try {
-      const rows = (await invoke("history_list", {
+      const rows = (await gateway.invoke("history_list", {
         limit: PAGE,
         beforeMs: null,
       })) as HistoryItem[];
@@ -46,7 +57,7 @@ export function HistoryScreen({ epoch, pushToast }: Props) {
     if (oldestMs == null) return;
     setLoading(true);
     try {
-      const rows = (await invoke("history_list", {
+      const rows = (await gateway.invoke("history_list", {
         limit: PAGE,
         beforeMs: oldestMs,
       })) as HistoryItem[];
@@ -73,9 +84,9 @@ export function HistoryScreen({ epoch, pushToast }: Props) {
 
   async function copyItem(h: HistoryItem) {
     const text = (h.final_text || h.asr_text || "").trim();
-    if (!text) return;
+      if (!text) return;
     try {
-      await copyText(text);
+      await clipboard.copyText(text);
       pushToast("COPIED", "ok");
     } catch {
       pushToast("COPY FAILED", "danger");

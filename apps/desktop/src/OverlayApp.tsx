@@ -1,5 +1,5 @@
-import { listen } from "@tauri-apps/api/event";
 import { useEffect, useMemo, useState } from "react";
+import { defaultTauriGateway } from "./infra/runtimePorts";
 
 type OverlayState = {
   visible: boolean;
@@ -31,8 +31,7 @@ export default function OverlayApp() {
   useEffect(() => {
     let unlisten: null | (() => void) = null;
     (async () => {
-      unlisten = await listen<OverlayState>("tv_overlay_state", (e) => {
-        const next = e.payload;
+      unlisten = await defaultTauriGateway.listen<OverlayState>("tv_overlay_state", (next) => {
         if (!next) return;
         setSt(next);
       });
@@ -55,4 +54,3 @@ export default function OverlayApp() {
     </div>
   );
 }
-

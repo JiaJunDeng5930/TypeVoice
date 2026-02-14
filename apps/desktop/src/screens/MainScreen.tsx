@@ -1,7 +1,19 @@
-import { listen } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { copyText } from "../lib/clipboard";
+import {
+  browserClipboard,
+  browserTimer,
+  defaultTauriGateway,
+  type ClipboardPort,
+  type TauriGateway,
+  type TimerPort,
+} from "../infra/runtimePorts";
+import {
+  buildDiagnostic,
+  buildTaskEventDiagnostic,
+  compactDetail,
+  hotkeyCaptureHint,
+  toDiagnosticLine,
+} from "../domain/diagnostic";
 import type {
   HistoryItem,
   RuntimePythonStatus,
@@ -35,107 +47,19 @@ type Props = {
   settings: Settings | null;
   pushToast: (msg: string, tone?: "default" | "ok" | "danger") => void;
   onHistoryChanged: () => void;
+  gateway?: TauriGateway;
+  timer?: TimerPort;
+  clipboard?: ClipboardPort;
 };
 
-type DiagnosticView = {
-  title: string;
-  code: string;
-  detail: string;
-  actionHint: string;
-};
-
-function errorMessage(err: unknown): string {
-  if (typeof err === "string") return err;
-  if (err && typeof err === "object" && "toString" in err) {
-    try {
-      return String(err);
-    } catch {
-      return "";
-    }
-  }
-  return "";
-}
-
-function extractErrorCode(raw: string): string | null {
-  const m = raw.match(/\b(E_[A-Z0-9_]+|HTTP_\d{3})\b/);
-  return m ? m[1] : null;
-}
-
-function compactDetail(raw: string, maxChars = 220): string {
-  const oneLine = raw.replace(/\s+/g, " ").trim();
-  if (!oneLine) return "";
-  if (oneLine.length <= maxChars) return oneLine;
-  return `${oneLine.slice(0, maxChars)}...`;
-}
-
-function titleForCode(code: string, fallback: string): string {
-  if (code.startsWith("E_SETTINGS_")) return "SETTINGS INVALID";
-  if (code === "E_TOOLCHAIN_NOT_READY") return "TOOLCHAIN NOT READY";
-  if (code === "E_TOOLCHAIN_CHECKSUM_MISMATCH") return "TOOLCHAIN CHECKSUM ERROR";
-  if (code === "E_TOOLCHAIN_VERSION_MISMATCH") return "TOOLCHAIN VERSION ERROR";
-  if (code === "E_PYTHON_NOT_READY") return "PYTHON NOT READY";
-  if (code === "E_CONTEXT_CAPTURE_REQUIRED") return "CONTEXT CAPTURE REQUIRED";
-  if (code === "E_CONTEXT_CAPTURE_NOT_FOUND") return "CONTEXT CAPTURE EXPIRED";
-  if (code === "E_CONTEXT_CAPTURE_INVALID") return "CONTEXT CAPTURE INVALID";
-  if (code === "E_RECORDING_SESSION_OPEN") return "RECORDING SESSION FAILED";
-  if (code === "E_RECORD_ALREADY_ACTIVE") return "RECORDING BUSY";
-  if (code === "E_TASK_ALREADY_ACTIVE") return "TASK BUSY";
-  if (code === "E_RECORD_UNSUPPORTED") return "RECORDING UNSUPPORTED";
-  if (code.startsWith("E_RECORD_")) return "RECORDING FAILED";
-  if (code === "E_CMD_CANCEL") return "CANCEL FAILED";
-  if (code.startsWith("HTTP_")) return "LLM REQUEST FAILED";
-  return fallback;
-}
-
-function actionHintForCode(code: string): string {
-  if (code.startsWith("E_TOOLCHAIN_")) return "RUN WINDOWS GATE TO REPAIR TOOLCHAIN";
-  if (code === "E_PYTHON_NOT_READY") return "CHECK PYTHON ENV (.venv / TYPEVOICE_PYTHON)";
-  if (code.startsWith("E_RECORD_")) return "CHECK MICROPHONE INPUT SPEC / DEVICE";
-  if (code.startsWith("E_FFMPEG_")) return "CHECK FFMPEG TOOLCHAIN";
-  if (code.startsWith("E_ASR_") || code === "E_MODEL_LOAD_FAILED") {
-    return "CHECK ASR MODEL + CUDA RUNTIME";
-  }
-  if (code.startsWith("HTTP_")) return "CHECK LLM ENDPOINT / API KEY";
-  if (code === "E_TASK_ALREADY_ACTIVE" || code === "E_RECORD_ALREADY_ACTIVE") {
-    return "WAIT FOR CURRENT TASK OR RECORDING TO FINISH";
-  }
-  return "CHECK TRACE.JSONL WITH THIS ERROR CODE";
-}
-
-function buildDiagnostic(err: unknown, fallbackTitle: string): DiagnosticView {
-  const raw = errorMessage(err);
-  const code = extractErrorCode(raw) ?? "E_UNKNOWN";
-  return {
-    title: titleForCode(code, fallbackTitle),
-    code,
-    detail: compactDetail(raw || fallbackTitle),
-    actionHint: actionHintForCode(code),
-  };
-}
-
-function buildTaskEventDiagnostic(ev: TaskEvent, fallbackTitle: string): DiagnosticView {
-  const code = ev.error_code?.trim() || extractErrorCode(ev.message) || "E_UNKNOWN";
-  return {
-    title: ev.stage === "Rewrite" ? "REWRITE FAILED" : titleForCode(code, fallbackTitle),
-    code,
-    detail: compactDetail(ev.message || fallbackTitle),
-    actionHint: actionHintForCode(code),
-  };
-}
-
-function toDiagnosticLine(diag: DiagnosticView): string {
-  return `[${diag.code}] ${diag.detail} | ${diag.actionHint}`;
-}
-
-function hotkeyCaptureHint(errCode?: string | null): string {
-  if (!errCode) return "HOTKEY CAPTURE FAILED";
-  if (errCode.includes("E_CONTEXT_SCREENSHOT_DISABLED")) return "SCREENSHOT DISABLED";
-  if (errCode.includes("E_RECORDING_SESSION_OPEN")) return "HOTKEY SESSION OPEN FAILED";
-  if (errCode.includes("E_HOTKEY_CAPTURE")) return "WINDOW CAPTURE FAILED";
-  return "HOTKEY CAPTURE FAILED";
-}
-
-export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
+export function MainScreen({
+  settings,
+  pushToast,
+  onHistoryChanged,
+  gateway = defaultTauriGateway,
+  timer = browserTimer,
+  clipboard = browserClipboard,
+}: Props) {
   const [ui, setUi] = useState<UiState>("idle");
   const [hover, setHover] = useState(false);
   const [diagnosticLine, setDiagnosticLine] = useState<string>("");
@@ -181,7 +105,7 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
   async function overlaySet(visible: boolean, status: string, detail?: string | null) {
     if (!showOverlayRef.current) return;
     try {
-      await invoke("overlay_set_state", {
+      await gateway.invoke("overlay_set_state", {
         state: { visible, status, detail: detail || null, ts_ms: Date.now() },
       });
     } catch {
@@ -191,7 +115,7 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
 
   function overlayFlash(status: string, ms: number, detail?: string | null) {
     void overlaySet(true, status, detail || null);
-    window.setTimeout(() => {
+    timer.setTimeout(() => {
       void overlaySet(false, "IDLE");
     }, ms);
   }
@@ -199,7 +123,7 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
   async function abortRecordingSessionBestEffort(sessionId: string | null) {
     if (!sessionId || !sessionId.trim()) return;
     try {
-      await invoke("abort_recording_session", { recordingSessionId: sessionId });
+      await gateway.invoke("abort_recording_session", { recordingSessionId: sessionId });
     } catch {
       // ignore
     }
@@ -214,7 +138,7 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
   useEffect(() => {
     (async () => {
       try {
-        const runtime = (await invoke("runtime_toolchain_status")) as RuntimeToolchainStatus;
+        const runtime = (await gateway.invoke("runtime_toolchain_status")) as RuntimeToolchainStatus;
         if (!runtime.ready) {
           pushToast("TOOLCHAIN NOT READY", "danger");
         }
@@ -222,7 +146,7 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
         // ignore
       }
       try {
-        const runtime = (await invoke("runtime_python_status")) as RuntimePythonStatus;
+        const runtime = (await gateway.invoke("runtime_python_status")) as RuntimePythonStatus;
         if (!runtime.ready) {
           pushToast("PYTHON NOT READY", "danger");
         }
@@ -231,7 +155,7 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
       }
 
       try {
-        const rows = (await invoke("history_list", {
+        const rows = (await gateway.invoke("history_list", {
           limit: 1,
           beforeMs: null,
         })) as HistoryItem[];
@@ -262,8 +186,7 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
     };
 
     (async () => {
-      const unlistenDone = await listen<TaskDone>("task_done", async (e) => {
-        const done = e.payload;
+      const unlistenDone = await gateway.listen<TaskDone>("task_done", async (done) => {
         if (!done) return;
         if (done.task_id !== activeTaskIdRef.current) return;
         activeTaskIdRef.current = "";
@@ -274,7 +197,7 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
         setLastText(text);
         setLastMeta(new Date().toLocaleString());
         try {
-          await copyText(text);
+          await clipboard.copyText(text);
           pushToastRef.current("COPIED", "ok");
         } catch {
           pushToastRef.current("COPY FAILED", "danger");
@@ -287,8 +210,7 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
       });
       trackUnlisten(unlistenDone);
 
-      const unlistenEvent = await listen<TaskEvent>("task_event", (e) => {
-        const ev = e.payload;
+      const unlistenEvent = await gateway.listen<TaskEvent>("task_event", (ev) => {
         if (!ev) return;
         if (ev.task_id !== activeTaskIdRef.current) return;
 
@@ -321,13 +243,12 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
       });
       trackUnlisten(unlistenEvent);
 
-      const unlistenHotkey = await listen<HotkeyRecordEvent>("tv_hotkey_record", (e) => {
+      const unlistenHotkey = await gateway.listen<HotkeyRecordEvent>("tv_hotkey_record", (hk) => {
         if (!hasHotkeyConfigRef.current) {
           pushToastRef.current("SETTINGS INVALID", "danger");
           return;
         }
         if (!hotkeysEnabledRef.current) return;
-        const hk = e.payload;
         if (!hk) return;
 
         const cur = uiRef.current;
@@ -343,7 +264,7 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
               setDiagnosticLine(detail);
               pushToastRef.current(hint, "danger");
               void overlaySet(true, "ERROR", hint);
-              window.setTimeout(() => {
+              timer.setTimeout(() => {
                 void overlaySet(false, "IDLE");
               }, 1200);
               return;
@@ -369,7 +290,7 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
             setDiagnosticLine(detail);
             pushToastRef.current(hint, "danger");
             void overlaySet(true, "ERROR", hint);
-            window.setTimeout(() => {
+            timer.setTimeout(() => {
               void overlaySet(false, "IDLE");
             }, 1200);
             return;
@@ -388,7 +309,7 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
       const staleRecordingId = backendRecordingIdRef.current;
       backendRecordingIdRef.current = "";
       if (staleRecordingId) {
-        void invoke("abort_backend_recording", { recordingId: staleRecordingId }).catch(() => {});
+        void gateway.invoke("abort_backend_recording", { recordingId: staleRecordingId }).catch(() => {});
       }
       const staleSessionId = pendingRecordingSessionIdRef.current;
       pendingRecordingSessionIdRef.current = null;
@@ -409,7 +330,7 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
     setDiagnosticLine("");
     if (hotkeySessionRef.current) void overlaySet(true, "REC");
     try {
-      const rid = (await invoke("start_backend_recording")) as string;
+      const rid = (await gateway.invoke("start_backend_recording")) as string;
       backendRecordingIdRef.current = rid;
       setUi("recording");
     } catch (err) {
@@ -434,11 +355,11 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
     let stopResult: StopBackendRecordingResult | null = null;
     try {
       if (hotkeySessionRef.current) void overlaySet(true, "TRANSCRIBING");
-      stopResult = (await invoke("stop_backend_recording", {
+      stopResult = (await gateway.invoke("stop_backend_recording", {
         recordingId: rid,
       })) as StopBackendRecordingResult;
     } catch (err) {
-      void invoke("abort_backend_recording", { recordingId: rid }).catch(() => {});
+      void gateway.invoke("abort_backend_recording", { recordingId: rid }).catch(() => {});
       backendRecordingIdRef.current = "";
       const staleSessionId = pendingRecordingSessionIdRef.current;
       void abortRecordingSessionBestEffort(staleSessionId);
@@ -457,7 +378,7 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
     if (!stopResult) return;
     backendRecordingIdRef.current = "";
     try {
-      const id = (await invoke("start_task", {
+      const id = (await gateway.invoke("start_task", {
         req: {
           triggerSource: hotkeySessionRef.current ? "hotkey" : "ui",
           recordMode: "recording_asset",
@@ -487,7 +408,7 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
     if (!id) return;
     setUi("cancelling");
     try {
-      await invoke("cancel_task", { taskId: id });
+      await gateway.invoke("cancel_task", { taskId: id });
       pushToastRef.current("CANCELLING...", "default");
       setDiagnosticLine("");
       if (hotkeySessionRef.current) void overlaySet(true, "CANCELLING");
@@ -512,7 +433,7 @@ export function MainScreen({ settings, pushToast, onHistoryChanged }: Props) {
   async function copyLast() {
     if (!lastText.trim()) return;
     try {
-      await copyText(lastText);
+      await clipboard.copyText(lastText);
       pushToastRef.current("COPIED", "ok");
     } catch {
       pushToastRef.current("COPY FAILED", "danger");

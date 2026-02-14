@@ -7,7 +7,7 @@ import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Protocol
 
 
 def _now_ms() -> int:
@@ -36,6 +36,15 @@ def _ffprobe_duration_seconds(path: str) -> float:
         text=True,
     ).strip()
     return float(out)
+
+
+class ProbePort(Protocol):
+    def duration_seconds(self, path: str) -> float: ...
+
+
+class DefaultProbePort:
+    def duration_seconds(self, path: str) -> float:
+        return _ffprobe_duration_seconds(path)
 
 
 @dataclass(frozen=True)
@@ -85,13 +94,14 @@ class _Terminated(Exception):
     pass
 
 
-_should_exit = False
+class RunnerRuntime:
+    def __init__(self) -> None:
+        self.exit_requested = False
 
 
-def _install_signal_handlers() -> None:
+def _install_signal_handlers(runtime: RunnerRuntime) -> None:
     def _handler(_signum: int, _frame: Any) -> None:
-        global _should_exit
-        _should_exit = True
+        runtime.exit_requested = True
         # We raise in the main thread to exit promptly from request loop.
         raise _Terminated()
 
@@ -127,9 +137,18 @@ def _load_model(model_id: str, dtype: str, device_map: str, max_inference_batch_
     )
 
 
-def _transcribe(model: Any, audio_path: str, language: str | None) -> str:
+class ModelPort(Protocol):
+    def transcribe(self, model: Any, audio: Any, language: str | None) -> Any: ...
+
+
+class DefaultModelPort:
+    def transcribe(self, model: Any, audio: Any, language: str | None) -> Any:
+        return model.transcribe(audio=audio, language=language)
+
+
+def _transcribe(model: Any, audio_path: str, language: str | None, model_port: ModelPort) -> str:
     # qwen-asr returns a list; each item has `.text` and `.language`.
-    results = model.transcribe(audio=audio_path, language=language)
+    results = model_port.transcribe(model, audio_path, language)
     if not results:
         raise RuntimeError("Empty ASR result list.")
     text = getattr(results[0], "text", None)
@@ -138,7 +157,16 @@ def _transcribe(model: Any, audio_path: str, language: str | None) -> str:
     return text
 
 
-def _handle_request(model: Any, model_id: str, chunk_sec: float, req: dict[str, Any]) -> AsrResponse:
+def _handle_request(
+    model: Any,
+    model_id: str,
+    chunk_sec: float,
+    req: dict[str, Any],
+    probe: ProbePort | None = None,
+    model_port: ModelPort | None = None,
+) -> AsrResponse:
+    probe = probe or DefaultProbePort()
+    model_port = model_port or DefaultModelPort()
     audio_path = req.get("audio_path")
     language = req.get("language", "Chinese")
     device = req.get("device", "cuda")
@@ -161,7 +189,7 @@ def _handle_request(model: Any, model_id: str, chunk_sec: float, req: dict[str, 
             error=AsrError(code="E_AUDIO_NOT_FOUND", message="audio_path does not exist.", details={"audio_path": audio_path}),
         )
 
-    audio_seconds = _ffprobe_duration_seconds(audio_path)
+    audio_seconds = probe.duration_seconds(audio_path)
     t0 = _now_ms()
 
     segments: list[AsrSegment] = []
@@ -174,7 +202,7 @@ def _handle_request(model: Any, model_id: str, chunk_sec: float, req: dict[str, 
         wav = normalize_audios(audio_path)[0]
         parts = split_audio_into_chunks(wav=wav, sr=SAMPLE_RATE, max_chunk_sec=float(chunk_sec))
         chunk_audio = [(cwav, SAMPLE_RATE) for (cwav, _offset_sec) in parts]
-        results = model.transcribe(audio=chunk_audio, language=language)
+        results = model_port.transcribe(model, chunk_audio, language)
         for i, (cwav, offset_sec) in enumerate(parts):
             t = getattr(results[i], "text", "") if i < len(results) else ""
             # cwav is a 1-D waveform (array-like)
@@ -194,7 +222,7 @@ def _handle_request(model: Any, model_id: str, chunk_sec: float, req: dict[str, 
         if not text.strip():
             raise RuntimeError("Empty ASR text (chunked).")
     else:
-        text = _transcribe(model, audio_path=audio_path, language=language)
+        text = _transcribe(model, audio_path=audio_path, language=language, model_port=model_port)
         segments.append(
             AsrSegment(
                 index=0,
@@ -263,7 +291,10 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    _install_signal_handlers()
+    runtime = RunnerRuntime()
+    _install_signal_handlers(runtime)
+    probe = DefaultProbePort()
+    model_port = DefaultModelPort()
 
     model = None
     t0 = _now_ms()
@@ -300,7 +331,7 @@ def main() -> int:
             line = sys.stdin.readline()
             if not line:
                 break
-            if _should_exit:
+            if runtime.exit_requested:
                 break
             line = line.strip()
             if not line:
@@ -329,7 +360,14 @@ def main() -> int:
                         resp = AsrResponse(ok=False, error=AsrError(code="E_PROTOCOL_ONLY", message="protocol-only mode"))
                 else:
                     assert model is not None
-                    resp = _handle_request(model, model_id=args.model, chunk_sec=args.chunk_sec, req=req)
+                    resp = _handle_request(
+                        model,
+                        model_id=args.model,
+                        chunk_sec=args.chunk_sec,
+                        req=req,
+                        probe=probe,
+                        model_port=model_port,
+                    )
             except Exception as e:
                 resp = AsrResponse(ok=False, error=AsrError(code="E_TRANSCRIBE_FAILED", message=str(e)))
 

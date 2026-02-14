@@ -135,6 +135,18 @@
 - `MetricsPort`
   - `append(event)`
 
+### 3.1 当前实现约束（可测试性）
+
+- `TaskManager` 必须通过可注入依赖访问外部系统：
+  - `AsrClient`（ASR 启动/重启/转写）
+  - `ContextCollector`（上下文抓取）
+  - `TaskManagerDeps`（FFmpeg 预处理、模板读取、历史写入、指标写入）
+- 应用编排代码不得直接硬编码外部依赖构造，默认实现由 `TaskManager::new()` 装配，测试可注入替身实现。
+- 前端屏幕组件不得直接绑定 Tauri API；必须通过运行时端口访问：
+  - `TauriGateway`（命令调用与事件订阅）
+  - `TimerPort`（定时器）
+  - `ClipboardPort`（剪贴板）
+
 ## 4. Gate 驱动的关键实现约束
 
 这些是为了让 `quick/full` Gate 可实现而强制的架构约束：

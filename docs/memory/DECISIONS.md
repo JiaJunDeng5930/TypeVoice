@@ -129,3 +129,21 @@
 - 执行：
   - Rust 单测：`trace` 并发 JSONL 可解析、ASR 错误行解析保真、内部失败事件结构完整。
   - 脚本 gate：`verify_quick/full` 固定执行上述契约测试，并要求 ASR 失败包含结构化错误码。
+
+## TaskManager 依赖注入缝隙
+
+- 决策：`TaskManager` 外部依赖改为可注入，不在构造器里硬编码不可替换实现。
+- 依据：核心编排单测需要替换 ASR/上下文/FFmpeg/模板/持久化/指标等外部系统。
+- 执行：新增 `AsrClient`、`ContextCollector`、`TaskManagerDeps`，`TaskManager::new()` 只负责默认装配。
+
+## 前端运行时端口约束
+
+- 决策：屏幕组件不得直接依赖 `@tauri-apps/api` 或 `window` 定时器。
+- 依据：业务状态测试需要脱离 Tauri 运行时，避免每次组件测试都 mock IPC/事件总线。
+- 执行：新增 `runtimePorts.ts`（`TauriGateway`/`TimerPort`/`ClipboardPort`），`MainScreen`/`SettingsScreen`/`HistoryScreen`/`OverlayApp` 统一通过端口访问平台能力。
+
+## Runner 退出状态实例化
+
+- 决策：ASR runner 禁止使用进程级全局退出标记。
+- 依据：全局可变状态会污染同进程重复测试并降低可预测性。
+- 执行：`runner.py` 引入 `RunnerRuntime` 实例管理退出状态，signal handler 写实例字段，不再使用全局 `_should_exit`。

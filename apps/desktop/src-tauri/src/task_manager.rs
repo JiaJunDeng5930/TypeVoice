@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -16,11 +16,132 @@ use uuid::Uuid;
 use crate::{asr_service, data_dir, history, llm, metrics, pipeline, templates};
 use crate::{context_capture, context_pack};
 
+pub trait AsrClient: Send + Sync {
+    fn ensure_started(&self, data_dir: &Path) -> Result<()>;
+    fn restart(&self, data_dir: &Path, reason: &str) -> Result<()>;
+    fn transcribe(
+        &self,
+        data_dir: &Path,
+        task_id: &str,
+        audio_path: &Path,
+        language: &str,
+        token: &CancellationToken,
+        pid_slot: &Arc<Mutex<Option<u32>>>,
+    ) -> Result<(asr_service::AsrResponse, u128)>;
+    fn warmup_ms(&self) -> Option<i64>;
+}
+
+impl AsrClient for asr_service::AsrService {
+    fn ensure_started(&self, data_dir: &Path) -> Result<()> {
+        self.ensure_started(data_dir)
+    }
+
+    fn restart(&self, data_dir: &Path, reason: &str) -> Result<()> {
+        self.restart(data_dir, reason)
+    }
+
+    fn transcribe(
+        &self,
+        data_dir: &Path,
+        task_id: &str,
+        audio_path: &Path,
+        language: &str,
+        token: &CancellationToken,
+        pid_slot: &Arc<Mutex<Option<u32>>>,
+    ) -> Result<(asr_service::AsrResponse, u128)> {
+        self.transcribe(data_dir, task_id, audio_path, language, token, pid_slot)
+    }
+
+    fn warmup_ms(&self) -> Option<i64> {
+        self.warmup_ms()
+    }
+}
+
+pub trait ContextCollector: Send + Sync {
+    fn warmup_best_effort(&self);
+    fn capture_hotkey_context_now(
+        &self,
+        data_dir: &Path,
+        cfg: &context_capture::ContextConfig,
+    ) -> Result<String>;
+    fn take_hotkey_context_once(&self, capture_id: &str) -> Option<context_pack::ContextSnapshot>;
+    fn capture_snapshot_best_effort_with_config(
+        &self,
+        data_dir: &Path,
+        task_id: &str,
+        cfg: &context_capture::ContextConfig,
+    ) -> context_pack::ContextSnapshot;
+}
+
+impl ContextCollector for context_capture::ContextService {
+    fn warmup_best_effort(&self) {
+        self.warmup_best_effort();
+    }
+
+    fn capture_hotkey_context_now(
+        &self,
+        data_dir: &Path,
+        cfg: &context_capture::ContextConfig,
+    ) -> Result<String> {
+        self.capture_hotkey_context_now(data_dir, cfg)
+    }
+
+    fn take_hotkey_context_once(&self, capture_id: &str) -> Option<context_pack::ContextSnapshot> {
+        self.take_hotkey_context_once(capture_id)
+    }
+
+    fn capture_snapshot_best_effort_with_config(
+        &self,
+        data_dir: &Path,
+        task_id: &str,
+        cfg: &context_capture::ContextConfig,
+    ) -> context_pack::ContextSnapshot {
+        self.capture_snapshot_best_effort_with_config(data_dir, task_id, cfg)
+    }
+}
+
+#[derive(Clone)]
+struct TaskManagerDeps {
+    fixture_path: fn(&str) -> Result<PathBuf>,
+    preprocess_to_temp_wav: fn(&str, &Path) -> Result<PathBuf>,
+    preprocess_ffmpeg_cancellable: fn(
+        &Path,
+        &str,
+        &Path,
+        &Path,
+        &CancellationToken,
+        &Arc<Mutex<Option<u32>>>,
+        &pipeline::PreprocessConfig,
+    ) -> Result<u128>,
+    cleanup_audio_artifacts: fn(&Path, &Path) -> Result<()>,
+    get_template: fn(&Path, &str) -> Result<templates::PromptTemplate>,
+    history_append: fn(&Path, &history::HistoryItem) -> Result<()>,
+    metrics_append_jsonl: fn(&Path, &Value) -> Result<()>,
+}
+
+impl Default for TaskManagerDeps {
+    fn default() -> Self {
+        Self {
+            fixture_path: pipeline::fixture_path,
+            preprocess_to_temp_wav: pipeline::preprocess_to_temp_wav,
+            preprocess_ffmpeg_cancellable: pipeline::preprocess_ffmpeg_cancellable,
+            cleanup_audio_artifacts: pipeline::cleanup_audio_artifacts,
+            get_template: templates::get_template,
+            history_append: history::append,
+            metrics_append_jsonl: metrics::append_jsonl,
+        }
+    }
+}
+
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+fn rewrite_entered(opts: &StartOpts) -> bool {
+    opts.rewrite_enabled && opts.template_id.is_some()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -81,8 +202,9 @@ pub enum RecordingTerminal {
 pub struct TaskManager {
     inner: Arc<Mutex<Option<ActiveTask>>>,
     recording_sessions: Arc<Mutex<HashMap<String, RecordingSession>>>,
-    asr: asr_service::AsrService,
-    ctx: context_capture::ContextService,
+    asr: Arc<dyn AsrClient>,
+    ctx: Arc<dyn ContextCollector>,
+    deps: TaskManagerDeps,
 }
 
 struct ActiveTask {
@@ -94,11 +216,24 @@ struct ActiveTask {
 
 impl TaskManager {
     pub fn new() -> Self {
+        Self::with_components(
+            Arc::new(asr_service::AsrService::new()),
+            Arc::new(context_capture::ContextService::new()),
+            TaskManagerDeps::default(),
+        )
+    }
+
+    fn with_components(
+        asr: Arc<dyn AsrClient>,
+        ctx: Arc<dyn ContextCollector>,
+        deps: TaskManagerDeps,
+    ) -> Self {
         Self {
             inner: Arc::new(Mutex::new(None)),
             recording_sessions: Arc::new(Mutex::new(HashMap::new())),
-            asr: asr_service::AsrService::new(),
-            ctx: context_capture::ContextService::new(),
+            asr,
+            ctx,
+            deps,
         }
     }
 
@@ -246,7 +381,7 @@ impl TaskManager {
         fixture_name: String,
         opts: StartOpts,
     ) -> Result<String> {
-        let input = pipeline::fixture_path(&fixture_name)?;
+        let input = (self.deps.fixture_path)(&fixture_name)?;
         self.start_audio(app, input, opts)
     }
 
@@ -260,7 +395,7 @@ impl TaskManager {
         match self.start_audio(app, input_path, opts) {
             Ok(task_id) => Ok(task_id),
             Err(e) => {
-                let _ = pipeline::cleanup_audio_artifacts(&cleanup_input, &cleanup_input);
+                let _ = (self.deps.cleanup_audio_artifacts)(&cleanup_input, &cleanup_input);
                 Err(e)
             }
         }
@@ -355,7 +490,7 @@ impl TaskManager {
                         *g = None;
                     }
                     this.finalize_recording_session_by_task(&task_id);
-                    let _ = pipeline::cleanup_audio_artifacts(&input, &input);
+                    let _ = (this.deps.cleanup_audio_artifacts)(&input, &input);
                 }
             }
         });
@@ -392,6 +527,12 @@ impl TaskManager {
         opts: StartOpts,
     ) -> Result<RecordingTerminal> {
         let data_dir = data_dir::data_dir()?;
+        let preprocess_to_temp_wav = self.deps.preprocess_to_temp_wav;
+        let preprocess_ffmpeg_cancellable = self.deps.preprocess_ffmpeg_cancellable;
+        let cleanup_audio_artifacts = self.deps.cleanup_audio_artifacts;
+        let get_template = self.deps.get_template;
+        let history_append = self.deps.history_append;
+        let metrics_append_jsonl = self.deps.metrics_append_jsonl;
         let ctx_cfg = opts.context_cfg.clone();
         let mut capture_ctx_cfg = ctx_cfg.clone();
         if opts.pre_captured_context.is_some() {
@@ -485,7 +626,7 @@ impl TaskManager {
             "ffmpeg"
         };
         emit_started(&app, &data_dir, &task_id, "Preprocess", preprocess_label);
-        let wav_path = pipeline::preprocess_to_temp_wav(&task_id, &input)?;
+        let wav_path = preprocess_to_temp_wav(&task_id, &input)?;
         let asr_preprocess_cfg = opts.asr_preprocess.clone();
         let preprocess_ms = {
             let inner = self.inner.clone();
@@ -493,11 +634,12 @@ impl TaskManager {
             let task_id2 = task_id.clone();
             let input2 = input.clone();
             let wav2 = wav_path.clone();
+            let preprocess_ffmpeg_cancellable = preprocess_ffmpeg_cancellable;
             let join = tokio::task::spawn_blocking(move || {
                 let active = inner.lock().unwrap();
                 let a = active.as_ref().ok_or_else(|| anyhow!("task missing"))?;
                 // launch ffmpeg inside helper so we can store pid
-                let ms = pipeline::preprocess_ffmpeg_cancellable(
+                let ms = preprocess_ffmpeg_cancellable(
                     &data_dir2,
                     &task_id2,
                     &input2,
@@ -514,7 +656,7 @@ impl TaskManager {
                 Ok(Err(e)) => {
                     if is_cancelled_err(&e) || is_cancelled(&self.inner, &task_id) {
                         emit_cancelled(&app, &data_dir, &task_id, "Preprocess");
-                        let _ = pipeline::cleanup_audio_artifacts(&input, &wav_path);
+                        let _ = cleanup_audio_artifacts(&input, &wav_path);
                         return Ok(RecordingTerminal::Cancelled);
                     }
                     let msg = e.to_string();
@@ -526,7 +668,7 @@ impl TaskManager {
                         "E_PREPROCESS_FAILED"
                     };
                     emit_failed(&app, &data_dir, &task_id, "Preprocess", None, code, &msg);
-                    let _ = pipeline::cleanup_audio_artifacts(&input, &wav_path);
+                    let _ = cleanup_audio_artifacts(&input, &wav_path);
                     return Ok(RecordingTerminal::Failed);
                 }
                 Err(e) => {
@@ -539,7 +681,7 @@ impl TaskManager {
                         "E_INTERNAL",
                         &format!("preprocess_join_failed:{e}"),
                     );
-                    let _ = pipeline::cleanup_audio_artifacts(&input, &wav_path);
+                    let _ = cleanup_audio_artifacts(&input, &wav_path);
                     return Ok(RecordingTerminal::Failed);
                 }
             }
@@ -548,7 +690,7 @@ impl TaskManager {
 
         if is_cancelled(&self.inner, &task_id) {
             emit_cancelled(&app, &data_dir, &task_id, "Preprocess");
-            let _ = pipeline::cleanup_audio_artifacts(&input, &wav_path);
+            let _ = cleanup_audio_artifacts(&input, &wav_path);
             return Ok(RecordingTerminal::Cancelled);
         }
 
@@ -619,7 +761,7 @@ impl TaskManager {
                 Ok(Err(e)) => {
                     if is_cancelled_err(&e) || is_cancelled(&self.inner, &task_id) {
                         emit_cancelled(&app, &data_dir, &task_id, "Transcribe");
-                        let _ = pipeline::cleanup_audio_artifacts(&input, &wav_path);
+                        let _ = cleanup_audio_artifacts(&input, &wav_path);
                         return Ok(RecordingTerminal::Cancelled);
                     }
                     emit_failed(
@@ -631,7 +773,7 @@ impl TaskManager {
                         "E_ASR_FAILED",
                         &e.to_string(),
                     );
-                    let _ = pipeline::cleanup_audio_artifacts(&input, &wav_path);
+                    let _ = cleanup_audio_artifacts(&input, &wav_path);
                     return Ok(RecordingTerminal::Failed);
                 }
                 Err(e) => {
@@ -644,7 +786,7 @@ impl TaskManager {
                         "E_INTERNAL",
                         &format!("transcribe_join_failed:{e}"),
                     );
-                    let _ = pipeline::cleanup_audio_artifacts(&input, &wav_path);
+                    let _ = cleanup_audio_artifacts(&input, &wav_path);
                     return Ok(RecordingTerminal::Failed);
                 }
             }
@@ -660,18 +802,18 @@ impl TaskManager {
 
         if is_cancelled(&self.inner, &task_id) {
             emit_cancelled(&app, &data_dir, &task_id, "Transcribe");
-            let _ = pipeline::cleanup_audio_artifacts(&input, &wav_path);
+            let _ = cleanup_audio_artifacts(&input, &wav_path);
             return Ok(RecordingTerminal::Cancelled);
         }
 
         // We no longer need audio artifacts after ASR; cleanup early.
-        let _ = pipeline::cleanup_audio_artifacts(&input, &wav_path);
+        let _ = cleanup_audio_artifacts(&input, &wav_path);
 
         // Rewrite (optional)
         let mut final_text = asr_text.clone();
         let mut rewrite_ms = None;
         let mut template_id = None;
-        let rewrite_entered = opts.rewrite_enabled && opts.template_id.is_some();
+        let rewrite_entered = rewrite_entered(&opts);
         crate::trace::event(
             &data_dir,
             Some(&task_id),
@@ -690,7 +832,7 @@ impl TaskManager {
                 template_id = Some(tid.clone());
                 emit_started(&app, &data_dir, &task_id, "Rewrite", "llm");
                 let t0 = Instant::now();
-                let tpl = match templates::get_template(&data_dir, &tid) {
+                let tpl = match get_template(&data_dir, &tid) {
                     Ok(t) => Some(t),
                     Err(e) => {
                         rewrite_ms = Some(t0.elapsed().as_millis());
@@ -795,7 +937,7 @@ impl TaskManager {
             asr_ms: asr_ms as i64,
         };
         let db = data_dir.join("history.sqlite3");
-        if let Err(e) = history::append(&db, &item) {
+        if let Err(e) = history_append(&db, &item) {
             emit_failed(
                 &app,
                 &data_dir,
@@ -837,7 +979,7 @@ impl TaskManager {
             template_id,
         };
         let _ = app.emit("task_done", done.clone());
-        if let Err(e) = metrics::append_jsonl(
+        if let Err(e) = metrics_append_jsonl(
             &data_dir,
             &json!({"type":"task_done","task_id":task_id,"rtf":done.rtf,"device":done.device_used}),
         ) {
@@ -847,7 +989,7 @@ impl TaskManager {
         // Perf summary (machine-readable, no sensitive payload).
         let overhead_ms_u128 = asr_ms.saturating_sub(runner_elapsed_ms.max(0) as u128);
         let overhead_ms = overhead_ms_u128.min(u64::MAX as u128) as u64;
-        if let Err(e) = metrics::append_jsonl(
+        if let Err(e) = metrics_append_jsonl(
             &data_dir,
             &json!({
                 "type": "task_perf",
@@ -1021,7 +1163,8 @@ fn kill_pid(pid: u32) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::internal_failure_event;
+    use super::{internal_failure_event, rewrite_entered, StartOpts};
+    use crate::{context_capture, pipeline};
 
     #[test]
     fn internal_failure_event_has_error_code_and_terminal_status() {
@@ -1031,5 +1174,36 @@ mod tests {
         assert_eq!(ev.status, "failed");
         assert_eq!(ev.error_code.as_deref(), Some("E_INTERNAL"));
         assert!(ev.elapsed_ms.is_none());
+    }
+
+    fn base_start_opts() -> StartOpts {
+        StartOpts {
+            rewrite_enabled: false,
+            template_id: None,
+            asr_preprocess: pipeline::PreprocessConfig::default(),
+            rewrite_glossary: Vec::new(),
+            rewrite_include_glossary: true,
+            context_cfg: context_capture::ContextConfig::default(),
+            pre_captured_context: None,
+            recording_session_id: None,
+            record_elapsed_ms: 0,
+            record_label: "Record".to_string(),
+        }
+    }
+
+    #[test]
+    fn rewrite_entered_requires_flag_and_template() {
+        let mut opts = base_start_opts();
+        opts.rewrite_enabled = true;
+        opts.template_id = Some("tpl-1".to_string());
+        assert!(rewrite_entered(&opts));
+    }
+
+    #[test]
+    fn rewrite_entered_false_without_template() {
+        let mut opts = base_start_opts();
+        opts.rewrite_enabled = true;
+        opts.template_id = None;
+        assert!(!rewrite_entered(&opts));
     }
 }

@@ -1,5 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { defaultTauriGateway } from "./infra/runtimePorts";
 import type { Settings } from "./types";
 import { PixelTabs, type TabKey } from "./ui/PixelTabs";
 import { PixelToastHost, type ToastItem, type ToastTone } from "./ui/PixelToast";
@@ -7,8 +7,11 @@ import { MainScreen } from "./screens/MainScreen";
 import { HistoryScreen } from "./screens/HistoryScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
 
+let toastSeq = 0;
+
 function uid() {
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  toastSeq += 1;
+  return `toast-${toastSeq}`;
 }
 
 export default function App() {
@@ -29,7 +32,7 @@ export default function App() {
 
   const reloadSettings = useCallback(async () => {
     try {
-      const s = (await invoke("get_settings")) as Settings;
+      const s = (await defaultTauriGateway.invoke("get_settings")) as Settings;
       setSettings(s);
       setSettingsError(null);
     } catch (err) {
@@ -45,7 +48,7 @@ export default function App() {
 
   const savePatch = useCallback(
     async (patch: Record<string, unknown>) => {
-      const next = (await invoke("update_settings", { patch })) as Settings;
+      const next = (await defaultTauriGateway.invoke("update_settings", { patch })) as Settings;
       setSettings(next);
       setSettingsError(null);
     },

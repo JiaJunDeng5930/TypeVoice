@@ -1,5 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
+import { defaultTauriGateway, type TauriGateway } from "../infra/runtimePorts";
 import type { ApiKeyStatus, ModelStatus, PromptTemplate, Settings } from "../types";
 import { PixelButton } from "../ui/PixelButton";
 import { PixelDialog } from "../ui/PixelDialog";
@@ -12,6 +12,7 @@ type Props = {
   savePatch: (patch: Record<string, unknown>) => Promise<void>;
   pushToast: (msg: string, tone?: "default" | "ok" | "danger") => void;
   onHistoryCleared: () => void;
+  gateway?: TauriGateway;
 };
 
 const REASONING: PixelSelectOption[] = [
@@ -72,6 +73,7 @@ export function SettingsScreen({
   savePatch,
   pushToast,
   onHistoryCleared,
+  gateway = defaultTauriGateway,
 }: Props) {
   const [asrModel, setAsrModel] = useState("");
   const [asrPreprocessTrimEnabled, setAsrPreprocessTrimEnabled] = useState(false);
@@ -194,7 +196,7 @@ export function SettingsScreen({
 
   async function refreshTemplates() {
     try {
-      const t = (await invoke("list_templates")) as PromptTemplate[];
+      const t = (await gateway.invoke("list_templates")) as PromptTemplate[];
       setTemplates(t);
       if (!tplId) setTplId(t[0]?.id || "");
 
@@ -210,7 +212,7 @@ export function SettingsScreen({
 
   async function refreshModelStatus() {
     try {
-      const st = (await invoke("asr_model_status")) as ModelStatus;
+      const st = (await gateway.invoke("asr_model_status")) as ModelStatus;
       setModelStatus(st);
     } catch {
       setModelStatus(null);
@@ -220,7 +222,7 @@ export function SettingsScreen({
   async function downloadModel() {
     pushToast("DOWNLOADING...", "default");
     try {
-      const st = (await invoke("download_asr_model")) as ModelStatus;
+      const st = (await gateway.invoke("download_asr_model")) as ModelStatus;
       setModelStatus(st);
       pushToast(st.ok ? "MODEL OK" : "MODEL FAILED", st.ok ? "ok" : "danger");
     } catch {
@@ -357,7 +359,7 @@ export function SettingsScreen({
     const base = templates.find((t) => t.id === tplId);
     if (!base) return;
     try {
-      const updated = (await invoke("upsert_template", {
+      const updated = (await gateway.invoke("upsert_template", {
         tpl: { ...base, system_prompt: tplDraft },
       })) as PromptTemplate;
       setTemplates((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
@@ -369,7 +371,7 @@ export function SettingsScreen({
 
   async function exportTemplates() {
     try {
-      const s = (await invoke("templates_export_json")) as string;
+      const s = (await gateway.invoke("templates_export_json")) as string;
       setTemplatesJson(s);
       pushToast("EXPORTED", "ok");
     } catch {
@@ -381,7 +383,7 @@ export function SettingsScreen({
     const json = templatesJson.trim();
     if (!json) return;
     try {
-      await invoke("templates_import_json", { json, mode });
+      await gateway.invoke("templates_import_json", { json, mode });
       await refreshTemplates();
       pushToast("IMPORTED", "ok");
     } catch {
@@ -393,7 +395,7 @@ export function SettingsScreen({
     const k = keyDraft.trim();
     if (!k) return;
     try {
-      await invoke("set_llm_api_key", { apiKey: k });
+      await gateway.invoke("set_llm_api_key", { apiKey: k });
       setKeyDraft("");
       pushToast("KEY SAVED", "ok");
     } catch {
@@ -403,7 +405,7 @@ export function SettingsScreen({
 
   async function clearApiKey() {
     try {
-      await invoke("clear_llm_api_key");
+      await gateway.invoke("clear_llm_api_key");
       pushToast("KEY CLEARED", "ok");
     } catch {
       pushToast("KEY CLEAR FAILED", "danger");
@@ -412,7 +414,7 @@ export function SettingsScreen({
 
   async function checkApiKey() {
     try {
-      const st = (await invoke("llm_api_key_status")) as ApiKeyStatus;
+      const st = (await gateway.invoke("llm_api_key_status")) as ApiKeyStatus;
       pushToast(
         st.configured ? "KEY OK" : "KEY MISSING",
         st.configured ? "ok" : "danger",
@@ -424,7 +426,7 @@ export function SettingsScreen({
 
   async function clearHistory() {
     try {
-      await invoke("history_clear");
+      await gateway.invoke("history_clear");
       pushToast("HISTORY CLEARED", "ok");
       onHistoryCleared();
     } catch {
@@ -461,7 +463,7 @@ export function SettingsScreen({
 
       try {
         const ignoreSelf = recordingHotkey === "ptt" ? hotkeyPtt : hotkeyToggle;
-        const result = (await invoke("check_hotkey_available", {
+        const result = (await gateway.invoke("check_hotkey_available", {
           shortcut: candidate,
           ignore_self: ignoreSelf?.trim() || null,
         })) as HotkeyAvailability;
@@ -499,7 +501,7 @@ export function SettingsScreen({
     hotkeyPtt,
     hotkeyToggle,
     pushToast,
-    invoke,
+    gateway,
   ]);
 
   const asrStatusText = useMemo(() => {

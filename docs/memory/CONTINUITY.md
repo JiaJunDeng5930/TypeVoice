@@ -39,6 +39,12 @@
 - [VERIFIED] gate 已纳入可调试性自动化：`verify_quick/full` 新增 Rust 可调试性契约测试步骤，并要求 ASR 失败时必须有结构化 `error.code`。
 - [VERIFIED] 本仓已完成回归：`cargo check --locked`、`npm run build`、`pytest -q tests`、`verify_quick.py`、`verify_full.py` 全部通过。
 - [VERIFIED] 2026-02-14：已清理错误路径 `/home/atticusdeng/Projects/TypeVoice` 下误拉取产物（`.venv`、`models`、`apps/desktop/node_modules`、toolchain 可执行）；随后按文档在 `D:\Projects\TypeVoice` 执行 `.\scripts\windows\run-latest.ps1`，成功拉起 Windows runtime（`typevoice-desktop.exe`, PID `38500`）。
+- [VERIFIED] `TaskManager` 已引入可注入依赖缝隙：新增 `AsrClient`、`ContextCollector` 与 `TaskManagerDeps`，核心编排不再硬编码外部依赖构造。
+- [VERIFIED] 前端已接入运行时端口层：新增 `src/infra/runtimePorts.ts`，`MainScreen`/`SettingsScreen`/`HistoryScreen`/`OverlayApp` 通过 `TauriGateway`/`TimerPort`/`ClipboardPort` 访问平台能力。
+- [VERIFIED] 诊断逻辑已从 UI 抽离：新增 `src/domain/diagnostic.ts`，`MainScreen` 仅消费纯函数输出，降低组件内业务逻辑耦合。
+- [VERIFIED] `asr_runner/runner.py` 已移除全局 `_should_exit`，改为 `RunnerRuntime` 实例状态；并引入 `ProbePort`/`ModelPort` 注入缝隙。
+- [VERIFIED] 本轮本机回归结果：`cargo test -q`（通过）、`npm run build`（通过）、`./.venv/bin/python -m pytest -q tests`（通过）。
+- [VERIFIED] `verify_quick.py` 在当前环境失败：缺少本地模型目录 `models/Qwen3-ASR-0.6B`；失败原因为环境资产缺失而非编译错误。
 
 ### 当前工作集
 
