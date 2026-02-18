@@ -75,8 +75,6 @@ pub async fn auto_paste_text(
 mod windows {
     use super::ExportError;
     use std::mem;
-    use std::thread;
-    use std::time::{Duration, Instant};
     use windows_sys::Win32::Foundation::{GetLastError, HWND};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, IsWindow,
@@ -91,7 +89,10 @@ mod windows {
             )
         })?;
 
-        ensure_foreground_window(target)?;
+        // Best effort: bring target to foreground before sending paste message.
+        unsafe {
+            SetForegroundWindow(target);
+        }
 
         let mut focus_target = target;
         let mut pid: u32 = 0;
@@ -114,7 +115,7 @@ mod windows {
                 0,
                 SMTO_ABORTIFHUNG,
                 1200,
-                &mut result as *mut usize,
+                &mut result,
             )
         };
         if ok == 0 {
@@ -131,61 +132,18 @@ mod windows {
     }
 
     fn resolve_target_window(hwnd_hint: Option<isize>) -> Option<HWND> {
-        let hwnd = unsafe { GetForegroundWindow() };
-        if is_foreign_window(hwnd) {
-            return Some(hwnd);
-        }
-
         if let Some(raw) = hwnd_hint {
             let hwnd = raw as HWND;
             if is_foreign_window(hwnd) {
                 return Some(hwnd);
             }
         }
+
+        let hwnd = unsafe { GetForegroundWindow() };
+        if is_foreign_window(hwnd) {
+            return Some(hwnd);
+        }
         None
-    }
-
-    fn ensure_foreground_window(target: HWND) -> Result<(), ExportError> {
-        let set_fg_ok = unsafe { SetForegroundWindow(target) };
-        if is_foreground_window(target) {
-            return Ok(());
-        }
-
-        let start = Instant::now();
-        while start.elapsed() < Duration::from_millis(300) {
-            if is_foreground_window(target) {
-                return Ok(());
-            }
-            thread::sleep(Duration::from_millis(20));
-        }
-
-        let current = unsafe { GetForegroundWindow() };
-        let mut current_pid: u32 = 0;
-        if !current.is_null() {
-            unsafe {
-                GetWindowThreadProcessId(current, &mut current_pid);
-            }
-        }
-        let mut target_pid: u32 = 0;
-        unsafe {
-            GetWindowThreadProcessId(target, &mut target_pid);
-        }
-        let last_error = unsafe { GetLastError() };
-        Err(ExportError::new(
-            "E_EXPORT_TARGET_FOCUS_FAILED",
-            format!(
-                "failed to focus target window before paste: set_fg_ok={set_fg_ok}, last_error={last_error}, target={:p}, target_pid={target_pid}, foreground={:p}, foreground_pid={current_pid}",
-                target, current
-            ),
-        ))
-    }
-
-    fn is_foreground_window(target: HWND) -> bool {
-        if target.is_null() {
-            return false;
-        }
-        let current = unsafe { GetForegroundWindow() };
-        !current.is_null() && current == target
     }
 
     fn is_foreign_window(hwnd: HWND) -> bool {
