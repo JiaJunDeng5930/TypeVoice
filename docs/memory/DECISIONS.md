@@ -149,8 +149,14 @@
 - 执行：
   - `settings.json` 新增 `auto_paste_enabled`（默认 `true`）。
   - Windows 使用窗口消息 `WM_PASTE` 路径，目标窗口优先取“最近外部窗口”句柄。
-  - Linux 使用 AT-SPI 在焦点可编辑对象执行文本写入（不走快捷键）。
-  - 自动粘贴失败返回结构化错误码并在 UI 显示，不静默吞错。
+- Linux 使用 AT-SPI 在焦点可编辑对象执行文本写入（不走快捷键）。
+- 自动粘贴失败返回结构化错误码并在 UI 显示，不静默吞错。
+
+## Windows 自动粘贴目标窗口选择与前台校验
+
+- 决策：Windows 自动粘贴时，目标窗口优先使用“当前前台外部窗口”，仅在当前前台不是外部窗口时才回退到 `last_external_hwnd`；且发送 `WM_PASTE` 前必须校验目标窗口已成功切到前台。
+- 依据：仅依赖历史句柄或仅以 `SendMessageTimeoutW` 返回值作为成功依据，会出现“提示已粘贴但用户未见文本落入目标输入框”的误报。
+- 执行：`export::windows::resolve_target_window` 调整为 foreground-first；新增前台窗口校验失败码 `E_EXPORT_TARGET_FOCUS_FAILED`。
 
 ## Runner 退出状态实例化
 

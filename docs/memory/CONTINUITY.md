@@ -48,6 +48,7 @@
 - [VERIFIED] 平台实现已接通：Windows 路径使用 `WM_PASTE`；Linux 路径使用 AT-SPI 焦点可编辑对象写入；均不使用快捷键模拟。
 - [UNCONFIRMED] Windows 端自动粘贴实机闭环待验证：`task_done -> export_text -> WM_PASTE` 在记事本/浏览器输入框可稳定工作。
 - [UNCONFIRMED] Linux 端自动粘贴实机闭环待验证：X11/Wayland 会话下 AT-SPI 焦点对象写入行为待验证。
+- [UNCONFIRMED] Windows 自动粘贴判定已收紧：`export::auto_paste_text` 目标窗口优先取“当前前台外部窗口”再回退 `last_external_hwnd`，并在发送 `WM_PASTE` 前强制校验目标窗口已成功切前台；若未切前台则返回 `E_EXPORT_TARGET_FOCUS_FAILED`，避免“显示 PASTED 但未实际粘贴”的误报。待校验路径：Windows 热键链路在记事本/浏览器输入框实机验证一次成功与失败提示。
 - [VERIFIED] 本轮本机回归结果：`cargo test -q`（通过）、`npm run build`（通过）、`./.venv/bin/python -m pytest -q tests`（通过）。
 - [VERIFIED] `verify_quick.py` 在当前环境失败：缺少本地模型目录 `models/Qwen3-ASR-0.6B`；失败原因为环境资产缺失而非编译错误。
 
