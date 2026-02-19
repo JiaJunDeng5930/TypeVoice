@@ -56,7 +56,7 @@
 - 后端提供统一导出命令 `export_text`，负责“复制 + 自动粘贴”。
 - 自动粘贴默认开启，可通过设置项 `auto_paste_enabled` 关闭。
 - 粘贴动作禁止依赖快捷键模拟；必须使用平台能力：
-  - Windows：窗口消息粘贴（如 `WM_PASTE`）。
+  - Windows：通过 `SendInput + KEYEVENTF_UNICODE` 直接提交 Unicode 文本输入（不使用 `WM_PASTE`）。
   - Linux：AT-SPI 可访问性接口对焦点可编辑对象写入文本。
 - 自动粘贴失败必须返回结构化错误码与摘要，且不影响任务文本产出与历史持久化。
 

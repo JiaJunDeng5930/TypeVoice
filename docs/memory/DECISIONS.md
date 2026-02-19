@@ -154,9 +154,9 @@
 - 依据：用户要求在 Linux 与 Windows 下自动粘贴，且粘贴动作不得通过快捷键模拟。
 - 执行：
   - `settings.json` 新增 `auto_paste_enabled`（默认 `true`）。
-  - Windows 使用窗口消息 `WM_PASTE` 路径，并收敛为“当前前台线程焦点控件单路径执行”：不使用 `last_external_hwnd` hint，不做目标窗口回退。
+  - Windows 使用 `SendInput + KEYEVENTF_UNICODE` 直接提交 Unicode 文本输入，并收敛为“当前前台线程焦点控件单路径执行”：不使用 `last_external_hwnd` hint，不做目标窗口回退。
   - Windows 导出时若 overlay 显示，前端先隐藏 overlay 再调用 `export_text`，避免 overlay 抢前台焦点。
-  - Windows 目标判定增加“自进程拒绝”：若前台窗口/焦点窗口属于 TypeVoice，返回 `E_EXPORT_TARGET_UNAVAILABLE`，禁止上报“粘贴成功”。
+  - Windows 目标判定增加“自进程拒绝”：若前台窗口/焦点窗口属于 TypeVoice，返回 `E_EXPORT_TARGET_UNAVAILABLE`，禁止上报“自动输入成功”。
   - Linux 使用 AT-SPI 在焦点可编辑对象执行文本写入（不走快捷键）。
   - 自动粘贴失败返回结构化错误码并在 UI 显示，不静默吞错。
 

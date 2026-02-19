@@ -47,11 +47,11 @@
 - [VERIFIED] `asr_runner/runner.py` 已移除全局 `_should_exit`，改为 `RunnerRuntime` 实例状态；并引入 `ProbePort`/`ModelPort` 注入缝隙。
 - [VERIFIED] 新增导出命令 `export_text`：后端统一执行复制与自动粘贴开关判定，返回结构化导出结果（`copied/auto_paste_*` 与错误码）。
 - [VERIFIED] 设置链路新增 `auto_paste_enabled` 并接入 UI（`SettingsScreen` 新增 `EXPORT` 开关，默认开启）。
-- [VERIFIED] 平台实现已接通：Windows 路径使用 `WM_PASTE`；Linux 路径使用 AT-SPI 焦点可编辑对象写入；均不使用快捷键模拟。
-- [VERIFIED] Windows 自动粘贴路径已收敛为“当前焦点控件单路径执行”：`export_text` 不再使用 `last_external_hwnd` hint，也不再做目标窗口回退；Windows 仅对当前前台线程焦点控件发送一次 `WM_PASTE`。
-- [UNCONFIRMED] 热键链路在执行 `export_text` 前已先隐藏 overlay（并短暂等待窗口焦点稳定），以避免 overlay 抢前台导致 `WM_PASTE` 命中自身窗口。
+- [VERIFIED] 平台实现已接通：Windows 路径使用 `SendInput + KEYEVENTF_UNICODE` 直接提交 Unicode 文本输入；Linux 路径使用 AT-SPI 焦点可编辑对象写入；均不使用快捷键模拟。
+- [VERIFIED] Windows 自动粘贴路径已收敛为“当前焦点控件单路径执行”：`export_text` 不再使用 `last_external_hwnd` hint，也不再做目标窗口回退；Windows 仅对当前前台线程焦点控件直接提交 Unicode 输入。
+- [UNCONFIRMED] 热键链路在执行 `export_text` 前已先隐藏 overlay（并短暂等待窗口焦点稳定），以避免 overlay 抢前台导致 Unicode 输入命中自身窗口。
 - [UNCONFIRMED] Windows 自动粘贴新增“自进程目标拒绝”校验：若前台窗口或焦点窗口属于 TypeVoice 进程，直接返回 `E_EXPORT_TARGET_UNAVAILABLE`，不再回报 `auto_paste_ok=true`。
-- [UNCONFIRMED] Windows 端自动粘贴实机闭环待验证：`task_done -> export_text -> WM_PASTE` 在记事本/浏览器输入框可稳定工作。
+- [UNCONFIRMED] Windows 端自动粘贴实机闭环待验证：`task_done -> export_text -> SendInput Unicode` 在记事本/浏览器输入框可稳定工作。
 - [UNCONFIRMED] Linux 端自动粘贴实机闭环待验证：X11/Wayland 会话下 AT-SPI 焦点对象写入行为待验证。
 - [VERIFIED] 本轮本机回归结果：`cargo test -q`（通过）、`npm run build`（通过）、`./.venv/bin/python -m pytest -q tests`（通过）。
 - [VERIFIED] `verify_quick.py` 在当前环境失败：缺少本地模型目录 `models/Qwen3-ASR-0.6B`；失败原因为环境资产缺失而非编译错误。
