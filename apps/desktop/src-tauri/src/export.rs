@@ -1,5 +1,3 @@
-use std::cmp;
-
 #[derive(Debug, Clone)]
 pub struct ExportError {
     pub code: String,
@@ -184,10 +182,11 @@ mod windows {
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use super::{cmp, ExportError};
+    use super::ExportError;
     use atspi::proxy::accessible::ObjectRefExt;
     use atspi::proxy::proxy_ext::ProxyExt;
     use atspi::{AccessibilityConnection, Interface, ObjectRefOwned, State};
+    use std::cmp;
 
     const MAX_TRAVERSE_NODES: usize = 2048;
 
