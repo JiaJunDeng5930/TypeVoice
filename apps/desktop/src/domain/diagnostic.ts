@@ -46,13 +46,6 @@ function titleForCode(code: string, fallback: string): string {
   if (code === "E_RECORD_UNSUPPORTED") return "RECORDING UNSUPPORTED";
   if (code.startsWith("E_RECORD_")) return "RECORDING FAILED";
   if (code === "E_CMD_CANCEL") return "CANCEL FAILED";
-  if (code === "E_EXPORT_PERMISSION_DENIED") return "AUTO PASTE PERMISSION DENIED";
-  if (code === "E_EXPORT_TARGET_READONLY") return "AUTO PASTE TARGET READONLY";
-  if (code === "E_EXPORT_SELECTION_UNAVAILABLE") return "AUTO PASTE SELECTION UNAVAILABLE";
-  if (code === "E_EXPORT_AUTOMATION_UNAVAILABLE") return "AUTO PASTE UNAVAILABLE";
-  if (code === "E_EXPORT_TARGET_SELF_APP") return "AUTO PASTE TARGET INVALID";
-  if (code === "E_EXPORT_TARGET_NOT_EDITABLE") return "AUTO PASTE TARGET NOT EDITABLE";
-  if (code === "E_EXPORT_PASTE_FAILED") return "AUTO PASTE FAILED";
   if (code.startsWith("HTTP_")) return "LLM REQUEST FAILED";
   return fallback;
 }
@@ -66,19 +59,6 @@ function actionHintForCode(code: string): string {
     return "CHECK ASR MODEL + CUDA RUNTIME";
   }
   if (code.startsWith("HTTP_")) return "CHECK LLM ENDPOINT / API KEY";
-  if (code === "E_EXPORT_PERMISSION_DENIED") {
-    return "GRANT ACCESSIBILITY/UI AUTOMATION PERMISSION";
-  }
-  if (code === "E_EXPORT_TARGET_SELF_APP") {
-    return "FOCUS DESTINATION INPUT BEFORE RECORDING";
-  }
-  if (code === "E_EXPORT_TARGET_NOT_EDITABLE" || code === "E_EXPORT_SELECTION_UNAVAILABLE") {
-    return "FOCUS A STANDARD EDITABLE INPUT";
-  }
-  if (code === "E_EXPORT_TARGET_READONLY") return "TARGET IS READONLY OR DISABLED";
-  if (code === "E_EXPORT_AUTOMATION_UNAVAILABLE" || code === "E_EXPORT_PASTE_FAILED") {
-    return "CHECK TARGET APP SUPPORTS DIRECT TEXT WRITE";
-  }
   if (code === "E_TASK_ALREADY_ACTIVE" || code === "E_RECORD_ALREADY_ACTIVE") {
     return "WAIT FOR CURRENT TASK OR RECORDING TO FINISH";
   }
