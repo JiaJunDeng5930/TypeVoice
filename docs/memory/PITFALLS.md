@@ -37,5 +37,5 @@
 - Debug 级日志可用于排障，但默认关闭敏感内容采集；开启时仅写入项目内必要字段（路径尽量去标识化）。
 - 任何自动化结论需保留最小上下文，避免把非事实的推断当结论。
 - `trace.jsonl` 在并发写场景下需序列化写入；否则可能出现粘连行导致 JSON 解析失败。
-- Windows 自动粘贴链路里，`SendMessageTimeoutW(WM_PASTE)` 返回成功并不等于“文本已进入目标输入框”；目标窗口/焦点判定必须与任务时刻一致，且不能依赖“最近外部窗口”推断来宣称成功。
-- Windows 热键 overlay 若在导出时仍保持可见，可能抢占前台焦点，导致 `WM_PASTE` 误投递到 TypeVoice 自身窗口并产生“假成功”；导出前先隐藏 overlay 并校验目标进程归属。
+- Windows 自动粘贴改为 UI Automation 后，最常见失败根因是权限隔离（UIPI/完整性级别）和目标控件不暴露可写 Pattern；出现 `E_EXPORT_PERMISSION_DENIED` 或 `E_EXPORT_TARGET_NOT_EDITABLE` 时，先校验权限与目标控件类型。
+- macOS 自动粘贴依赖 Accessibility 授权与目标元素可写属性；未授权或目标不支持 `AXValue`/`AXSelectedTextRange` 时会失败，需先确认系统授权状态与焦点控件能力。

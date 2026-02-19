@@ -10,7 +10,7 @@
 
 ## 2. 范围（MVP）
 
-- 平台：Windows 桌面端为主；自动粘贴能力需兼容 Linux 与 Windows。
+- 平台：Windows 桌面端为主；自动粘贴能力需兼容 Linux、Windows 与 macOS。
 - 流程：Record -> Preprocess(FFmpeg) -> Transcribe(ASR) -> Rewrite(LLM，可选) -> Persist -> Export(copy + auto paste)。
 - ASR：`Qwen/Qwen3-ASR-0.6B`，PyTorch CUDA，禁止 CPU 降级。
 - LLM 改写：仅在用户启用时发送转录文本与必要上下文，不上传音频。
