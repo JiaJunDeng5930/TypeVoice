@@ -171,6 +171,16 @@ From WSL:
 
 ## 8. Common Pitfalls And Fixes
 
+### Execution Discipline
+
+When this document's commands are used as operating instructions, execute them exactly as written.
+
+- Do not rewrite command bodies.
+- Do not wrap them with extra scripts.
+- Do not add pre/post steps unless the document explicitly says so.
+- If a documented command fails, report the original error output first and stop.
+- Do not modify git config, environment config, or workflow policy unless explicitly requested by the user.
+
 ### 8.1 `cmd.exe` says UNC paths are not supported
 
 Symptom:
