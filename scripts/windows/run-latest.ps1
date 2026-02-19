@@ -105,7 +105,7 @@ $env:RUST_LOG = "debug"
 $desktopDirEscaped = $desktopPath.Replace('"', '""')
 $logFileEscaped = $logFile.Replace('"', '""')
 $devCommand = "cd /d `"$desktopDirEscaped`" && set RUST_BACKTRACE=1 && set RUST_LOG=debug && npm run tauri dev >> `"$logFileEscaped`" 2>&1"
-$devProcess = Start-Process -FilePath "cmd.exe" -ArgumentList @("/d", "/c", $devCommand) -PassThru
+$devProcess = Start-Process -FilePath "cmd.exe" -ArgumentList @("/d", "/c", $devCommand) -WindowStyle Hidden -PassThru
 
 Info "waiting for runtime process to appear: $frontendBinary"
 $runtime = Wait-ForFrontendBinary -ExePath $frontendBinary
