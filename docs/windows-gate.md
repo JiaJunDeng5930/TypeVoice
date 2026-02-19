@@ -24,6 +24,26 @@ Set-Location D:\Projects\TypeVoice
 
 该脚本会先下载并校验受控 FFmpeg 工具链（`apps/desktop/src-tauri/toolchain/bin/...`），不再依赖系统 PATH 里的 `ffmpeg/ffprobe`。
 
+## Command Discipline (Zero Deviation)
+
+When this document is used as the execution source, follow commands exactly as written.
+
+- No command rewrite.
+- No extra wrappers.
+- No extra pre/post steps.
+- If a command fails, return the original error first and stop.
+- Only use remediation commands explicitly documented in this file or `docs/windows-dev.md`.
+
+Prohibited behavior:
+
+- Replacing documented commands with custom “equivalent” commands.
+- Reading/changing script internals before reporting the original command failure.
+- Adding undocumented process cleanup or environment mutation and still claiming “doc-compliant execution”.
+
+- Strictly follow documented commands with zero deviation.
+- Strictly follow documented commands with zero deviation.
+- Strictly follow documented commands with zero deviation.
+
 ## Fast Gate: Windows Compile Check
 
 If you only need a quick "does the Windows Rust backend compile?" check, run:

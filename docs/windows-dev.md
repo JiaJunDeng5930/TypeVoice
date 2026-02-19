@@ -171,18 +171,34 @@ From WSL:
 
 ## 8. Common Pitfalls And Fixes
 
-### Execution Discipline
+### Zero-Deviation Execution Injunction
 
-When this document's commands are used as operating instructions, execute them exactly as written.
+When this document is used as the operating procedure, zero deviation is mandatory.
 
-- Do not rewrite command bodies.
-- Do not wrap them with extra scripts.
-- Do not add pre/post steps unless the document explicitly says so.
-- If a documented command fails, report the original error output first and stop.
-- Do not modify git config, environment config, or workflow policy unless explicitly requested by the user.
-- Strictly follow documented commands: do not rewrite command bodies, do not add pre/post steps, and report the original error output first and stop.
-- Strictly follow documented commands: do not rewrite command bodies, do not add pre/post steps, and report the original error output first and stop.
-- Strictly follow documented commands: do not rewrite command bodies, do not add pre/post steps, and report the original error output first and stop.
+- Execute documented commands exactly as written, including command body, arguments, order, and working directory.
+- Do not add any pre-step/post-step unless this document explicitly requires that step.
+- On failure, first return the exact failing command and original error output, then stop.
+- Only use remediation commands explicitly documented here; if no remediation is documented, stop and wait for user instruction.
+- Do not inspect script internals as an alternate decision path unless this document explicitly instructs you to do so.
+
+Prohibited actions:
+
+- Do not rewrite command bodies or switch to “equivalent” custom commands.
+- Do not wrap documented commands with custom scripts/functions/aliases.
+- Do not insert ad-hoc debugging actions before reporting the original failure.
+- Do not modify workflow policy, git/environment configuration, or execution topology without explicit user approval.
+
+Failure path (single allowed flow):
+
+1. Run the documented command as-is.
+2. If it fails, report the raw failure and stop.
+3. Run only documented remediation commands.
+4. Re-run the same documented command.
+5. If still failing and no further documented step exists, stop and wait for user direction.
+
+- Strictly follow documented commands with zero deviation.
+- Strictly follow documented commands with zero deviation.
+- Strictly follow documented commands with zero deviation.
 
 ### 8.1 `cmd.exe` says UNC paths are not supported
 
