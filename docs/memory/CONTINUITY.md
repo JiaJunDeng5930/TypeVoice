@@ -55,6 +55,9 @@
 - [UNCONFIRMED] Linux 端自动粘贴实机闭环待验证：X11/Wayland 会话下 AT-SPI 焦点对象写入行为待验证。
 - [VERIFIED] 本轮本机回归结果：`cargo test -q`（通过）、`npm run build`（通过）、`./.venv/bin/python -m pytest -q tests`（通过）。
 - [VERIFIED] `verify_quick.py` 在当前环境失败：缺少本地模型目录 `models/Qwen3-ASR-0.6B`；失败原因为环境资产缺失而非编译错误。
+- [VERIFIED] 2026-02-19：自动粘贴实现改为“直接提交 Unicode 文本输入”：Windows 路径替换为 `SendInput + KEYEVENTF_UNICODE`，Linux 继续 AT-SPI `EditableText.InsertText`，导出命令接口保持不变。
+- [VERIFIED] 2026-02-19：按文档从 WSL 触发 `scripts/windows/windows_gate.ps1`，Windows compile gate 与 FFmpeg toolchain 准备通过，并进入 `npm run tauri dev`（检测到 `typevoice-desktop.exe` 进程）。
+- [VERIFIED] 2026-02-19：当前 WSL 工作区不存在 `./.venv/bin/python`，且系统 `python3` 未安装 `pytest`；无法在该环境执行 `pytest -q tests`。
 
 ### 当前工作集
 

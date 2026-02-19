@@ -17,6 +17,7 @@
 
 - WSL 下调用 Windows 命令时，不能默认信任父 shell 的 PATH；需确认 `cargo`、`node`、`ffmpeg` 在调用链可见。
 - PowerShell 参数中 `$`、反引号等特殊字符需在传递层面转义，避免命令在执行前被当前 shell 污染。
+- 从 WSL 通过 `powershell.exe -Command "Set-Location ..."` 进入 `\\wsl.localhost\...` 路径时，反斜杠转义不当会导致 `Set-Location` 失败；优先直接用脚本 `-File` 路径，让脚本内部基于 `$PSScriptRoot` 定位仓库根目录。
 - `run-latest.ps1` 若报 `tauri-latest-run.txt is being used by another process`，说明旧会话未清理干净；先执行文档中的停止命令清理 `typevoice-desktop.exe` 与 `node.exe`，再重跑同一命令。
 - `verify_quick.py` 会在本地模型缺失时直接失败（`models/Qwen3-ASR-0.6B`）；在无模型环境中先补齐模型资产再跑 gate，避免把环境缺失误判为代码回归。
 - `verify_quick.py` 在仓库根目录缺失 `./.venv` 时会直接失败（`FAIL: .venv missing`）；在执行 gate 之前先恢复项目本地虚拟环境。
