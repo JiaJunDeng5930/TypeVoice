@@ -121,6 +121,14 @@ export function MainScreen({
     }, ms);
   }
 
+  function waitMs(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      timer.setTimeout(() => {
+        resolve();
+      }, ms);
+    });
+  }
+
   async function abortRecordingSessionBestEffort(sessionId: string | null) {
     if (!sessionId || !sessionId.trim()) return;
     try {
@@ -199,6 +207,10 @@ export function MainScreen({
         setLastMeta(new Date().toLocaleString());
         const fromHotkey = hotkeySessionRef.current;
         try {
+          if (fromHotkey && showOverlayRef.current) {
+            await overlaySet(false, "IDLE");
+            await waitMs(60);
+          }
           const exported = (await gateway.invoke("export_text", {
             req: {
               taskId: done.task_id,

@@ -70,6 +70,7 @@ mod windows {
     use super::ExportError;
     use std::mem;
     use windows_sys::Win32::Foundation::{GetLastError, HWND};
+    use windows_sys::Win32::System::Threading::GetCurrentProcessId;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, IsWindow,
         SendMessageTimeoutW, GUITHREADINFO, SMTO_ABORTIFHUNG, WM_PASTE,
@@ -82,31 +83,48 @@ mod windows {
                 "no focused foreground window available for auto paste",
             )
         })?;
+        if target.foreground_pid == target.self_pid || target.focus_pid == target.self_pid {
+            return Err(ExportError::new(
+                "E_EXPORT_TARGET_UNAVAILABLE",
+                format!(
+                    "focused target belongs to TypeVoice process (foreground_pid={}, focus_pid={}, self_pid={})",
+                    target.foreground_pid, target.focus_pid, target.self_pid
+                ),
+            ));
+        }
 
         let mut result: usize = 0;
         let ok = unsafe {
-            SendMessageTimeoutW(target, WM_PASTE, 0, 0, SMTO_ABORTIFHUNG, 1200, &mut result)
+            SendMessageTimeoutW(target.hwnd, WM_PASTE, 0, 0, SMTO_ABORTIFHUNG, 1200, &mut result)
         };
         if ok == 0 {
             let err = unsafe { GetLastError() };
             return Err(ExportError::new(
                 "E_EXPORT_PASTE_FAILED",
                 format!(
-                    "SendMessageTimeoutW(WM_PASTE) failed: last_error={err}, hwnd={:p}",
-                    target
+                    "SendMessageTimeoutW(WM_PASTE) failed: last_error={err}, focus_hwnd={:p}, foreground_hwnd={:p}, foreground_pid={}, focus_pid={}",
+                    target.hwnd, target.foreground_hwnd, target.foreground_pid, target.focus_pid
                 ),
             ));
         }
         Ok(())
     }
 
-    fn resolve_foreground_focus_window() -> Option<HWND> {
+    struct ForegroundFocusTarget {
+        hwnd: HWND,
+        foreground_hwnd: HWND,
+        foreground_pid: u32,
+        focus_pid: u32,
+        self_pid: u32,
+    }
+
+    fn resolve_foreground_focus_window() -> Option<ForegroundFocusTarget> {
         let foreground = unsafe { GetForegroundWindow() };
         if foreground.is_null() || unsafe { IsWindow(foreground) } == 0 {
             return None;
         }
-        let mut pid: u32 = 0;
-        let thread_id = unsafe { GetWindowThreadProcessId(foreground, &mut pid) };
+        let mut foreground_pid: u32 = 0;
+        let thread_id = unsafe { GetWindowThreadProcessId(foreground, &mut foreground_pid) };
         if thread_id == 0 {
             return None;
         }
@@ -116,7 +134,20 @@ mod windows {
         if ok == 0 || info.hwndFocus.is_null() {
             return None;
         }
-        Some(info.hwndFocus)
+        let focus = info.hwndFocus;
+        if unsafe { IsWindow(focus) } == 0 {
+            return None;
+        }
+        let mut focus_pid: u32 = 0;
+        let _ = unsafe { GetWindowThreadProcessId(focus, &mut focus_pid) };
+        let self_pid = unsafe { GetCurrentProcessId() };
+        Some(ForegroundFocusTarget {
+            hwnd: focus,
+            foreground_hwnd: foreground,
+            foreground_pid,
+            focus_pid,
+            self_pid,
+        })
     }
 }
 
