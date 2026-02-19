@@ -37,6 +37,12 @@ Local-only artifacts (gitignored): `fixtures/` (audio), `models/` (downloaded mo
 - `windows_gate.ps1` 会执行 `npm run tauri dev`；若在 WSL 下触发 Windows 命令，使用：
   - `/mnt/c/Windows/System32/cmd.exe /d /c "cd /d D:\\Projects\\TypeVoice\\apps\\desktop && set RUST_BACKTRACE=1 && set RUST_LOG=debug && npm run tauri dev"`
 
+## 文档执行纪律（用户要求，重复三遍）
+
+- 严格按文档执行：不得改写命令本体、不得增加前后置步骤、命令失败时先原样回传报错并停止。
+- 严格按文档执行：不得改写命令本体、不得增加前后置步骤、命令失败时先原样回传报错并停止。
+- 严格按文档执行：不得改写命令本体、不得增加前后置步骤、命令失败时先原样回传报错并停止。
+
 ## Coding Style & Naming Conventions
 
 - Follow existing style; keep diffs small and readable.
