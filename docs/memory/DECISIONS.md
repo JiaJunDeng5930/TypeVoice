@@ -148,7 +148,7 @@
 - 依据：用户要求在 Linux 与 Windows 下自动粘贴，且粘贴动作不得通过快捷键模拟。
 - 执行：
   - `settings.json` 新增 `auto_paste_enabled`（默认 `true`）。
-  - Windows 使用窗口消息 `WM_PASTE` 路径，目标窗口优先取“最近外部窗口”句柄。
+  - Windows 使用窗口消息 `WM_PASTE` 路径，并收敛为“当前前台线程焦点控件单路径执行”：不使用 `last_external_hwnd` hint，不做目标窗口回退。
   - Linux 使用 AT-SPI 在焦点可编辑对象执行文本写入（不走快捷键）。
   - 自动粘贴失败返回结构化错误码并在 UI 显示，不静默吞错。
 

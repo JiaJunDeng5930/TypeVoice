@@ -38,10 +38,7 @@ pub fn copy_text_to_clipboard(text: &str) -> Result<(), ExportError> {
     })
 }
 
-pub async fn auto_paste_text(
-    text: &str,
-    windows_hwnd_hint: Option<isize>,
-) -> Result<(), ExportError> {
+pub async fn auto_paste_text(text: &str) -> Result<(), ExportError> {
     if text.trim().is_empty() {
         return Err(ExportError::new(
             "E_EXPORT_EMPTY_TEXT",
@@ -49,12 +46,9 @@ pub async fn auto_paste_text(
         ));
     }
 
-    #[cfg(not(windows))]
-    let _ = windows_hwnd_hint;
-
     #[cfg(windows)]
     {
-        return windows::auto_paste_text(windows_hwnd_hint);
+        return windows::auto_paste_text();
     }
 
     #[cfg(target_os = "linux")]
@@ -78,45 +72,20 @@ mod windows {
     use windows_sys::Win32::Foundation::{GetLastError, HWND};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, IsWindow,
-        SendMessageTimeoutW, SetForegroundWindow, GUITHREADINFO, SMTO_ABORTIFHUNG, WM_PASTE,
+        SendMessageTimeoutW, GUITHREADINFO, SMTO_ABORTIFHUNG, WM_PASTE,
     };
 
-    pub fn auto_paste_text(hwnd_hint: Option<isize>) -> Result<(), ExportError> {
-        let target = resolve_target_window(hwnd_hint).ok_or_else(|| {
+    pub fn auto_paste_text() -> Result<(), ExportError> {
+        let target = resolve_foreground_focus_window().ok_or_else(|| {
             ExportError::new(
                 "E_EXPORT_TARGET_UNAVAILABLE",
-                "no external foreground window available for auto paste",
+                "no focused foreground window available for auto paste",
             )
         })?;
 
-        // Best effort: bring target to foreground before sending paste message.
-        unsafe {
-            SetForegroundWindow(target);
-        }
-
-        let mut focus_target = target;
-        let mut pid: u32 = 0;
-        let thread_id = unsafe { GetWindowThreadProcessId(target, &mut pid) };
-        if thread_id != 0 {
-            let mut info: GUITHREADINFO = unsafe { mem::zeroed() };
-            info.cbSize = mem::size_of::<GUITHREADINFO>() as u32;
-            let ok = unsafe { GetGUIThreadInfo(thread_id, &mut info) };
-            if ok != 0 && !info.hwndFocus.is_null() {
-                focus_target = info.hwndFocus;
-            }
-        }
-
         let mut result: usize = 0;
         let ok = unsafe {
-            SendMessageTimeoutW(
-                focus_target,
-                WM_PASTE,
-                0,
-                0,
-                SMTO_ABORTIFHUNG,
-                1200,
-                &mut result,
-            )
+            SendMessageTimeoutW(target, WM_PASTE, 0, 0, SMTO_ABORTIFHUNG, 1200, &mut result)
         };
         if ok == 0 {
             let err = unsafe { GetLastError() };
@@ -124,40 +93,30 @@ mod windows {
                 "E_EXPORT_PASTE_FAILED",
                 format!(
                     "SendMessageTimeoutW(WM_PASTE) failed: last_error={err}, hwnd={:p}",
-                    focus_target
+                    target
                 ),
             ));
         }
         Ok(())
     }
 
-    fn resolve_target_window(hwnd_hint: Option<isize>) -> Option<HWND> {
-        if let Some(raw) = hwnd_hint {
-            let hwnd = raw as HWND;
-            if is_foreign_window(hwnd) {
-                return Some(hwnd);
-            }
-        }
-
-        let hwnd = unsafe { GetForegroundWindow() };
-        if is_foreign_window(hwnd) {
-            return Some(hwnd);
-        }
-        None
-    }
-
-    fn is_foreign_window(hwnd: HWND) -> bool {
-        if hwnd.is_null() {
-            return false;
-        }
-        if unsafe { IsWindow(hwnd) } == 0 {
-            return false;
+    fn resolve_foreground_focus_window() -> Option<HWND> {
+        let foreground = unsafe { GetForegroundWindow() };
+        if foreground.is_null() || unsafe { IsWindow(foreground) } == 0 {
+            return None;
         }
         let mut pid: u32 = 0;
-        unsafe {
-            GetWindowThreadProcessId(hwnd, &mut pid);
+        let thread_id = unsafe { GetWindowThreadProcessId(foreground, &mut pid) };
+        if thread_id == 0 {
+            return None;
         }
-        pid != 0 && pid != std::process::id()
+        let mut info: GUITHREADINFO = unsafe { mem::zeroed() };
+        info.cbSize = mem::size_of::<GUITHREADINFO>() as u32;
+        let ok = unsafe { GetGUIThreadInfo(thread_id, &mut info) };
+        if ok == 0 || info.hwndFocus.is_null() {
+            return None;
+        }
+        Some(info.hwndFocus)
     }
 }
 

@@ -1210,10 +1210,7 @@ fn history_clear() -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn export_text(
-    state: tauri::State<'_, TaskManager>,
-    req: ExportTextRequest,
-) -> Result<ExportTextResult, String> {
+async fn export_text(req: ExportTextRequest) -> Result<ExportTextResult, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let span = cmd_span(
         &dir,
@@ -1253,8 +1250,7 @@ async fn export_text(
         });
     }
 
-    let hwnd_hint = state.last_external_hwnd_best_effort();
-    match export::auto_paste_text(&req.text, hwnd_hint).await {
+    match export::auto_paste_text(&req.text).await {
         Ok(()) => {
             span.ok(Some(serde_json::json!({
                 "copied": true,
