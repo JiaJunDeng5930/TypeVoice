@@ -339,9 +339,15 @@ impl TaskManager {
         let mut g = self.recording_sessions.lock().unwrap();
         let session = g
             .get_mut(session_id)
-            .ok_or_else(|| anyhow!("recording session not found"))?;
+            .ok_or_else(|| {
+                anyhow!(
+                    "E_RECORDING_SESSION_NOT_FOUND: recording session not found (session_id={session_id})"
+                )
+            })?;
         if session.task_id.is_some() {
-            return Err(anyhow!("recording session already in use"));
+            return Err(anyhow!(
+                "E_RECORDING_SESSION_IN_USE: recording session already in use (session_id={session_id})"
+            ));
         }
         session.task_id = Some(task_id.to_string());
         Ok(session.pre_captured_context.clone())

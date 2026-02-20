@@ -33,6 +33,12 @@
 - 依据：会话天然定义了事务范围，避免上下文在中途被兜底清理导致热键上下文与任务生命周期失配。
 - 执行：新增 `recording_session_id` 在事件与命令链路中透传，`TaskManager` 按 `task_id` 统一清理未消费会话；命令侧在启动前失败时主动回退该会话。
 
+## PTT 重复 Pressed 去重
+
+- 决策：对 PTT 热键的 `Pressed` 事件做“按住期间只处理一次”去重，忽略按键自动重复产生的重复 `Pressed`。
+- 依据：长按录音期间重复 `Pressed` 会重复创建录音会话并触发 orphan 清理，可能删除首个待消费会话，导致 `start_task` 报 `recording session not found`。
+- 执行：`hotkeys.rs` 引入 PTT 按下状态位；首次 `Pressed` 才允许 `open_recording_session`，`Released` 统一复位状态位。
+
 ## 重放式配置策略
 
 - 决策：关键配置以 `settings.json` / `templates.json` 为单一真源，禁止 UI 和热键路径并存各自维护副本参数。

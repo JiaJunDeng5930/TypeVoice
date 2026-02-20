@@ -41,6 +41,8 @@ function titleForCode(code: string, fallback: string): string {
   if (code === "E_CONTEXT_CAPTURE_NOT_FOUND") return "CONTEXT CAPTURE EXPIRED";
   if (code === "E_CONTEXT_CAPTURE_INVALID") return "CONTEXT CAPTURE INVALID";
   if (code === "E_RECORDING_SESSION_OPEN") return "RECORDING SESSION FAILED";
+  if (code === "E_RECORDING_SESSION_NOT_FOUND") return "RECORDING SESSION EXPIRED";
+  if (code === "E_RECORDING_SESSION_IN_USE") return "RECORDING SESSION BUSY";
   if (code === "E_RECORD_ALREADY_ACTIVE") return "RECORDING BUSY";
   if (code === "E_TASK_ALREADY_ACTIVE") return "TASK BUSY";
   if (code === "E_RECORD_UNSUPPORTED") return "RECORDING UNSUPPORTED";
@@ -54,6 +56,7 @@ function actionHintForCode(code: string): string {
   if (code.startsWith("E_TOOLCHAIN_")) return "RUN WINDOWS GATE TO REPAIR TOOLCHAIN";
   if (code === "E_PYTHON_NOT_READY") return "CHECK PYTHON ENV (.venv / TYPEVOICE_PYTHON)";
   if (code.startsWith("E_RECORD_")) return "CHECK MICROPHONE INPUT SPEC / DEVICE";
+  if (code.startsWith("E_RECORDING_SESSION_")) return "RETRY HOTKEY RECORDING (PRESS AGAIN)";
   if (code.startsWith("E_FFMPEG_")) return "CHECK FFMPEG TOOLCHAIN";
   if (code.startsWith("E_ASR_") || code === "E_MODEL_LOAD_FAILED") {
     return "CHECK ASR MODEL + CUDA RUNTIME";
