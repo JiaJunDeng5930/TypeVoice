@@ -1,6 +1,4 @@
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::sync::Mutex;
 
 use serde::Serialize;
@@ -195,51 +193,36 @@ impl HotkeyManager {
         if let Some(ptt) = cfg.ptt.clone() {
             let ctx_cfg = crate::context_capture::config_from_settings(s);
             let data_dir_buf = data_dir.to_path_buf();
-            let ptt_pressed = Arc::new(AtomicBool::new(false));
-            let ptt_pressed_for_cb = Arc::clone(&ptt_pressed);
             if let Err(e) = gs.on_shortcut(ptt.as_str(), move |app, shortcut, event| {
                 let (
                     recording_session_id,
                     capture_status,
                     capture_error_code,
                     capture_error_message,
-                ) = match event.state {
-                    ShortcutState::Pressed => {
-                        // Ignore key-repeat Pressed events while the key is still held down.
-                        if ptt_pressed_for_cb.swap(true, Ordering::AcqRel) {
-                            return;
-                        }
-                        let tm = app.state::<crate::task_manager::TaskManager>();
-                        if tm.has_active_task() {
-                            (None, None, None, None)
-                        } else {
-                            match tm.open_recording_session(
-                                &data_dir_buf,
-                                &ctx_cfg,
-                                capture_required,
-                            ) {
-                                Ok(id) => (Some(id), Some("ok".to_string()), None, None),
-                                Err(e) => (
-                                    None,
-                                    Some("err".to_string()),
-                                    Some("E_RECORDING_SESSION_OPEN".to_string()),
-                                    Some(e.to_string()),
-                                ),
-                            }
-                        }
-                    }
-                    ShortcutState::Released => {
-                        ptt_pressed_for_cb.store(false, Ordering::Release);
+                ) = if event.state == ShortcutState::Pressed {
+                    let tm = app.state::<crate::task_manager::TaskManager>();
+                    if tm.has_active_task() {
                         (None, None, None, None)
+                    } else {
+                        match tm.open_recording_session(&data_dir_buf, &ctx_cfg, capture_required) {
+                            Ok(id) => (Some(id), Some("ok".to_string()), None, None),
+                            Err(e) => (
+                                None,
+                                Some("err".to_string()),
+                                Some("E_RECORDING_SESSION_OPEN".to_string()),
+                                Some(e.to_string()),
+                            ),
+                        }
                     }
-                };
-                let state = match event.state {
-                    ShortcutState::Pressed => "Pressed",
-                    ShortcutState::Released => "Released",
+                } else {
+                    (None, None, None, None)
                 };
                 let payload = HotkeyRecordEvent {
                     kind: "ptt".to_string(),
-                    state: state.to_string(),
+                    state: match event.state {
+                        ShortcutState::Pressed => "Pressed".to_string(),
+                        ShortcutState::Released => "Released".to_string(),
+                    },
                     shortcut: shortcut.into_string(),
                     ts_ms: now_ms(),
                     recording_session_id,
