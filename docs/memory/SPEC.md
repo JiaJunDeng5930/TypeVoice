@@ -12,7 +12,9 @@
 
 - 平台：Windows 桌面端为主；自动粘贴能力需兼容 Linux 与 Windows。
 - 流程：Record -> Preprocess(FFmpeg) -> Transcribe(ASR) -> Rewrite(LLM，可选) -> Persist -> Export(copy + auto paste)。
-- ASR：`Qwen/Qwen3-ASR-0.6B`，PyTorch CUDA，禁止 CPU 降级。
+- ASR：支持 `local|remote` 双提供方，默认 `local`（`Qwen/Qwen3-ASR-0.6B`，PyTorch CUDA，禁止 CPU 降级）。
+- Remote ASR 协议：默认 `POST http://api.server/transcribe`（可配置 URL），`Authorization: Bearer <api_key>`，`multipart/form-data` 必填 `file`，可选 `model`，响应 JSON 核心字段 `text`。
+- Remote ASR 并发：以音频切片并发转写，支持设置并发数（配置项 `remote_asr_concurrency`，范围 `1..16`，默认 `4`）。
 - LLM 改写：仅在用户启用时发送转录文本与必要上下文，不上传音频。
 - 历史记录：仅保存文本与元信息，不保存音频文件。
 

@@ -8,9 +8,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::trace::Span;
 
+pub const DEFAULT_ASR_PROVIDER: &str = "local";
+pub const DEFAULT_REMOTE_ASR_URL: &str = "http://api.server/transcribe";
+pub const DEFAULT_REMOTE_ASR_CONCURRENCY: usize = 4;
+pub const MAX_REMOTE_ASR_CONCURRENCY: usize = 16;
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
-    pub asr_model: Option<String>, // local dir or HF repo id
+    pub asr_model: Option<String>,    // local dir or HF repo id
+    pub asr_provider: Option<String>, // local|remote
+    pub remote_asr_url: Option<String>,
+    pub remote_asr_model: Option<String>,
+    pub remote_asr_concurrency: Option<u64>,
     pub asr_preprocess_silence_trim_enabled: Option<bool>,
     pub asr_preprocess_silence_threshold_db: Option<f64>,
     pub asr_preprocess_silence_start_ms: Option<u64>,
@@ -50,6 +59,10 @@ pub struct SettingsPatch {
     // Outer Option: whether to update this field.
     // Inner Option: Some(value)=set, None=clear.
     pub asr_model: Option<Option<String>>,
+    pub asr_provider: Option<Option<String>>,
+    pub remote_asr_url: Option<Option<String>>,
+    pub remote_asr_model: Option<Option<String>>,
+    pub remote_asr_concurrency: Option<Option<u64>>,
     pub asr_preprocess_silence_trim_enabled: Option<Option<bool>>,
     pub asr_preprocess_silence_threshold_db: Option<Option<f64>>,
     pub asr_preprocess_silence_start_ms: Option<Option<u64>>,
@@ -83,6 +96,18 @@ pub struct SettingsPatch {
 pub fn apply_patch(mut s: Settings, p: SettingsPatch) -> Settings {
     if let Some(v) = p.asr_model {
         s.asr_model = v;
+    }
+    if let Some(v) = p.asr_provider {
+        s.asr_provider = v;
+    }
+    if let Some(v) = p.remote_asr_url {
+        s.remote_asr_url = v;
+    }
+    if let Some(v) = p.remote_asr_model {
+        s.remote_asr_model = v;
+    }
+    if let Some(v) = p.remote_asr_concurrency {
+        s.remote_asr_concurrency = v;
     }
     if let Some(v) = p.asr_preprocess_silence_trim_enabled {
         s.asr_preprocess_silence_trim_enabled = v;
@@ -279,14 +304,61 @@ pub fn save_settings(data_dir: &Path, settings: &Settings) -> Result<()> {
     Ok(())
 }
 
+pub fn resolve_asr_provider(s: &Settings) -> String {
+    let value = s
+        .asr_provider
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or(DEFAULT_ASR_PROVIDER)
+        .to_ascii_lowercase();
+    if value == "remote" {
+        "remote".to_string()
+    } else {
+        "local".to_string()
+    }
+}
+
+pub fn resolve_remote_asr_url(s: &Settings) -> String {
+    s.remote_asr_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or(DEFAULT_REMOTE_ASR_URL)
+        .to_string()
+}
+
+pub fn resolve_remote_asr_model(s: &Settings) -> Option<String> {
+    s.remote_asr_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+pub fn resolve_remote_asr_concurrency(s: &Settings) -> usize {
+    let raw = s
+        .remote_asr_concurrency
+        .map(|v| v as usize)
+        .unwrap_or(DEFAULT_REMOTE_ASR_CONCURRENCY);
+    raw.clamp(1, MAX_REMOTE_ASR_CONCURRENCY)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{apply_patch, Settings, SettingsPatch};
+    use super::{
+        apply_patch, resolve_asr_provider, resolve_remote_asr_concurrency,
+        resolve_remote_asr_model, resolve_remote_asr_url, Settings, SettingsPatch,
+        DEFAULT_REMOTE_ASR_URL,
+    };
 
     #[test]
     fn apply_patch_is_partial_and_can_clear() {
         let base = Settings {
             asr_model: Some("asr".to_string()),
+            asr_provider: Some("local".to_string()),
+            remote_asr_url: None,
+            remote_asr_model: None,
+            remote_asr_concurrency: None,
             llm_base_url: Some("https://x/v1".to_string()),
             llm_model: Some("m1".to_string()),
             llm_reasoning_effort: Some("low".to_string()),
@@ -311,6 +383,10 @@ mod tests {
         };
 
         let p = SettingsPatch {
+            asr_provider: Some(Some("remote".to_string())),
+            remote_asr_url: Some(Some("http://127.0.0.1:8317/transcribe".to_string())),
+            remote_asr_model: Some(Some("whisper-1".to_string())),
+            remote_asr_concurrency: Some(Some(6)),
             llm_model: Some(Some("m2".to_string())),
             llm_reasoning_effort: Some(None),
             rewrite_enabled: Some(Some(true)),
@@ -324,6 +400,13 @@ mod tests {
 
         let next = apply_patch(base, p);
         assert_eq!(next.asr_model.as_deref(), Some("asr"));
+        assert_eq!(next.asr_provider.as_deref(), Some("remote"));
+        assert_eq!(
+            next.remote_asr_url.as_deref(),
+            Some("http://127.0.0.1:8317/transcribe")
+        );
+        assert_eq!(next.remote_asr_model.as_deref(), Some("whisper-1"));
+        assert_eq!(next.remote_asr_concurrency, Some(6));
         assert_eq!(next.llm_base_url.as_deref(), Some("https://x/v1"));
         assert_eq!(next.llm_model.as_deref(), Some("m2"));
         assert_eq!(next.llm_reasoning_effort, None);
@@ -334,5 +417,26 @@ mod tests {
         assert_eq!(next.context_history_n, Some(5));
         assert_eq!(next.context_include_prev_window_meta, Some(true));
         assert_eq!(next.rewrite_include_glossary, Some(false));
+    }
+
+    #[test]
+    fn resolve_remote_asr_fields_apply_defaults_and_clamp() {
+        let s = Settings::default();
+        assert_eq!(resolve_asr_provider(&s), "local");
+        assert_eq!(resolve_remote_asr_url(&s), DEFAULT_REMOTE_ASR_URL);
+        assert_eq!(resolve_remote_asr_model(&s), None);
+        assert_eq!(resolve_remote_asr_concurrency(&s), 4);
+
+        let s = Settings {
+            asr_provider: Some("REMOTE".to_string()),
+            remote_asr_url: Some(" http://localhost/transcribe ".to_string()),
+            remote_asr_model: Some(" whisper-1 ".to_string()),
+            remote_asr_concurrency: Some(100),
+            ..Default::default()
+        };
+        assert_eq!(resolve_asr_provider(&s), "remote");
+        assert_eq!(resolve_remote_asr_url(&s), "http://localhost/transcribe");
+        assert_eq!(resolve_remote_asr_model(&s).as_deref(), Some("whisper-1"));
+        assert_eq!(resolve_remote_asr_concurrency(&s), 16);
     }
 }

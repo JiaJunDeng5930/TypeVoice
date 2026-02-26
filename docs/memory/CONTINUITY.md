@@ -58,6 +58,11 @@
 - [VERIFIED] 2026-02-19：自动粘贴实现改为“直接提交 Unicode 文本输入”：Windows 路径替换为 `SendInput + KEYEVENTF_UNICODE`，Linux 继续 AT-SPI `EditableText.InsertText`，导出命令接口保持不变。
 - [VERIFIED] 2026-02-19：按文档从 WSL 触发 `scripts/windows/windows_gate.ps1`，Windows compile gate 与 FFmpeg toolchain 准备通过，并进入 `npm run tauri dev`（检测到 `typevoice-desktop.exe` 进程）。
 - [VERIFIED] 2026-02-19：当前 WSL 工作区不存在 `./.venv/bin/python`，且系统 `python3` 未安装 `pytest`；无法在该环境执行 `pytest -q tests`。
+- [VERIFIED] 2026-02-26：ASR 新增 provider 分流能力（`local|remote`），设置链路已接通 `asr_provider/remote_asr_url/remote_asr_model/remote_asr_concurrency`；`TaskManager` 在转写阶段按 provider 分支执行。
+- [VERIFIED] 2026-02-26：新增独立 `remote_asr` 模块，已实现远程 API key（keyring + env）、切片并发请求、响应文本合并去重与结构化错误码。
+- [VERIFIED] 2026-02-26：设置页已新增远程 ASR 配置 UI（provider 切换、URL/model/concurrency、remote key save/clear/check），并保持本地 ASR 配置可用。
+- [VERIFIED] 2026-02-26：本轮回归通过 `cargo test -q`（25 passed）与 `npm run build`（通过）。
+- [VERIFIED] 2026-02-26：本轮 Python 测试仍不可执行：`.venv` 缺失，且系统 `python3` 未安装 `pytest`。
 
 ### 当前工作集
 

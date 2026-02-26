@@ -38,6 +38,10 @@ export type PromptTemplate = {
 
 export type Settings = {
   asr_model?: string | null;
+  asr_provider?: string | null;
+  remote_asr_url?: string | null;
+  remote_asr_model?: string | null;
+  remote_asr_concurrency?: number | null;
   asr_preprocess_silence_trim_enabled?: boolean | null;
   asr_preprocess_silence_threshold_db?: number | null;
   asr_preprocess_silence_start_ms?: number | null;

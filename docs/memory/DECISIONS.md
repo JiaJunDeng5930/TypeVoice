@@ -160,6 +160,24 @@
   - Linux 使用 AT-SPI 在焦点可编辑对象执行文本写入（不走快捷键）。
   - 自动粘贴失败返回结构化错误码并在 UI 显示，不静默吞错。
 
+## ASR 提供方切换与运行边界
+
+- 决策：ASR 运行时按 `settings.asr_provider` 选择 `local|remote`；默认 `local`，`remote` 不启动/保活本地 runner。
+- 依据：用户要求“可选本地或云端 ASR”，并要求模块分离、避免远程路径和本地进程生命周期耦合。
+- 执行：
+  - `TaskManager` 在 `Transcribe` 阶段按 provider 分支。
+  - `warmup/restart` 仅在 `local` 生效；切换到 `remote` 时执行本地 runner `kill_best_effort`。
+  - 指标新增 `asr_provider`、`remote_asr_slice_count`、`remote_asr_concurrency_used`。
+
+## Remote ASR 协议与并发切片
+
+- 决策：Remote ASR 采用固定协议：`POST /transcribe` + Bearer 鉴权 + multipart `file`（可选 `model`），解析 JSON `text`。
+- 依据：用户已给出 Whisper 风格兼容协议，要求可配置地址、key 与模型名。
+- 执行：
+  - 新增 `remote_asr` 模块，独立承担 keyring、请求发送、错误码与文本合并。
+  - 音频按切片并发请求，默认 60s 切片 + 0.5s overlap，`remote_asr_concurrency` 限定 `1..16`（默认 `4`）。
+  - 片段返回后按序合并并做重叠去重，失败返回结构化错误码。
+
 ## Runner 退出状态实例化
 
 - 决策：ASR runner 禁止使用进程级全局退出标记。

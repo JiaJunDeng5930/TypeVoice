@@ -25,6 +25,11 @@ const REASONING: PixelSelectOption[] = [
   { value: "xhigh", label: "xhigh" },
 ];
 
+const ASR_PROVIDERS: PixelSelectOption[] = [
+  { value: "local", label: "local (on-device)" },
+  { value: "remote", label: "remote (cloud)" },
+];
+
 type RecordingHotkey = "ptt" | "toggle";
 
 type HotkeyAvailability = {
@@ -76,6 +81,11 @@ export function SettingsScreen({
   gateway = defaultTauriGateway,
 }: Props) {
   const [asrModel, setAsrModel] = useState("");
+  const [asrProvider, setAsrProvider] = useState("local");
+  const [remoteAsrUrl, setRemoteAsrUrl] = useState("http://api.server/transcribe");
+  const [remoteAsrModel, setRemoteAsrModel] = useState("");
+  const [remoteAsrConcurrency, setRemoteAsrConcurrency] = useState("4");
+  const [remoteAsrKeyDraft, setRemoteAsrKeyDraft] = useState("");
   const [asrPreprocessTrimEnabled, setAsrPreprocessTrimEnabled] = useState(false);
   const [asrPreprocessThresholdDb, setAsrPreprocessThresholdDb] = useState("-50");
   const [asrPreprocessStartMs, setAsrPreprocessStartMs] = useState("300");
@@ -115,6 +125,14 @@ export function SettingsScreen({
   useEffect(() => {
     if (!settings) return;
     setAsrModel(settings.asr_model ?? "");
+    setAsrProvider(settings.asr_provider === "remote" ? "remote" : "local");
+    setRemoteAsrUrl(settings.remote_asr_url?.trim() || "http://api.server/transcribe");
+    setRemoteAsrModel(settings.remote_asr_model ?? "");
+    {
+      const raw = Number(settings.remote_asr_concurrency ?? 4);
+      const normalized = Number.isFinite(raw) ? Math.max(1, Math.min(16, Math.round(raw))) : 4;
+      setRemoteAsrConcurrency(String(normalized));
+    }
     setAsrPreprocessTrimEnabled(settings.asr_preprocess_silence_trim_enabled ?? false);
     setAsrPreprocessThresholdDb(
       String(
@@ -233,8 +251,26 @@ export function SettingsScreen({
   }
 
   async function saveAsr() {
+    const provider = asrProvider === "remote" ? "remote" : "local";
+    const concurrencyNum = Number(remoteAsrConcurrency);
+    if (provider === "remote" && !remoteAsrUrl.trim()) {
+      pushToast("REMOTE ASR URL REQUIRED", "danger");
+      return;
+    }
+    if (!Number.isFinite(concurrencyNum)) {
+      pushToast("REMOTE ASR CONCURRENCY MUST BE A NUMBER", "danger");
+      return;
+    }
+    const normalizedConcurrency = Math.max(1, Math.min(16, Math.round(concurrencyNum)));
     try {
-      await savePatch({ asr_model: asrModel.trim() ? asrModel.trim() : null });
+      await savePatch({
+        asr_model: asrModel.trim() ? asrModel.trim() : null,
+        asr_provider: provider,
+        remote_asr_url: remoteAsrUrl.trim() ? remoteAsrUrl.trim() : null,
+        remote_asr_model: remoteAsrModel.trim() ? remoteAsrModel.trim() : null,
+        remote_asr_concurrency: normalizedConcurrency,
+      });
+      setRemoteAsrConcurrency(String(normalizedConcurrency));
       pushToast("SAVED", "ok");
       await refreshModelStatus();
     } catch {
@@ -437,6 +473,39 @@ export function SettingsScreen({
     }
   }
 
+  async function setRemoteAsrApiKey() {
+    const k = remoteAsrKeyDraft.trim();
+    if (!k) return;
+    try {
+      await gateway.invoke("set_remote_asr_api_key", { apiKey: k });
+      setRemoteAsrKeyDraft("");
+      pushToast("REMOTE KEY SAVED", "ok");
+    } catch {
+      pushToast("REMOTE KEY SAVE FAILED", "danger");
+    }
+  }
+
+  async function clearRemoteAsrApiKey() {
+    try {
+      await gateway.invoke("clear_remote_asr_api_key");
+      pushToast("REMOTE KEY CLEARED", "ok");
+    } catch {
+      pushToast("REMOTE KEY CLEAR FAILED", "danger");
+    }
+  }
+
+  async function checkRemoteAsrApiKey() {
+    try {
+      const st = (await gateway.invoke("remote_asr_api_key_status")) as ApiKeyStatus;
+      pushToast(
+        st.configured ? "REMOTE KEY OK" : "REMOTE KEY MISSING",
+        st.configured ? "ok" : "danger",
+      );
+    } catch {
+      pushToast("REMOTE KEY CHECK FAILED", "danger");
+    }
+  }
+
   async function clearHistory() {
     try {
       await gateway.invoke("history_clear");
@@ -518,6 +587,9 @@ export function SettingsScreen({
   ]);
 
   const asrStatusText = useMemo(() => {
+    if (asrProvider === "remote") {
+      return `REMOTE ${remoteAsrUrl.trim() || "http://api.server/transcribe"}`;
+    }
     if (!modelStatus) return "UNKNOWN";
 
     const version = modelStatus.model_version ? `  ${modelStatus.model_version}` : "";
@@ -538,27 +610,67 @@ export function SettingsScreen({
     }
 
     return `FAILED${version}  ${modelStatus.reason || ""}${location}`;
-  }, [modelStatus]);
+  }, [asrProvider, modelStatus, remoteAsrUrl]);
 
   return (
     <div className="stack">
       <div className="card">
         <div className="sectionTitle">ASR</div>
         <div className="row">
-          <PixelButton onClick={downloadModel} tone="accent">
+          <PixelButton onClick={downloadModel} tone="accent" disabled={asrProvider !== "local"}>
             DOWNLOAD
           </PixelButton>
           <PixelButton onClick={refreshModelStatus}>REFRESH</PixelButton>
-          <div className="muted">
-            {asrStatusText}
-          </div>
+          <div className="muted">{asrStatusText}</div>
         </div>
         <div style={{ marginTop: 12 }} className="stack">
-          <PixelInput
-            value={asrModel}
-            onChange={setAsrModel}
-            placeholder="asr_model (local dir or HF repo id)"
-          />
+          <PixelSelect value={asrProvider} onChange={setAsrProvider} options={ASR_PROVIDERS} />
+          {asrProvider === "local" ? (
+            <PixelInput
+              value={asrModel}
+              onChange={setAsrModel}
+              placeholder="asr_model (local dir or HF repo id)"
+            />
+          ) : (
+            <>
+              <PixelInput
+                value={remoteAsrUrl}
+                onChange={setRemoteAsrUrl}
+                placeholder="remote ASR URL (e.g. http://api.server/transcribe)"
+              />
+              <PixelInput
+                value={remoteAsrModel}
+                onChange={setRemoteAsrModel}
+                placeholder="remote model name (optional)"
+              />
+              <PixelInput
+                value={remoteAsrConcurrency}
+                onChange={setRemoteAsrConcurrency}
+                placeholder="remote slicing concurrency (1-16)"
+              />
+              <div className="sectionTitle" style={{ marginTop: 8 }}>
+                REMOTE API KEY
+              </div>
+              <PixelInput
+                value={remoteAsrKeyDraft}
+                onChange={setRemoteAsrKeyDraft}
+                placeholder="save to keyring (or env TYPEVOICE_REMOTE_ASR_API_KEY)"
+              />
+              <div className="row" style={{ justifyContent: "flex-end" }}>
+                <PixelButton
+                  onClick={setRemoteAsrApiKey}
+                  tone="accent"
+                  disabled={!remoteAsrKeyDraft.trim()}
+                >
+                  SAVE KEY
+                </PixelButton>
+                <PixelButton onClick={clearRemoteAsrApiKey} tone="danger">
+                  CLEAR KEY
+                </PixelButton>
+                <PixelButton onClick={checkRemoteAsrApiKey}>CHECK KEY</PixelButton>
+              </div>
+            </>
+          )}
           <div className="row" style={{ justifyContent: "flex-end" }}>
             <PixelButton onClick={saveAsr} tone="accent">
               SAVE

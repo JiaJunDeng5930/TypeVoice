@@ -13,12 +13,15 @@ use tauri::{AppHandle, Emitter};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::{asr_service, data_dir, history, llm, metrics, pipeline, templates};
+use crate::{
+    asr_service, data_dir, history, llm, metrics, pipeline, remote_asr, settings, templates,
+};
 use crate::{context_capture, context_pack};
 
 pub trait AsrClient: Send + Sync {
     fn ensure_started(&self, data_dir: &Path) -> Result<()>;
     fn restart(&self, data_dir: &Path, reason: &str) -> Result<()>;
+    fn kill_best_effort(&self, reason: &str);
     fn transcribe(
         &self,
         data_dir: &Path,
@@ -38,6 +41,10 @@ impl AsrClient for asr_service::AsrService {
 
     fn restart(&self, data_dir: &Path, reason: &str) -> Result<()> {
         self.restart(data_dir, reason)
+    }
+
+    fn kill_best_effort(&self, reason: &str) {
+        asr_service::AsrService::kill_best_effort(self, reason);
     }
 
     fn transcribe(
@@ -175,6 +182,10 @@ pub struct TaskDone {
 
 #[derive(Debug, Clone)]
 pub struct StartOpts {
+    pub asr_provider: String,
+    pub remote_asr_url: String,
+    pub remote_asr_model: Option<String>,
+    pub remote_asr_concurrency: usize,
     pub rewrite_enabled: bool,
     pub template_id: Option<String>,
     pub asr_preprocess: pipeline::PreprocessConfig,
@@ -269,6 +280,12 @@ impl TaskManager {
             .spawn(move || {
                 // ASR warmup is synchronous; do not create nested Tokio runtimes here.
                 if let Ok(dir) = data_dir::data_dir() {
+                    if settings::resolve_asr_provider(
+                        &settings::load_settings(&dir).unwrap_or_default(),
+                    ) != "local"
+                    {
+                        return;
+                    }
                     let _ = this.asr.ensure_started(&dir);
                 }
             });
@@ -379,8 +396,24 @@ impl TaskManager {
             .name("asr_restart".to_string())
             .spawn(move || {
                 if let Ok(dir) = data_dir::data_dir() {
+                    if settings::resolve_asr_provider(
+                        &settings::load_settings(&dir).unwrap_or_default(),
+                    ) != "local"
+                    {
+                        return;
+                    }
                     let _ = this.asr.restart(&dir, &reason);
                 }
+            });
+    }
+
+    pub fn kill_asr_best_effort(&self, reason: &str) {
+        let this = self.clone();
+        let reason = reason.to_string();
+        let _ = std::thread::Builder::new()
+            .name("asr_kill".to_string())
+            .spawn(move || {
+                this.asr.kill_best_effort(&reason);
             });
     }
 
@@ -596,6 +629,10 @@ impl TaskManager {
             "TASK.start_opts",
             "ok",
             Some(serde_json::json!({
+                    "asr_provider": opts.asr_provider.as_str(),
+                    "remote_asr_url": opts.remote_asr_url.as_str(),
+                    "remote_asr_has_model": opts.remote_asr_model.as_deref().map(|v| !v.trim().is_empty()).unwrap_or(false),
+                    "remote_asr_concurrency": opts.remote_asr_concurrency,
                     "rewrite_requested": opts.rewrite_enabled,
                     "template_id": opts.template_id.as_deref(),
                     "rewrite_include_glossary": opts.rewrite_include_glossary,
@@ -704,7 +741,13 @@ impl TaskManager {
         }
 
         // ASR
-        emit_started(&app, &data_dir, &task_id, "Transcribe", "asr");
+        let asr_provider = opts.asr_provider.to_ascii_lowercase();
+        let asr_step_hint = if asr_provider == "remote" {
+            "asr(remote)"
+        } else {
+            "asr(local)"
+        };
+        emit_started(&app, &data_dir, &task_id, "Transcribe", asr_step_hint);
         let (
             asr_text,
             rtf,
@@ -714,89 +757,140 @@ impl TaskManager {
             audio_seconds,
             asr_model_id,
             asr_model_version,
+            remote_slice_count,
+            remote_concurrency_used,
         ) = {
-            let inner = self.inner.clone();
-            let wav_path2 = wav_path.clone();
-            let data_dir2 = data_dir.clone();
-            let asr = self.asr.clone();
-            let task_id2 = task_id.clone();
-            let join = tokio::task::spawn_blocking(move || {
-                let active = inner.lock().unwrap();
-                let a = active.as_ref().ok_or_else(|| anyhow!("task missing"))?;
-                let (resp, wall_ms) = asr.transcribe(
-                    &data_dir2, &task_id2, &wav_path2, "Chinese", &a.token, &a.asr_pid,
-                )?;
-                if !resp.ok {
-                    let code = resp
-                        .error
-                        .as_ref()
-                        .map(|e| e.code.as_str())
-                        .unwrap_or("E_ASR_FAILED");
-                    let msg = resp
-                        .error
-                        .as_ref()
-                        .map(|e| e.message.as_str())
-                        .unwrap_or("");
-                    if msg.trim().is_empty() {
-                        return Err(anyhow!("asr failed: {code}"));
-                    }
-                    return Err(anyhow!("asr failed: {code}: {msg}"));
-                }
-                let text = resp.text.clone().unwrap_or_default();
-                if text.trim().is_empty() {
-                    return Err(anyhow!("empty_text"));
-                }
-                let m = resp
-                    .metrics
-                    .clone()
-                    .ok_or_else(|| anyhow!("missing_metrics"))?;
-                if m.device_used != "cuda" {
-                    return Err(anyhow!("device_not_cuda:{}", m.device_used));
-                }
-                Ok::<_, anyhow::Error>((
-                    text,
-                    m.rtf,
-                    m.device_used,
-                    wall_ms,
-                    m.elapsed_ms,
-                    m.audio_seconds,
-                    m.model_id,
-                    m.model_version,
-                ))
-            })
-            .await;
-            match join {
-                Ok(Ok(v)) => v,
-                Ok(Err(e)) => {
-                    if is_cancelled_err(&e) || is_cancelled(&self.inner, &task_id) {
-                        emit_cancelled(&app, &data_dir, &task_id, "Transcribe");
+            if asr_provider == "remote" {
+                let token = {
+                    let active = self.inner.lock().unwrap();
+                    let task = active.as_ref().ok_or_else(|| anyhow!("task missing"))?;
+                    task.token.clone()
+                };
+                let cfg = remote_asr::RemoteAsrConfig {
+                    url: opts.remote_asr_url.clone(),
+                    model: opts.remote_asr_model.clone(),
+                    concurrency: opts.remote_asr_concurrency,
+                };
+                match remote_asr::transcribe_remote(&data_dir, &task_id, &wav_path, &token, &cfg)
+                    .await
+                {
+                    Ok(v) => (
+                        v.text,
+                        v.metrics.rtf,
+                        "remote".to_string(),
+                        v.metrics.elapsed_ms.max(0) as u128,
+                        v.metrics.elapsed_ms,
+                        v.metrics.audio_seconds,
+                        v.metrics.model_id,
+                        v.metrics.model_version,
+                        Some(v.metrics.slice_count),
+                        Some(v.metrics.concurrency_used),
+                    ),
+                    Err(e) => {
+                        if e.code == "E_CANCELLED" || is_cancelled(&self.inner, &task_id) {
+                            emit_cancelled(&app, &data_dir, &task_id, "Transcribe");
+                            let _ = cleanup_audio_artifacts(&input, &wav_path);
+                            return Ok(RecordingTerminal::Cancelled);
+                        }
+                        emit_failed(
+                            &app,
+                            &data_dir,
+                            &task_id,
+                            "Transcribe",
+                            None,
+                            &e.code,
+                            &e.message,
+                        );
                         let _ = cleanup_audio_artifacts(&input, &wav_path);
-                        return Ok(RecordingTerminal::Cancelled);
+                        return Ok(RecordingTerminal::Failed);
                     }
-                    emit_failed(
-                        &app,
-                        &data_dir,
-                        &task_id,
-                        "Transcribe",
-                        None,
-                        "E_ASR_FAILED",
-                        &e.to_string(),
-                    );
-                    let _ = cleanup_audio_artifacts(&input, &wav_path);
-                    return Ok(RecordingTerminal::Failed);
                 }
-                Err(e) => {
-                    emit_failed(
-                        &app,
-                        &data_dir,
-                        &task_id,
-                        "Transcribe",
+            } else {
+                let inner = self.inner.clone();
+                let wav_path2 = wav_path.clone();
+                let data_dir2 = data_dir.clone();
+                let asr = self.asr.clone();
+                let task_id2 = task_id.clone();
+                let join = tokio::task::spawn_blocking(move || {
+                    let active = inner.lock().unwrap();
+                    let a = active.as_ref().ok_or_else(|| anyhow!("task missing"))?;
+                    let (resp, wall_ms) = asr.transcribe(
+                        &data_dir2, &task_id2, &wav_path2, "Chinese", &a.token, &a.asr_pid,
+                    )?;
+                    if !resp.ok {
+                        let code = resp
+                            .error
+                            .as_ref()
+                            .map(|e| e.code.as_str())
+                            .unwrap_or("E_ASR_FAILED");
+                        let msg = resp
+                            .error
+                            .as_ref()
+                            .map(|e| e.message.as_str())
+                            .unwrap_or("");
+                        if msg.trim().is_empty() {
+                            return Err(anyhow!("asr failed: {code}"));
+                        }
+                        return Err(anyhow!("asr failed: {code}: {msg}"));
+                    }
+                    let text = resp.text.clone().unwrap_or_default();
+                    if text.trim().is_empty() {
+                        return Err(anyhow!("empty_text"));
+                    }
+                    let m = resp
+                        .metrics
+                        .clone()
+                        .ok_or_else(|| anyhow!("missing_metrics"))?;
+                    if m.device_used != "cuda" {
+                        return Err(anyhow!("device_not_cuda:{}", m.device_used));
+                    }
+                    Ok::<_, anyhow::Error>((
+                        text,
+                        m.rtf,
+                        m.device_used,
+                        wall_ms,
+                        m.elapsed_ms,
+                        m.audio_seconds,
+                        m.model_id,
+                        m.model_version,
                         None,
-                        "E_INTERNAL",
-                        &format!("transcribe_join_failed:{e}"),
-                    );
-                    let _ = cleanup_audio_artifacts(&input, &wav_path);
-                    return Ok(RecordingTerminal::Failed);
+                        None,
+                    ))
+                })
+                .await;
+                match join {
+                    Ok(Ok(v)) => v,
+                    Ok(Err(e)) => {
+                        if is_cancelled_err(&e) || is_cancelled(&self.inner, &task_id) {
+                            emit_cancelled(&app, &data_dir, &task_id, "Transcribe");
+                            let _ = cleanup_audio_artifacts(&input, &wav_path);
+                            return Ok(RecordingTerminal::Cancelled);
+                        }
+                        emit_failed(
+                            &app,
+                            &data_dir,
+                            &task_id,
+                            "Transcribe",
+                            None,
+                            "E_ASR_FAILED",
+                            &e.to_string(),
+                        );
+                        let _ = cleanup_audio_artifacts(&input, &wav_path);
+                        return Ok(RecordingTerminal::Failed);
+                    }
+                    Err(e) => {
+                        emit_failed(
+                            &app,
+                            &data_dir,
+                            &task_id,
+                            "Transcribe",
+                            None,
+                            "E_INTERNAL",
+                            &format!("transcribe_join_failed:{e}"),
+                        );
+                        let _ = cleanup_audio_artifacts(&input, &wav_path);
+                        return Ok(RecordingTerminal::Failed);
+                    }
                 }
             }
         };
@@ -1003,6 +1097,7 @@ impl TaskManager {
             &json!({
                 "type": "task_perf",
                 "task_id": task_id,
+                "asr_provider": asr_provider,
                 "audio_seconds": audio_seconds,
                 "preprocess_ms": preprocess_ms,
                 "asr_roundtrip_ms": asr_ms,
@@ -1013,6 +1108,8 @@ impl TaskManager {
                 "device_used": done.device_used,
                 "asr_model_id": asr_model_id,
                 "asr_model_version": asr_model_version,
+                "remote_asr_slice_count": remote_slice_count,
+                "remote_asr_concurrency_used": remote_concurrency_used,
                 "asr_preprocess_silence_trim_enabled": opts.asr_preprocess.silence_trim_enabled,
                 "asr_preprocess_threshold_db": opts.asr_preprocess.silence_threshold_db,
                 "asr_preprocess_trim_start_ms": opts.asr_preprocess.silence_trim_start_ms,
@@ -1187,6 +1284,10 @@ mod tests {
 
     fn base_start_opts() -> StartOpts {
         StartOpts {
+            asr_provider: "local".to_string(),
+            remote_asr_url: "http://api.server/transcribe".to_string(),
+            remote_asr_model: None,
+            remote_asr_concurrency: 4,
             rewrite_enabled: false,
             template_id: None,
             asr_preprocess: pipeline::PreprocessConfig::default(),

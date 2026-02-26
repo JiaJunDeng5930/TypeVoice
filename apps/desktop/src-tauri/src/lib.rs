@@ -14,6 +14,7 @@ mod model;
 mod panic_log;
 mod pipeline;
 mod python_runtime;
+mod remote_asr;
 mod safe_print;
 mod settings;
 mod startup_trace;
@@ -211,6 +212,10 @@ fn start_opts_from_settings(data_dir: &std::path::Path) -> Result<task_manager::
         settings::resolve_rewrite_start_config(&s).map_err(|e| e.to_string())?;
     let asr_preprocess = resolve_asr_preprocess_config(&s);
     Ok(task_manager::StartOpts {
+        asr_provider: settings::resolve_asr_provider(&s),
+        remote_asr_url: settings::resolve_remote_asr_url(&s),
+        remote_asr_model: settings::resolve_remote_asr_model(&s),
+        remote_asr_concurrency: settings::resolve_remote_asr_concurrency(&s),
         rewrite_enabled,
         template_id,
         context_cfg: context_capture::config_from_settings(&s),
@@ -1142,6 +1147,54 @@ fn llm_api_key_status() -> Result<ApiKeyStatus, String> {
     Ok(st)
 }
 
+#[tauri::command]
+fn set_remote_asr_api_key(api_key: &str) -> Result<(), String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(
+        &dir,
+        None,
+        "CMD.set_remote_asr_api_key",
+        Some(serde_json::json!({"api_key_chars": api_key.len()})),
+    );
+    match remote_asr::set_api_key(api_key) {
+        Ok(()) => {
+            span.ok(None);
+            Ok(())
+        }
+        Err(e) => {
+            span.err_anyhow("auth", "E_CMD_SET_REMOTE_ASR_KEY", &e, None);
+            Err(e.to_string())
+        }
+    }
+}
+
+#[tauri::command]
+fn clear_remote_asr_api_key() -> Result<(), String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(&dir, None, "CMD.clear_remote_asr_api_key", None);
+    match remote_asr::clear_api_key() {
+        Ok(()) => {
+            span.ok(None);
+            Ok(())
+        }
+        Err(e) => {
+            span.err_anyhow("auth", "E_CMD_CLEAR_REMOTE_ASR_KEY", &e, None);
+            Err(e.to_string())
+        }
+    }
+}
+
+#[tauri::command]
+fn remote_asr_api_key_status() -> Result<ApiKeyStatus, String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(&dir, None, "CMD.remote_asr_api_key_status", None);
+    let st = remote_asr::api_key_status();
+    span.ok(Some(
+        serde_json::json!({"configured": st.configured, "source": st.source, "reason": st.reason}),
+    ));
+    Ok(st)
+}
+
 fn history_db_path() -> Result<std::path::PathBuf, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).ok();
@@ -1332,6 +1385,10 @@ fn update_settings(
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let patch_summary = serde_json::json!({
         "asr_model": patch.asr_model.is_some(),
+        "asr_provider": patch.asr_provider.is_some(),
+        "remote_asr_url": patch.remote_asr_url.is_some(),
+        "remote_asr_model": patch.remote_asr_model.is_some(),
+        "remote_asr_concurrency": patch.remote_asr_concurrency.is_some(),
         "llm_base_url": patch.llm_base_url.is_some(),
         "llm_model": patch.llm_model.is_some(),
         "llm_reasoning_effort": patch.llm_reasoning_effort.is_some(),
@@ -1367,15 +1424,19 @@ fn update_settings(
         }
     };
     let asr_model_changed = patch.asr_model.is_some();
+    let asr_provider_changed = patch.asr_provider.is_some();
     let next = settings::apply_patch(cur, patch);
     if let Err(e) = settings::save_settings(&dir, &next) {
         span.err_anyhow("settings", "E_CMD_UPDATE_SETTINGS", &e, None);
         return Err(e.to_string());
     }
-    // If ASR model changed, restart the resident ASR runner.
-    // We do this best-effort; errors are surfaced later via task events.
-    if asr_model_changed {
-        state.restart_asr_best_effort("settings_changed");
+    let asr_provider = settings::resolve_asr_provider(&next);
+    if asr_provider == "local" {
+        if asr_model_changed || asr_provider_changed {
+            state.restart_asr_best_effort("settings_changed");
+        }
+    } else if asr_model_changed || asr_provider_changed {
+        state.kill_asr_best_effort("settings_changed_remote");
     }
 
     // Hotkeys are also best-effort; failures are traced and should not break settings.
@@ -1604,6 +1665,9 @@ pub fn run() {
             set_llm_api_key,
             clear_llm_api_key,
             llm_api_key_status,
+            set_remote_asr_api_key,
+            clear_remote_asr_api_key,
+            remote_asr_api_key_status,
             history_append,
             history_list,
             history_clear,
