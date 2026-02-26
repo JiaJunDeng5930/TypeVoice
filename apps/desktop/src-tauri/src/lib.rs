@@ -44,6 +44,7 @@ struct ActiveBackendRecording {
     output_path: std::path::PathBuf,
     child: std::process::Child,
     started_at: std::time::Instant,
+    meter_join: Option<std::thread::JoinHandle<()>>,
 }
 
 struct RecordedAsset {
@@ -105,6 +106,15 @@ struct OverlayState {
     visible: bool,
     status: String,
     detail: Option<String>,
+    ts_ms: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OverlayAudioLevelEvent {
+    recording_id: String,
+    rms: f64,
+    peak: f64,
     ts_ms: i64,
 }
 
@@ -291,6 +301,97 @@ fn read_last_stderr_line_from_bytes(stderr: &[u8]) -> Option<String> {
         .map(str::trim)
         .find(|line| !line.is_empty())
         .map(|line| line.to_string())
+}
+
+fn now_epoch_ms() -> i64 {
+    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(dur) => dur.as_millis() as i64,
+        Err(_) => 0,
+    }
+}
+
+fn emit_overlay_audio_level(app: &tauri::AppHandle, recording_id: &str, rms: f64, peak: f64) {
+    let _ = app.emit(
+        "tv_overlay_audio_level",
+        OverlayAudioLevelEvent {
+            recording_id: recording_id.to_string(),
+            rms: rms.clamp(0.0, 1.0),
+            peak: peak.clamp(0.0, 1.0),
+            ts_ms: now_epoch_ms(),
+        },
+    );
+}
+
+fn spawn_overlay_meter_thread(
+    app: tauri::AppHandle,
+    recording_id: String,
+    mut stdout: std::process::ChildStdout,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        const WINDOW_SAMPLES: usize = 800; // 50ms @ 16kHz
+        let mut read_buf = [0_u8; 4096];
+        let mut carry_low_byte: Option<u8> = None;
+        let mut sum_sq = 0.0_f64;
+        let mut max_abs = 0_i32;
+        let mut sample_count = 0_usize;
+
+        loop {
+            let n = match std::io::Read::read(&mut stdout, &mut read_buf) {
+                Ok(0) => break,
+                Ok(v) => v,
+                Err(_) => break,
+            };
+
+            let mut idx = 0_usize;
+            if let Some(low) = carry_low_byte.take() {
+                let sample = i16::from_le_bytes([low, read_buf[0]]);
+                let sample_i32 = i32::from(sample);
+                let normalized = f64::from(sample_i32) / 32768.0;
+                sum_sq += normalized * normalized;
+                max_abs = max_abs.max(sample_i32.abs());
+                sample_count += 1;
+                if sample_count >= WINDOW_SAMPLES {
+                    let rms = (sum_sq / sample_count as f64).sqrt();
+                    let peak = max_abs as f64 / 32768.0;
+                    emit_overlay_audio_level(&app, &recording_id, rms, peak);
+                    sum_sq = 0.0;
+                    max_abs = 0;
+                    sample_count = 0;
+                }
+                idx = 1;
+            }
+
+            while idx + 1 < n {
+                let sample = i16::from_le_bytes([read_buf[idx], read_buf[idx + 1]]);
+                let sample_i32 = i32::from(sample);
+                let normalized = f64::from(sample_i32) / 32768.0;
+                sum_sq += normalized * normalized;
+                max_abs = max_abs.max(sample_i32.abs());
+                sample_count += 1;
+                if sample_count >= WINDOW_SAMPLES {
+                    let rms = (sum_sq / sample_count as f64).sqrt();
+                    let peak = max_abs as f64 / 32768.0;
+                    emit_overlay_audio_level(&app, &recording_id, rms, peak);
+                    sum_sq = 0.0;
+                    max_abs = 0;
+                    sample_count = 0;
+                }
+                idx += 2;
+            }
+
+            if idx < n {
+                carry_low_byte = Some(read_buf[idx]);
+            }
+        }
+
+        emit_overlay_audio_level(&app, &recording_id, 0.0, 0.0);
+    })
+}
+
+fn join_overlay_meter_thread(active: &mut ActiveBackendRecording) {
+    if let Some(join_handle) = active.meter_join.take() {
+        let _ = join_handle.join();
+    }
 }
 
 fn parse_dshow_audio_devices(stderr: &str) -> Vec<(String, Option<String>)> {
@@ -669,6 +770,7 @@ async fn start_task(
 
 #[tauri::command]
 fn start_backend_recording(
+    app: tauri::AppHandle,
     state: tauri::State<'_, TaskManager>,
     recorder: tauri::State<'_, BackendRecordingState>,
 ) -> Result<String, String> {
@@ -724,8 +826,9 @@ fn start_backend_recording(
             "pcm_s16le",
         ])
         .arg(output_path.as_os_str())
+        .args(["-f", "s16le", "pipe:1"])
         .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
     {
@@ -736,6 +839,19 @@ fn start_backend_recording(
             return Err(msg);
         }
     };
+
+    let stdout = match child.stdout.take() {
+        Some(v) => v,
+        None => {
+            let msg = "E_RECORD_START_FAILED: recorder stdout not available".to_string();
+            span.err("process", "E_RECORD_START_FAILED", &msg, None);
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = std::fs::remove_file(&output_path);
+            return Err(msg);
+        }
+    };
+    let meter_join = spawn_overlay_meter_thread(app, recording_id.clone(), stdout);
 
     std::thread::sleep(std::time::Duration::from_millis(120));
     match child.try_wait() {
@@ -752,6 +868,7 @@ fn start_backend_recording(
             }
             span.err("process", "E_RECORD_START_FAILED", &msg, None);
             let _ = std::fs::remove_file(&output_path);
+            let _ = meter_join.join();
             return Err(msg);
         }
         Ok(None) => {}
@@ -761,6 +878,7 @@ fn start_backend_recording(
             let _ = child.kill();
             let _ = child.wait();
             let _ = std::fs::remove_file(&output_path);
+            let _ = meter_join.join();
             return Err(msg);
         }
     }
@@ -770,6 +888,7 @@ fn start_backend_recording(
         output_path: output_path.clone(),
         child,
         started_at: std::time::Instant::now(),
+        meter_join: Some(meter_join),
     });
 
     span.ok(Some(serde_json::json!({
@@ -781,6 +900,7 @@ fn start_backend_recording(
 
 #[tauri::command]
 fn stop_backend_recording(
+    _app: tauri::AppHandle,
     recorder: tauri::State<'_, BackendRecordingState>,
     recording_id: &str,
 ) -> Result<StopBackendRecordingResult, String> {
@@ -846,6 +966,7 @@ fn stop_backend_recording(
                 msg.push_str("; stderr=");
                 msg.push_str(line);
             }
+            join_overlay_meter_thread(&mut active);
             span.err("process", "E_RECORD_STOP_FAILED", &msg, None);
             return Err(msg);
         }
@@ -857,6 +978,7 @@ fn stop_backend_recording(
             msg.push_str("; stderr=");
             msg.push_str(line);
         }
+        join_overlay_meter_thread(&mut active);
         span.err("process", "E_RECORD_STOP_FAILED", &msg, None);
         let _ = std::fs::remove_file(&active.output_path);
         return Err(msg);
@@ -864,9 +986,11 @@ fn stop_backend_recording(
 
     if !active.output_path.exists() {
         let msg = "E_RECORD_OUTPUT_MISSING: recorded file missing";
+        join_overlay_meter_thread(&mut active);
         span.err("io", "E_RECORD_OUTPUT_MISSING", msg, None);
         return Err(msg.to_string());
     }
+    join_overlay_meter_thread(&mut active);
 
     let elapsed_ms = active.started_at.elapsed().as_millis();
     let asset_id = uuid::Uuid::new_v4().to_string();
@@ -898,6 +1022,7 @@ fn stop_backend_recording(
 
 #[tauri::command]
 fn abort_backend_recording(
+    _app: tauri::AppHandle,
     recorder: tauri::State<'_, BackendRecordingState>,
     recording_id: Option<String>,
 ) -> Result<(), String> {
@@ -935,6 +1060,7 @@ fn abort_backend_recording(
     }
     let _ = active.child.kill();
     let _ = active.child.wait();
+    join_overlay_meter_thread(&mut active);
     let _ = std::fs::remove_file(&active.output_path);
     span.ok(Some(serde_json::json!({"aborted": true})));
     Ok(())

@@ -270,6 +270,7 @@ body.isOverlay {
 }
 
 .overlayRoot {
+  --overlay-tone: rgba(255, 176, 0, 0.88);
   height: 100%;
   display: grid;
   align-content: center;
@@ -283,11 +284,38 @@ body.isOverlay {
 }
 
 .overlayRoot.tone-ok {
+  --overlay-tone: rgba(46, 229, 157, 0.88);
   border-color: rgba(46, 229, 157, 0.9);
 }
 
 .overlayRoot.tone-danger {
+  --overlay-tone: rgba(255, 59, 48, 0.88);
   border-color: rgba(255, 59, 48, 0.9);
+}
+
+.overlayTop {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.overlayEq {
+  height: 34px;
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  padding: 2px 4px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.overlayEqBar {
+  width: 5px;
+  min-height: 10px;
+  background: var(--overlay-tone);
+  box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.55);
+  transition: height 80ms linear, opacity 120ms linear;
 }
 
 .overlayBadge {
@@ -298,6 +326,12 @@ body.isOverlay {
   font-size: 11px;
   color: var(--muted);
   letter-spacing: 0.08em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overlayEqBar {
+    transition: none;
+  }
 }
 
 .pxToggle.isOn {

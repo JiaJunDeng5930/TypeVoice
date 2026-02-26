@@ -63,6 +63,7 @@
 - [VERIFIED] 2026-02-26：设置页已新增远程 ASR 配置 UI（provider 切换、URL/model/concurrency、remote key save/clear/check），并保持本地 ASR 配置可用。
 - [VERIFIED] 2026-02-26：本轮回归通过 `cargo test -q`（25 passed）与 `npm run build`（通过）。
 - [VERIFIED] 2026-02-26：本轮 Python 测试仍不可执行：`.venv` 缺失，且系统 `python3` 未安装 `pytest`。
+- [VERIFIED] 2026-02-27：热键 overlay 已接入音量波形：后端录音进程同步输出 PCM 到 `stdout` 并按 50ms 窗口计算 `rms/peak` 事件 `tv_overlay_audio_level`；前端 `OverlayApp` 在 `REC/RECORDING` 状态显示 5 条音量条并按音量实时更新。WSL 侧 `cargo test -q` 与 `npm run build` 通过，Windows 侧 `run-latest.ps1` 已拉起单实例 `typevoice-desktop`（PID `21900`）。
 
 ### 当前工作集
 
