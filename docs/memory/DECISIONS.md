@@ -118,10 +118,18 @@
   - `settings.json` 新增 `record_input_strategy`、`record_follow_default_role`、`record_fixed_endpoint_id`、`record_fixed_friendly_name`。
   - `follow_default` 默认 role 固定为 `communications`（语音输入场景优先）。
   - 新增 `record_last_working_*` 缓存字段，仅用于容错回退，不回写为用户配置。
-  - `start_backend_recording` 每次启动前按策略解析输入：
-    - `fixed_device`: 固定设备 -> 系统默认 -> 自动选择
-    - `follow_default`: 系统默认 -> last_working -> 自动选择
-    - `auto_select`: 枚举 + probe 选择可用设备
+  - 新增 `RecordInputCacheState`：解析与 probe 在以下时机刷新缓存：
+    - `app_startup`
+    - `set_settings` / `update_settings`（录音输入相关配置变更）
+    - Windows 音频设备变更事件（`IMMNotificationClient`）
+  - `start_backend_recording` 热路径只读取缓存，不再执行 dshow 枚举/probe。
+  - 缓存命中失败时返回 `E_RECORD_INPUT_CACHE_NOT_READY`，避免在热路径隐式触发慢操作。
+
+## 录音提示时机修正
+
+- 决策：hotkey 触发时不提前显示 `REC`，只在后端录音进程成功拉起后显示 overlay。
+- 依据：此前 UI 在 `start_backend_recording` 返回前就显示 `REC`，会误导用户提前开口并放大“前半段丢失”体感。
+- 执行：`MainScreen.startRecording` 将 `overlaySet(true, "REC")` 移到 `start_backend_recording` 成功分支。
 
 ## 可调试性失败展示契约
 

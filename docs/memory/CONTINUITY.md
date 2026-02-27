@@ -34,6 +34,9 @@
 - [VERIFIED] Windows 侧已定位 `Recording failed` 根因为 dshow 输入规格 `audio=default` 在当前设备集上不可解析；`ffmpeg` 直接探测显示 `Error opening input files: I/O error`。固定为设备 `Alternative name`（如 `audio="@device_cm_{...}\\wave_{...}"`）后可稳定录制，且不受蓝牙耳机连接导致默认设备切换的影响。
 - [VERIFIED] 录音输入策略已切换为显式模型：`record_input_strategy=follow_default|fixed_device|auto_select`，并新增 `record_follow_default_role`（默认 `communications`）与 `record_fixed_*` 字段。
 - [VERIFIED] 后端已实现录音输入回退状态机：`fixed_device -> default -> auto_select`，`follow_default -> last_working -> auto_select`；解析成功后仅更新 `record_last_working_*` 缓存，不再隐式覆盖用户配置。
+- [VERIFIED] 录音输入解析已从热路径移出：新增 `RecordInputCacheState`，慢操作（dshow 枚举/probe）仅在 `app_startup`、`set_settings/update_settings`、设备变更事件触发时执行；`start_backend_recording` 只读取缓存并启动 ffmpeg。
+- [VERIFIED] Windows 设备变更监听已接通：注册 `IMMNotificationClient`，在 `OnDefaultDeviceChanged/OnDeviceAdded/OnDeviceRemoved/OnDeviceStateChanged/OnPropertyValueChanged` 触发缓存刷新请求，并写入 `APP.audio_device_event` 诊断事件。
+- [VERIFIED] hotkey 录音 overlay 显示时机已修正：`MainScreen.startRecording` 只在 `start_backend_recording` 成功返回后再 `overlaySet(true, "REC")`，不再提前显示。
 - [VERIFIED] Windows 下默认设备解析已接入 Core Audio（MMDevice endpoint id + friendly name），并通过 dshow 设备列表映射到 ffmpeg `audio=...` 输入规格；新增 `list_audio_capture_devices` 命令供设置页展示。
 - [VERIFIED] 设置页已新增 `RECORDING INPUT` 配置区，可显式选择策略、默认角色、固定设备并保存到 settings。
 - [VERIFIED] 本轮验证通过：`apps/desktop/src-tauri` 执行 `cargo test -q`（27 passed），`apps/desktop` 执行 `npm run build`（通过）。

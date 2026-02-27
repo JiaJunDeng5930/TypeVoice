@@ -369,11 +369,11 @@ export function MainScreen({
     hotkeySessionRef.current = source === "hotkey";
     pendingRecordingSessionIdRef.current = source === "hotkey" ? recordingSessionId : null;
     setDiagnosticLine("");
-    if (hotkeySessionRef.current) void overlaySet(true, "REC");
     try {
       const rid = (await gateway.invoke("start_backend_recording")) as string;
       backendRecordingIdRef.current = rid;
       setUi("recording");
+      if (hotkeySessionRef.current) void overlaySet(true, "REC");
     } catch (err) {
       const staleSessionId = pendingRecordingSessionIdRef.current;
       void abortRecordingSessionBestEffort(staleSessionId);

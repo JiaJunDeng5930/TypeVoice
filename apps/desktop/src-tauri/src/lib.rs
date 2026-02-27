@@ -1,4 +1,5 @@
 mod asr_service;
+mod audio_device_notifications_windows;
 mod audio_devices_windows;
 mod context_capture;
 #[cfg(windows)]
@@ -16,6 +17,7 @@ mod panic_log;
 mod pipeline;
 mod python_runtime;
 mod record_input;
+mod record_input_cache;
 mod remote_asr;
 mod safe_print;
 mod settings;
@@ -575,6 +577,7 @@ fn start_backend_recording(
     app: tauri::AppHandle,
     state: tauri::State<'_, TaskManager>,
     recorder: tauri::State<'_, BackendRecordingState>,
+    record_input_cache: tauri::State<'_, record_input_cache::RecordInputCacheState>,
 ) -> Result<String, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let span = cmd_span(&dir, None, "CMD.start_backend_recording", None);
@@ -601,16 +604,32 @@ fn start_backend_recording(
     std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
     let recording_id = uuid::Uuid::new_v4().to_string();
     let output_path = tmp.join(format!("recording-{recording_id}.wav"));
-    let ffmpeg = pipeline::ffmpeg_cmd().map_err(|e| e.to_string())?;
-    let resolved_input =
-        match record_input::resolve_record_input_for_recording(&dir, ffmpeg.as_str()) {
-            Ok(v) => v,
-            Err(e) => {
-                span.err("config", "E_SETTINGS_INVALID", &e, None);
-                return Err(e);
-            }
-        };
+    let cached_input = match record_input_cache.get_last_ok() {
+        Some(v) => v,
+        None => {
+            let snapshot = record_input_cache.snapshot();
+            let msg = "E_RECORD_INPUT_CACHE_NOT_READY: record input cache is not ready; wait for cache refresh and retry".to_string();
+            span.err(
+                "config",
+                "E_RECORD_INPUT_CACHE_NOT_READY",
+                &msg,
+                Some(serde_json::json!({
+                    "refresh_in_progress": snapshot.refresh_in_progress,
+                    "pending_reason": snapshot.pending_reason,
+                    "last_error": snapshot.last_error.as_ref().map(|v| serde_json::json!({
+                        "code": v.code,
+                        "message": v.message,
+                        "ts_ms": v.ts_ms,
+                        "reason": v.reason,
+                    })),
+                })),
+            );
+            return Err(msg);
+        }
+    };
+    let resolved_input = cached_input.resolved.clone();
     let input_spec = resolved_input.spec.clone();
+    let ffmpeg = pipeline::ffmpeg_cmd().map_err(|e| e.to_string())?;
 
     let mut child = match std::process::Command::new(&ffmpeg)
         .args([
@@ -704,6 +723,8 @@ fn start_backend_recording(
         "record_input_endpoint_id": resolved_input.endpoint_id,
         "record_input_friendly_name": resolved_input.friendly_name,
         "record_input_resolution_log": resolved_input.resolution_log,
+        "record_input_cache_reason": cached_input.reason,
+        "record_input_cache_refreshed_ts_ms": cached_input.refreshed_at_ms,
     })));
     Ok(recording_id)
 }
@@ -1314,11 +1335,17 @@ fn list_audio_capture_devices() -> Result<Vec<record_input::AudioCaptureDeviceVi
 }
 
 #[tauri::command]
-fn set_settings(s: Settings) -> Result<(), String> {
+fn set_settings(
+    s: Settings,
+    record_input_cache: tauri::State<'_, record_input_cache::RecordInputCacheState>,
+) -> Result<(), String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let span = cmd_span(&dir, None, "CMD.set_settings", None);
     match settings::save_settings(&dir, &s) {
         Ok(()) => {
+            if cfg!(windows) {
+                let _ = record_input_cache.refresh_blocking(&dir, "set_settings");
+            }
             span.ok(None);
             Ok(())
         }
@@ -1334,6 +1361,7 @@ fn update_settings(
     app: tauri::AppHandle,
     state: tauri::State<TaskManager>,
     hotkeys: tauri::State<hotkeys::HotkeyManager>,
+    record_input_cache: tauri::State<record_input_cache::RecordInputCacheState>,
     patch: SettingsPatch,
 ) -> Result<Settings, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
@@ -1383,6 +1411,11 @@ fn update_settings(
     };
     let asr_model_changed = patch.asr_model.is_some();
     let asr_provider_changed = patch.asr_provider.is_some();
+    let record_input_changed = patch.record_input_strategy.is_some()
+        || patch.record_follow_default_role.is_some()
+        || patch.record_fixed_endpoint_id.is_some()
+        || patch.record_fixed_friendly_name.is_some()
+        || patch.record_input_spec.is_some();
     let mut next = settings::apply_patch(cur, patch);
     next.record_input_strategy = Some(
         next.record_input_strategy
@@ -1437,6 +1470,9 @@ fn update_settings(
 
     // Hotkeys are also best-effort; failures are traced and should not break settings.
     hotkeys.apply_from_settings_best_effort(&app, &dir, &next);
+    if cfg!(windows) && record_input_changed {
+        let _ = record_input_cache.refresh_blocking(&dir, "settings_changed");
+    }
 
     span.ok(None);
     Ok(next)
@@ -1541,6 +1577,8 @@ pub fn run() {
         .manage(TaskManager::new())
         .manage(RuntimeState::new())
         .manage(BackendRecordingState::new())
+        .manage(record_input_cache::RecordInputCacheState::new())
+        .manage(audio_device_notifications_windows::AudioDeviceNotificationState::new())
         .manage(hotkeys::HotkeyManager::new())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
@@ -1609,6 +1647,27 @@ pub fn run() {
                         python_version: None,
                     };
                     runtime.set_python(py);
+                }
+
+                if cfg!(windows) {
+                    let record_input_cache = app.state::<record_input_cache::RecordInputCacheState>();
+                    if toolchain_ready {
+                        let _ = record_input_cache.refresh_blocking(&dir, "app_startup");
+                        let listener =
+                            app.state::<audio_device_notifications_windows::AudioDeviceNotificationState>();
+                        listener.start_best_effort(&dir, record_input_cache.inner().clone());
+                    } else {
+                        trace::event(
+                            &dir,
+                            None,
+                            "App",
+                            "APP.record_input_cache_refresh_skipped",
+                            "ok",
+                            Some(serde_json::json!({
+                                "reason": "toolchain_not_ready",
+                            })),
+                        );
+                    }
                 }
             }
 
