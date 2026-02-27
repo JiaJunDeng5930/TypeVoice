@@ -37,6 +37,7 @@
 - [VERIFIED] 录音输入解析已从热路径移出：新增 `RecordInputCacheState`，慢操作（dshow 枚举/probe）仅在 `app_startup`、`set_settings/update_settings`、设备变更事件触发时执行；`start_backend_recording` 只读取缓存并启动 ffmpeg。
 - [VERIFIED] Windows 设备变更监听已接通：注册 `IMMNotificationClient`，在 `OnDefaultDeviceChanged/OnDeviceAdded/OnDeviceRemoved/OnDeviceStateChanged/OnPropertyValueChanged` 触发缓存刷新请求，并写入 `APP.audio_device_event` 诊断事件。
 - [VERIFIED] hotkey 录音 overlay 显示时机已修正：`MainScreen.startRecording` 只在 `start_backend_recording` 成功返回后再 `overlaySet(true, "REC")`，不再提前显示。
+- [VERIFIED] Windows 工作区已同步到提交 `7f22a8c` 并执行 `scripts/windows/windows_gate.ps1`：Windows compile gate、`verify_quick`、`verify_full` 均通过；`typevoice-desktop.exe` 已拉起（PID `37664`，`StartTime=2026-02-27 17:54:29`）。
 - [VERIFIED] Windows 下默认设备解析已接入 Core Audio（MMDevice endpoint id + friendly name），并通过 dshow 设备列表映射到 ffmpeg `audio=...` 输入规格；新增 `list_audio_capture_devices` 命令供设置页展示。
 - [VERIFIED] 设置页已新增 `RECORDING INPUT` 配置区，可显式选择策略、默认角色、固定设备并保存到 settings。
 - [VERIFIED] 本轮验证通过：`apps/desktop/src-tauri` 执行 `cargo test -q`（27 passed），`apps/desktop` 执行 `npm run build`（通过）。
