@@ -69,6 +69,7 @@
 - [VERIFIED] 2026-02-27：热键 overlay 已接入音量波形：后端录音进程同步输出 PCM 到 `stdout` 并按 50ms 窗口计算 `rms/peak` 事件 `tv_overlay_audio_level`；前端 `OverlayApp` 在 `REC/RECORDING` 状态显示 5 条音量条并按音量实时更新。WSL 侧 `cargo test -q` 与 `npm run build` 通过，Windows 侧 `run-latest.ps1` 已拉起单实例 `typevoice-desktop`（PID `21900`）。
 - [VERIFIED] 2026-02-27：误在 WSL 路径执行 `scripts/windows/windows_gate.ps1`，导致仓库 `.venv/pyvenv.cfg` 被改写为 Windows 解释器（`C:\\Python312`）。已执行 `/usr/bin/python3 -m venv --upgrade .venv` 原地修复，并验证 `./.venv/bin/python -m pytest tests -m quick -x` 通过（3 passed）。
 - [VERIFIED] 2026-02-27：Windows 工作区 `D:\\Projects\\TypeVoice` 已同步到最新提交 `4f08a50`（与 Linux 工作区一致）；随后执行 `scripts/windows/run-latest.ps1 -RepoRoot D:\\Projects\\TypeVoice`，编译通过并成功拉起 `typevoice-desktop.exe`（PID `31584`，StartTime `2026-02-27 14:52:50`，日志 `D:\\Projects\\TypeVoice\\tmp\\typevoice-logs\\tauri-latest-run.txt`）。
+- [VERIFIED] 2026-02-27：录音输入诊断日志已增强：`CMD.start_backend_recording` 现在记录 `record_input_spec`（实际传给 ffmpeg 的 dshow 输入）、`record_input_resolved_by`（匹配来源）与 `record_input_resolution_log`（每一步条件判断、失败原因与回退原因）。
 
 ### 当前工作集
 

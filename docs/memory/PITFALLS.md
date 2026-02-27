@@ -29,6 +29,7 @@
 - 热键录音参数必须与 settings 一致，避免界面与热键路径出现独立配置副本。
 - 任何任务可取消路径（cancel）都必须可观测地从 pre-cancel 到完成态关闭，不能停在中间态。
 - Windows dshow 下 `audio=default` 在部分机器/驱动组合中不可用；实现上应采用“策略 + 回退状态机”，把探测结果写入 `record_last_working_*` 缓存，而不是隐式固化到用户配置。
+- 排查“实际用了哪个麦克风”时，不能只看 `record_input_friendly_name`；应以 `record_input_spec` 与 `record_input_resolution_log` 为准（包含最终 ffmpeg 输入规格、匹配来源以及每一步回退原因）。
 
 ## 5. 模板与设置
 

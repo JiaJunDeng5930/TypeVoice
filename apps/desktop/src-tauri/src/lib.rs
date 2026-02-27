@@ -698,9 +698,12 @@ fn start_backend_recording(
     span.ok(Some(serde_json::json!({
         "recording_id": recording_id,
         "output_path": output_path,
+        "record_input_spec": input_spec,
         "record_input_strategy": resolved_input.strategy_used,
+        "record_input_resolved_by": resolved_input.resolved_by,
         "record_input_endpoint_id": resolved_input.endpoint_id,
         "record_input_friendly_name": resolved_input.friendly_name,
+        "record_input_resolution_log": resolved_input.resolution_log,
     })));
     Ok(recording_id)
 }
