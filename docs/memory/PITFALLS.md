@@ -27,7 +27,7 @@
 
 - 热键录音参数必须与 settings 一致，避免界面与热键路径出现独立配置副本。
 - 任何任务可取消路径（cancel）都必须可观测地从 pre-cancel 到完成态关闭，不能停在中间态。
-- Windows dshow 下 `audio=default` 在部分机器/驱动组合中不可用；录音输入应优先使用 dshow `Alternative name`（`audio="@device_cm_{...}\\wave_{...}"`）并在首次探测后固化，避免默认设备切换（如蓝牙连接）引入漂移。
+- Windows dshow 下 `audio=default` 在部分机器/驱动组合中不可用；实现上应采用“策略 + 回退状态机”，把探测结果写入 `record_last_working_*` 缓存，而不是隐式固化到用户配置。
 
 ## 5. 模板与设置
 

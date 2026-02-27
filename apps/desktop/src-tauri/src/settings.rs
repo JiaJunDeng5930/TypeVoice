@@ -32,6 +32,14 @@ pub struct Settings {
 
     // UX settings
     pub record_input_spec: Option<String>, // ffmpeg dshow input spec, e.g. audio=default
+    pub record_input_strategy: Option<String>, // follow_default|fixed_device|auto_select
+    pub record_follow_default_role: Option<String>, // communications|console
+    pub record_fixed_endpoint_id: Option<String>,
+    pub record_fixed_friendly_name: Option<String>,
+    pub record_last_working_endpoint_id: Option<String>,
+    pub record_last_working_friendly_name: Option<String>,
+    pub record_last_working_dshow_spec: Option<String>,
+    pub record_last_working_ts_ms: Option<i64>,
     pub rewrite_enabled: Option<bool>,
     pub rewrite_template_id: Option<String>,
     pub rewrite_glossary: Option<Vec<String>>,
@@ -73,6 +81,10 @@ pub struct SettingsPatch {
     pub llm_reasoning_effort: Option<Option<String>>,
 
     pub record_input_spec: Option<Option<String>>,
+    pub record_input_strategy: Option<Option<String>>,
+    pub record_follow_default_role: Option<Option<String>>,
+    pub record_fixed_endpoint_id: Option<Option<String>>,
+    pub record_fixed_friendly_name: Option<Option<String>>,
     pub rewrite_enabled: Option<Option<bool>>,
     pub rewrite_template_id: Option<Option<String>>,
     pub rewrite_glossary: Option<Option<Vec<String>>>,
@@ -132,6 +144,18 @@ pub fn apply_patch(mut s: Settings, p: SettingsPatch) -> Settings {
     }
     if let Some(v) = p.record_input_spec {
         s.record_input_spec = v;
+    }
+    if let Some(v) = p.record_input_strategy {
+        s.record_input_strategy = v;
+    }
+    if let Some(v) = p.record_follow_default_role {
+        s.record_follow_default_role = v;
+    }
+    if let Some(v) = p.record_fixed_endpoint_id {
+        s.record_fixed_endpoint_id = v;
+    }
+    if let Some(v) = p.record_fixed_friendly_name {
+        s.record_fixed_friendly_name = v;
     }
     if let Some(v) = p.rewrite_enabled {
         s.rewrite_enabled = v;

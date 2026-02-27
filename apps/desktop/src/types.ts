@@ -50,6 +50,14 @@ export type Settings = {
   llm_model?: string | null;
   llm_reasoning_effort?: string | null;
   record_input_spec?: string | null;
+  record_input_strategy?: string | null;
+  record_follow_default_role?: string | null;
+  record_fixed_endpoint_id?: string | null;
+  record_fixed_friendly_name?: string | null;
+  record_last_working_endpoint_id?: string | null;
+  record_last_working_friendly_name?: string | null;
+  record_last_working_dshow_spec?: string | null;
+  record_last_working_ts_ms?: number | null;
   rewrite_enabled?: boolean | null;
   rewrite_template_id?: string | null;
   rewrite_glossary?: string[] | null;
@@ -68,6 +76,13 @@ export type Settings = {
   hotkey_ptt?: string | null;
   hotkey_toggle?: string | null;
   hotkeys_show_overlay?: boolean | null;
+};
+
+export type AudioCaptureDevice = {
+  endpoint_id: string;
+  friendly_name: string;
+  is_default_communications: boolean;
+  is_default_console: boolean;
 };
 
 export type ModelStatus = {

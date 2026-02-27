@@ -1,4 +1,5 @@
 mod asr_service;
+mod audio_devices_windows;
 mod context_capture;
 #[cfg(windows)]
 mod context_capture_windows;
@@ -14,6 +15,7 @@ mod model;
 mod panic_log;
 mod pipeline;
 mod python_runtime;
+mod record_input;
 mod remote_asr;
 mod safe_print;
 mod settings;
@@ -275,27 +277,11 @@ fn has_active_recording(recorder: &tauri::State<'_, BackendRecordingState>) -> b
     recorder.inner.lock().unwrap().active.is_some()
 }
 
-fn first_quoted_token(line: &str) -> Option<String> {
-    let start = line.find('"')?;
-    let tail = &line[start + 1..];
-    let end = tail.find('"')?;
-    Some(tail[..end].to_string())
-}
-
 fn read_last_stderr_line(stderr: &mut std::process::ChildStderr) -> Option<String> {
     let mut buf = String::new();
     if std::io::Read::read_to_string(stderr, &mut buf).is_err() {
         return None;
     }
-    buf.lines()
-        .rev()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map(|line| line.to_string())
-}
-
-fn read_last_stderr_line_from_bytes(stderr: &[u8]) -> Option<String> {
-    let buf = String::from_utf8_lossy(stderr);
     buf.lines()
         .rev()
         .map(str::trim)
@@ -394,162 +380,6 @@ fn join_overlay_meter_thread(active: &mut ActiveBackendRecording) {
     }
 }
 
-fn parse_dshow_audio_devices(stderr: &str) -> Vec<(String, Option<String>)> {
-    let mut devices: Vec<(String, Option<String>)> = Vec::new();
-    let mut pending_idx: Option<usize> = None;
-    for line in stderr.lines() {
-        let text = line.trim();
-        if text.contains("Alternative name") {
-            if let (Some(idx), Some(alt)) = (pending_idx, first_quoted_token(text)) {
-                if let Some((_, slot)) = devices.get_mut(idx) {
-                    *slot = Some(alt);
-                }
-            }
-            continue;
-        }
-        if !text.contains("(audio)") {
-            continue;
-        }
-        if let Some(name) = first_quoted_token(text) {
-            devices.push((name, None));
-            pending_idx = Some(devices.len() - 1);
-        }
-    }
-    devices
-}
-
-fn score_audio_device_name(name: &str) -> i32 {
-    let lower = name.to_lowercase();
-    let mut score = 0_i32;
-    let positive = ["microphone", "mic", "array", "input", "capture"];
-    for kw in positive {
-        if lower.contains(kw) {
-            score += 10;
-        }
-    }
-    if name.contains("麦克风") || name.contains("阵列") {
-        score += 12;
-    }
-    let negative = [
-        "headset",
-        "headphone",
-        "speaker",
-        "output",
-        "loopback",
-        "stereo mix",
-        "broadcast",
-        "virtual",
-    ];
-    for kw in negative {
-        if lower.contains(kw) {
-            score -= 10;
-        }
-    }
-    if name.contains("耳机") || name.contains("扬声器") {
-        score -= 12;
-    }
-    score
-}
-
-fn normalize_record_input_spec(raw: &str) -> String {
-    let trimmed = raw.trim();
-    if let Some(rest) = trimmed.strip_prefix("audio=") {
-        let value = rest.trim();
-        if value.len() >= 2 {
-            let bytes = value.as_bytes();
-            let first = bytes[0] as char;
-            let last = bytes[value.len() - 1] as char;
-            if (first == '"' && last == '"') || (first == '\'' && last == '\'') {
-                return format!("audio={}", &value[1..value.len() - 1]);
-            }
-        }
-    }
-    trimmed.to_string()
-}
-
-fn probe_record_input_spec(ffmpeg: &std::path::Path, spec: &str) -> Result<(), String> {
-    let null_sink = if cfg!(windows) { "NUL" } else { "-" };
-    let output = std::process::Command::new(ffmpeg)
-        .args(["-hide_banner", "-loglevel", "error", "-f", "dshow", "-i"])
-        .arg(spec)
-        .args(["-t", "0.15", "-f", "null", null_sink])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .map_err(|e| format!("probe spawn failed: {e}"))?;
-    if output.status.success() {
-        return Ok(());
-    }
-    let tail = read_last_stderr_line_from_bytes(&output.stderr)
-        .unwrap_or_else(|| "probe failed without stderr".to_string());
-    Err(format!("{tail} (status={})", output.status))
-}
-
-fn auto_resolve_record_input_spec(ffmpeg: &std::path::Path) -> Result<String, String> {
-    let list_out = std::process::Command::new(ffmpeg)
-        .args([
-            "-hide_banner",
-            "-list_devices",
-            "true",
-            "-f",
-            "dshow",
-            "-i",
-            "dummy",
-        ])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .map_err(|e| {
-            format!("E_RECORD_INPUT_DISCOVERY_FAILED: enumerate dshow device failed: {e}")
-        })?;
-    let stderr = String::from_utf8_lossy(&list_out.stderr);
-    let devices = parse_dshow_audio_devices(&stderr);
-    if devices.is_empty() {
-        return Err("E_RECORD_INPUT_DISCOVERY_FAILED: no dshow audio device found".to_string());
-    }
-
-    #[derive(Debug)]
-    struct Candidate {
-        spec: String,
-        name: String,
-        score: i32,
-        order: usize,
-    }
-
-    let mut candidates: Vec<Candidate> = devices
-        .into_iter()
-        .enumerate()
-        .map(|(i, (name, alt))| {
-            let target = alt.unwrap_or_else(|| name.clone());
-            Candidate {
-                spec: format!("audio={target}"),
-                name,
-                score: score_audio_device_name(&target),
-                order: i,
-            }
-        })
-        .collect();
-    candidates.sort_by(|a, b| b.score.cmp(&a.score).then(a.order.cmp(&b.order)));
-
-    let mut failures = Vec::new();
-    for cand in candidates {
-        match probe_record_input_spec(ffmpeg, &cand.spec) {
-            Ok(()) => return Ok(cand.spec),
-            Err(e) => failures.push(format!("{} => {}", cand.name, e)),
-        }
-    }
-    let summary = failures
-        .into_iter()
-        .take(3)
-        .collect::<Vec<String>>()
-        .join(" | ");
-    Err(format!(
-        "E_RECORD_INPUT_AUTO_RESOLVE_FAILED: no probeable dshow audio input ({summary})"
-    ))
-}
-
 fn take_recording_asset(
     recorder: &tauri::State<'_, BackendRecordingState>,
     asset_id: &str,
@@ -584,34 +414,6 @@ fn sanitize_rewrite_glossary(glossary: Option<Vec<String>>) -> Vec<String> {
         }
     }
     out
-}
-
-fn record_input_spec_from_settings(
-    data_dir: &std::path::Path,
-    ffmpeg: &str,
-) -> Result<String, String> {
-    let ffmpeg_path = std::path::Path::new(ffmpeg);
-    let mut s = settings::load_settings_strict(data_dir).map_err(|e| e.to_string())?;
-    if let Some(configured) = s
-        .record_input_spec
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(ToOwned::to_owned)
-    {
-        let normalized = normalize_record_input_spec(&configured);
-        if normalized != configured {
-            s.record_input_spec = Some(normalized.clone());
-            let _ = settings::save_settings(data_dir, &s);
-        }
-        return Ok(normalized);
-    }
-
-    let auto = auto_resolve_record_input_spec(ffmpeg_path)?;
-    s.record_input_spec = Some(auto.clone());
-    settings::save_settings(data_dir, &s)
-        .map_err(|e| format!("E_RECORD_INPUT_AUTO_SAVE_FAILED: {e}"))?;
-    Ok(auto)
 }
 
 #[tauri::command]
@@ -800,13 +602,15 @@ fn start_backend_recording(
     let recording_id = uuid::Uuid::new_v4().to_string();
     let output_path = tmp.join(format!("recording-{recording_id}.wav"));
     let ffmpeg = pipeline::ffmpeg_cmd().map_err(|e| e.to_string())?;
-    let input_spec = match record_input_spec_from_settings(&dir, ffmpeg.as_str()) {
-        Ok(v) => v,
-        Err(e) => {
-            span.err("config", "E_SETTINGS_INVALID", &e, None);
-            return Err(e);
-        }
-    };
+    let resolved_input =
+        match record_input::resolve_record_input_for_recording(&dir, ffmpeg.as_str()) {
+            Ok(v) => v,
+            Err(e) => {
+                span.err("config", "E_SETTINGS_INVALID", &e, None);
+                return Err(e);
+            }
+        };
+    let input_spec = resolved_input.spec.clone();
 
     let mut child = match std::process::Command::new(&ffmpeg)
         .args([
@@ -894,6 +698,9 @@ fn start_backend_recording(
     span.ok(Some(serde_json::json!({
         "recording_id": recording_id,
         "output_path": output_path,
+        "record_input_strategy": resolved_input.strategy_used,
+        "record_input_endpoint_id": resolved_input.endpoint_id,
+        "record_input_friendly_name": resolved_input.friendly_name,
     })));
     Ok(recording_id)
 }
@@ -1486,6 +1293,24 @@ fn get_settings() -> Result<Settings, String> {
 }
 
 #[tauri::command]
+fn list_audio_capture_devices() -> Result<Vec<record_input::AudioCaptureDeviceView>, String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(&dir, None, "CMD.list_audio_capture_devices", None);
+    match record_input::list_audio_capture_devices_for_settings() {
+        Ok(items) => {
+            span.ok(Some(serde_json::json!({
+                "count": items.len(),
+            })));
+            Ok(items)
+        }
+        Err(e) => {
+            span.err("io", "E_RECORD_INPUT_ENUM_FAILED", &e, None);
+            Err(e)
+        }
+    }
+}
+
+#[tauri::command]
 fn set_settings(s: Settings) -> Result<(), String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let span = cmd_span(&dir, None, "CMD.set_settings", None);
@@ -1518,6 +1343,10 @@ fn update_settings(
         "llm_base_url": patch.llm_base_url.is_some(),
         "llm_model": patch.llm_model.is_some(),
         "llm_reasoning_effort": patch.llm_reasoning_effort.is_some(),
+        "record_input_strategy": patch.record_input_strategy.is_some(),
+        "record_follow_default_role": patch.record_follow_default_role.is_some(),
+        "record_fixed_endpoint_id": patch.record_fixed_endpoint_id.is_some(),
+        "record_fixed_friendly_name": patch.record_fixed_friendly_name.is_some(),
         "rewrite_enabled": patch.rewrite_enabled.is_some(),
         "rewrite_template_id": patch.rewrite_template_id.is_some(),
         "rewrite_glossary": patch.rewrite_glossary.is_some(),
@@ -1551,7 +1380,45 @@ fn update_settings(
     };
     let asr_model_changed = patch.asr_model.is_some();
     let asr_provider_changed = patch.asr_provider.is_some();
-    let next = settings::apply_patch(cur, patch);
+    let mut next = settings::apply_patch(cur, patch);
+    next.record_input_strategy = Some(
+        next.record_input_strategy
+            .as_deref()
+            .and_then(record_input::normalize_strategy_for_settings)
+            .unwrap_or(record_input::default_strategy())
+            .to_string(),
+    );
+    next.record_follow_default_role = Some(
+        next.record_follow_default_role
+            .as_deref()
+            .and_then(record_input::normalize_default_role_for_settings)
+            .unwrap_or(record_input::default_role())
+            .to_string(),
+    );
+    if next.record_input_strategy.as_deref() != Some("fixed_device") {
+        next.record_fixed_endpoint_id = None;
+        next.record_fixed_friendly_name = None;
+    } else {
+        let fixed_id = next
+            .record_fixed_endpoint_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(ToOwned::to_owned);
+        if fixed_id.is_none() {
+            let msg =
+                "E_RECORD_INPUT_FIXED_MISSING: record_fixed_endpoint_id is required when strategy=fixed_device";
+            span.err("config", "E_RECORD_INPUT_FIXED_MISSING", msg, None);
+            return Err(msg.to_string());
+        }
+        next.record_fixed_endpoint_id = fixed_id;
+        next.record_fixed_friendly_name = next
+            .record_fixed_friendly_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(ToOwned::to_owned);
+    }
     if let Err(e) = settings::save_settings(&dir, &next) {
         span.err_anyhow("settings", "E_CMD_UPDATE_SETTINGS", &e, None);
         return Err(e.to_string());
@@ -1799,6 +1666,7 @@ pub fn run() {
             history_clear,
             export_text,
             get_settings,
+            list_audio_capture_devices,
             set_settings,
             update_settings,
             hotkeys::check_hotkey_available,

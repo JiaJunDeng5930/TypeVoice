@@ -32,8 +32,11 @@
 - [UNCONFIRMED] 上下文窗口采样语义已向“前台窗口即时采样”收敛：hotkey 与任务内上下文均优先使用 `foreground_window_*` 路径；待校验路径：同 task_id 下两入口截图来源一致。
 - [UNCONFIRMED] 录音停止诊断链路已增强：`start_backend_recording` 增加 ffmpeg 早退探测（避免“启动已失败但在 stop 才暴露”），`stop_backend_recording` 在失败时附带 stderr 末行，前端停止失败提示改为展示真实错误提示（不再固定 `STOP FAILED`）；待校验路径：Windows 下复现一次录音设备异常并确认错误文案含 `E_RECORD_*` 与 stderr 线索。
 - [VERIFIED] Windows 侧已定位 `Recording failed` 根因为 dshow 输入规格 `audio=default` 在当前设备集上不可解析；`ffmpeg` 直接探测显示 `Error opening input files: I/O error`。固定为设备 `Alternative name`（如 `audio="@device_cm_{...}\\wave_{...}"`）后可稳定录制，且不受蓝牙耳机连接导致默认设备切换的影响。
-- [UNCONFIRMED] 后端录音输入已改为“自动探测并固化”机制：当 `record_input_spec` 为空时，后端使用 `ffmpeg -list_devices` 枚举 dshow 音频设备并按可录制探测选择可用设备，将选中的 `audio="@device_cm_{...}\\wave_{...}"` 回写到 `settings.json`；待校验路径：清空 `record_input_spec` 后首次录音自动成功，随后蓝牙设备连接/断开不改变已固化输入源。
-- [UNCONFIRMED] 已修正自动探测规格转义错误：`Process::Command` 场景下不再给 dshow 设备名附加内层引号（避免把引号当作设备名字面量导致 `I/O error`），并在读取已配置 `record_input_spec` 时自动归一化 `audio=\"...\"` 旧格式。
+- [VERIFIED] 录音输入策略已切换为显式模型：`record_input_strategy=follow_default|fixed_device|auto_select`，并新增 `record_follow_default_role`（默认 `communications`）与 `record_fixed_*` 字段。
+- [VERIFIED] 后端已实现录音输入回退状态机：`fixed_device -> default -> auto_select`，`follow_default -> last_working -> auto_select`；解析成功后仅更新 `record_last_working_*` 缓存，不再隐式覆盖用户配置。
+- [VERIFIED] Windows 下默认设备解析已接入 Core Audio（MMDevice endpoint id + friendly name），并通过 dshow 设备列表映射到 ffmpeg `audio=...` 输入规格；新增 `list_audio_capture_devices` 命令供设置页展示。
+- [VERIFIED] 设置页已新增 `RECORDING INPUT` 配置区，可显式选择策略、默认角色、固定设备并保存到 settings。
+- [VERIFIED] 本轮验证通过：`apps/desktop/src-tauri` 执行 `cargo test -q`（27 passed），`apps/desktop` 执行 `npm run build`（通过）。
 - [VERIFIED] 可调试性链路补强完成：前端失败提示不再只显示泛化 `ERROR`，已展示 `error_code + 摘要 + 建议动作`；`cancel_task` 失败返回显式带 `E_CMD_CANCEL`。
 - [VERIFIED] ASR 冷启动错误码保真已修复：runner 在 ready 前返回 `ok=false/error.code` 时，后端直接透传真实错误码并记录 stderr tail，不再退化为 `E_ASR_READY_EOF`。
 - [VERIFIED] 任务启动 runtime 创建失败已补发终态：`tokio runtime build Err` 分支会发 `task_event.failed(E_INTERNAL)`，避免 UI 卡住无终态。

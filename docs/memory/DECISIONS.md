@@ -110,11 +110,18 @@
 - 更正：此前条目中提到的旧录音转写命令链路已删除，不再作为 settings strict 读取的执行入口。
 - 当前口径：settings strict 读取路径由 `start_task`（及历史保留的非命令内部路径）承接，错误码仍维持 `E_CMD_RESOLVE_ASR_PREPROCESS` 族。
 
-## dshow 录音输入自动探测与固化
+## 录音输入策略建模（follow_default|fixed_device|auto_select）
 
-- 决策：当 `record_input_spec` 为空时，录音启动前自动枚举 dshow 音频设备并进行可录制探测，选中可用输入后回写 `settings.json` 固化为 `audio="@device_cm_{...}\\wave_{...}"`。
-- 依据：`audio=default` 在部分 Windows 设备/驱动组合下不可解析，且默认输入会随蓝牙设备连接切换导致录音源漂移。
-- 执行：`start_backend_recording` 通过 ffmpeg `-list_devices` + 探测选择输入，后续录音稳定使用已固化输入源。
+- 决策：录音设备选择改为显式策略模型，持久化“策略 + 用户选择”，不再把一次探测得到的 dshow spec 当作唯一真相。
+- 依据：`audio=default` 在部分 Windows 设备/驱动组合下不可解析；同时用户对“跟随系统默认”和“固定设备”是两种不同预期，不能混在同一字段里。
+- 执行：
+  - `settings.json` 新增 `record_input_strategy`、`record_follow_default_role`、`record_fixed_endpoint_id`、`record_fixed_friendly_name`。
+  - `follow_default` 默认 role 固定为 `communications`（语音输入场景优先）。
+  - 新增 `record_last_working_*` 缓存字段，仅用于容错回退，不回写为用户配置。
+  - `start_backend_recording` 每次启动前按策略解析输入：
+    - `fixed_device`: 固定设备 -> 系统默认 -> 自动选择
+    - `follow_default`: 系统默认 -> last_working -> 自动选择
+    - `auto_select`: 枚举 + probe 选择可用设备
 
 ## 可调试性失败展示契约
 

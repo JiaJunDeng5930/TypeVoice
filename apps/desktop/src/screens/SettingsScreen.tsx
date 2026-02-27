@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { defaultTauriGateway, type TauriGateway } from "../infra/runtimePorts";
-import type { ApiKeyStatus, ModelStatus, PromptTemplate, Settings } from "../types";
+import type {
+  ApiKeyStatus,
+  AudioCaptureDevice,
+  ModelStatus,
+  PromptTemplate,
+  Settings,
+} from "../types";
 import { PixelButton } from "../ui/PixelButton";
 import { PixelDialog } from "../ui/PixelDialog";
 import { PixelInput, PixelTextarea } from "../ui/PixelInput";
@@ -28,6 +34,17 @@ const REASONING: PixelSelectOption[] = [
 const ASR_PROVIDERS: PixelSelectOption[] = [
   { value: "local", label: "local (on-device)" },
   { value: "remote", label: "remote (cloud)" },
+];
+
+const RECORD_INPUT_STRATEGIES: PixelSelectOption[] = [
+  { value: "follow_default", label: "follow system default" },
+  { value: "fixed_device", label: "fixed specific device" },
+  { value: "auto_select", label: "auto-select available" },
+];
+
+const RECORD_DEFAULT_ROLES: PixelSelectOption[] = [
+  { value: "communications", label: "communications (eCommunications)" },
+  { value: "console", label: "console (eConsole)" },
 ];
 
 type RecordingHotkey = "ptt" | "toggle";
@@ -97,6 +114,11 @@ export function SettingsScreen({
   const [rewriteTemplateId, setRewriteTemplateId] = useState("");
   const [rewriteGlossaryDraft, setRewriteGlossaryDraft] = useState("");
   const [autoPasteEnabled, setAutoPasteEnabled] = useState(true);
+  const [recordInputStrategy, setRecordInputStrategy] = useState("follow_default");
+  const [recordFollowDefaultRole, setRecordFollowDefaultRole] = useState("communications");
+  const [recordFixedEndpointId, setRecordFixedEndpointId] = useState("");
+  const [recordFixedFriendlyName, setRecordFixedFriendlyName] = useState("");
+  const [audioCaptureDevices, setAudioCaptureDevices] = useState<AudioCaptureDevice[]>([]);
 
   const [hotkeysEnabled, setHotkeysEnabled] = useState(true);
   const [hotkeyPtt, setHotkeyPtt] = useState("F9");
@@ -160,6 +182,18 @@ export function SettingsScreen({
     setRewriteGlossaryDraft((settings.rewrite_glossary || []).join("\n"));
     setRewriteIncludeGlossary(settings.rewrite_include_glossary ?? true);
     setAutoPasteEnabled(settings.auto_paste_enabled ?? true);
+    setRecordInputStrategy(
+      settings.record_input_strategy === "fixed_device"
+        ? "fixed_device"
+        : settings.record_input_strategy === "auto_select"
+          ? "auto_select"
+          : "follow_default",
+    );
+    setRecordFollowDefaultRole(
+      settings.record_follow_default_role === "console" ? "console" : "communications",
+    );
+    setRecordFixedEndpointId(settings.record_fixed_endpoint_id ?? "");
+    setRecordFixedFriendlyName(settings.record_fixed_friendly_name ?? "");
 
     if (typeof settings.hotkeys_enabled !== "boolean") {
       pushToast("SETTINGS INVALID: hotkeys_enabled missing", "danger");
@@ -186,6 +220,7 @@ export function SettingsScreen({
     (async () => {
       await refreshModelStatus();
       await refreshTemplates();
+      await refreshAudioCaptureDevices();
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -199,10 +234,29 @@ export function SettingsScreen({
     return templates.map((t) => ({ value: t.id, label: t.name }));
   }, [templates]);
 
+  const captureDeviceOptions: PixelSelectOption[] = useMemo(() => {
+    return audioCaptureDevices.map((v) => {
+      let label = v.friendly_name;
+      if (v.is_default_communications) {
+        label += " [default communications]";
+      }
+      if (v.is_default_console) {
+        label += " [default console]";
+      }
+      return { value: v.endpoint_id, label };
+    });
+  }, [audioCaptureDevices]);
+
   const selectedRewriteLabel = useMemo(() => {
     const t = templates.find((x) => x.id === rewriteTemplateId);
     return t?.name || "";
   }, [rewriteTemplateId, templates]);
+
+  useEffect(() => {
+    const found = audioCaptureDevices.find((v) => v.endpoint_id === recordFixedEndpointId);
+    if (!found) return;
+    setRecordFixedFriendlyName(found.friendly_name);
+  }, [audioCaptureDevices, recordFixedEndpointId]);
 
   async function startRecording(target: RecordingHotkey) {
     if (!hotkeysEnabled) return;
@@ -227,6 +281,21 @@ export function SettingsScreen({
     } catch {
       // templates are optional
       setTemplates([]);
+    }
+  }
+
+  async function refreshAudioCaptureDevices() {
+    try {
+      const rows = (await gateway.invoke(
+        "list_audio_capture_devices",
+      )) as AudioCaptureDevice[];
+      setAudioCaptureDevices(rows);
+      if (!recordFixedEndpointId.trim()) return;
+      const found = rows.find((v) => v.endpoint_id === recordFixedEndpointId);
+      if (!found) return;
+      setRecordFixedFriendlyName(found.friendly_name);
+    } catch {
+      setAudioCaptureDevices([]);
     }
   }
 
@@ -273,6 +342,42 @@ export function SettingsScreen({
       setRemoteAsrConcurrency(String(normalizedConcurrency));
       pushToast("SAVED", "ok");
       await refreshModelStatus();
+    } catch {
+      pushToast("SAVE FAILED", "danger");
+    }
+  }
+
+  async function saveRecordingInput() {
+    const strategy =
+      recordInputStrategy === "fixed_device"
+        ? "fixed_device"
+        : recordInputStrategy === "auto_select"
+          ? "auto_select"
+          : "follow_default";
+    const role = recordFollowDefaultRole === "console" ? "console" : "communications";
+    if (strategy === "fixed_device" && !recordFixedEndpointId.trim()) {
+      pushToast("FIXED DEVICE MUST BE SELECTED", "danger");
+      return;
+    }
+    const selected = audioCaptureDevices.find(
+      (v) => v.endpoint_id === recordFixedEndpointId.trim(),
+    );
+    try {
+      await savePatch({
+        record_input_strategy: strategy,
+        record_follow_default_role: role,
+        record_fixed_endpoint_id:
+          strategy === "fixed_device" ? recordFixedEndpointId.trim() : null,
+        record_fixed_friendly_name:
+          strategy === "fixed_device"
+            ? (selected?.friendly_name || recordFixedFriendlyName || "").trim() || null
+            : null,
+      });
+      if (selected) {
+        setRecordFixedFriendlyName(selected.friendly_name);
+      }
+      pushToast("SAVED", "ok");
+      await refreshAudioCaptureDevices();
     } catch {
       pushToast("SAVE FAILED", "danger");
     }
@@ -675,6 +780,50 @@ export function SettingsScreen({
             <PixelButton onClick={saveAsr} tone="accent">
               SAVE
             </PixelButton>
+          </div>
+        </div>
+        <div className="sectionTitle" style={{ marginTop: 18 }}>
+          RECORDING INPUT
+        </div>
+        <div className="stack">
+          <PixelSelect
+            value={recordInputStrategy}
+            onChange={setRecordInputStrategy}
+            options={RECORD_INPUT_STRATEGIES}
+          />
+          {recordInputStrategy === "follow_default" ? (
+            <PixelSelect
+              value={recordFollowDefaultRole}
+              onChange={setRecordFollowDefaultRole}
+              options={RECORD_DEFAULT_ROLES}
+            />
+          ) : null}
+          {recordInputStrategy === "fixed_device" ? (
+            <>
+              <PixelSelect
+                value={recordFixedEndpointId}
+                onChange={setRecordFixedEndpointId}
+                options={captureDeviceOptions}
+                placeholder="select fixed capture endpoint"
+              />
+              {recordFixedFriendlyName ? (
+                <div className="muted">fixed: {recordFixedFriendlyName}</div>
+              ) : null}
+            </>
+          ) : null}
+          {audioCaptureDevices.length === 0 ? (
+            <div className="muted">no active capture endpoints detected</div>
+          ) : null}
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <div className="muted">
+              default role applies on next recording start; ongoing recording will not switch.
+            </div>
+            <div className="row" style={{ justifyContent: "flex-end" }}>
+              <PixelButton onClick={refreshAudioCaptureDevices}>REFRESH</PixelButton>
+              <PixelButton onClick={saveRecordingInput} tone="accent">
+                SAVE
+              </PixelButton>
+            </div>
           </div>
         </div>
         <div className="sectionTitle" style={{ marginTop: 18 }}>
