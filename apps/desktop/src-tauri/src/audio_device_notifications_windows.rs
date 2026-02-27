@@ -78,7 +78,7 @@ mod imp {
     use std::time::Duration;
 
     use serde_json::json;
-    use windows::core::{implement, Interface, PCWSTR};
+    use windows::core::{implement, PCWSTR};
     use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
     use windows::Win32::Media::Audio::{
         eAll, eCapture, eCommunications, eConsole, eMultimedia, eRender, EDataFlow, ERole,
@@ -204,53 +204,15 @@ mod imp {
         cache: RecordInputCacheState,
     }
 
-    impl DeviceNotificationClient {
-        fn emit_event(
-            &self,
-            event_type: &str,
-            flow: Option<EDataFlow>,
-            role: Option<ERole>,
-            endpoint_id: &str,
-            state: Option<u32>,
-            should_refresh: bool,
-        ) {
-            crate::trace::event(
-                &self.data_dir,
-                None,
-                "App",
-                "APP.audio_device_event",
-                "ok",
-                Some(json!({
-                    "event_type": event_type,
-                    "flow": flow.map(flow_label),
-                    "role": role.map(role_label),
-                    "endpoint_id": endpoint_id,
-                    "state": state,
-                    "refresh_requested": should_refresh,
-                })),
-            );
-
-            if should_refresh {
-                self.cache.request_refresh(
-                    self.data_dir.clone(),
-                    format!(
-                        "device_event:{}:{}:{}",
-                        event_type,
-                        flow.map(flow_label).unwrap_or_else(|| "none".to_string()),
-                        role.map(role_label).unwrap_or_else(|| "none".to_string())
-                    ),
-                );
-            }
-        }
-    }
-
-    impl IMMNotificationClient_Impl for DeviceNotificationClient {
+    impl IMMNotificationClient_Impl for DeviceNotificationClient_Impl {
         fn OnDeviceStateChanged(
             &self,
             pwstrdeviceid: &PCWSTR,
             dwnewstate: DEVICE_STATE,
         ) -> windows::core::Result<()> {
-            self.emit_event(
+            emit_event(
+                &self.data_dir,
+                &self.cache,
                 "device_state_changed",
                 None,
                 None,
@@ -262,7 +224,9 @@ mod imp {
         }
 
         fn OnDeviceAdded(&self, pwstrdeviceid: &PCWSTR) -> windows::core::Result<()> {
-            self.emit_event(
+            emit_event(
+                &self.data_dir,
+                &self.cache,
                 "device_added",
                 None,
                 None,
@@ -274,7 +238,9 @@ mod imp {
         }
 
         fn OnDeviceRemoved(&self, pwstrdeviceid: &PCWSTR) -> windows::core::Result<()> {
-            self.emit_event(
+            emit_event(
+                &self.data_dir,
+                &self.cache,
                 "device_removed",
                 None,
                 None,
@@ -292,7 +258,9 @@ mod imp {
             pwstrdefaultdeviceid: &PCWSTR,
         ) -> windows::core::Result<()> {
             let refresh = flow == eCapture;
-            self.emit_event(
+            emit_event(
+                &self.data_dir,
+                &self.cache,
                 "default_device_changed",
                 Some(flow),
                 Some(role),
@@ -308,7 +276,9 @@ mod imp {
             pwstrdeviceid: &PCWSTR,
             _key: &PROPERTYKEY,
         ) -> windows::core::Result<()> {
-            self.emit_event(
+            emit_event(
+                &self.data_dir,
+                &self.cache,
                 "property_value_changed",
                 None,
                 None,
@@ -321,7 +291,46 @@ mod imp {
     }
 
     fn pcwstr_to_string(v: &PCWSTR) -> String {
-        v.to_string().unwrap_or_default()
+        unsafe { v.to_string().unwrap_or_default() }
+    }
+
+    fn emit_event(
+        data_dir: &Path,
+        cache: &RecordInputCacheState,
+        event_type: &str,
+        flow: Option<EDataFlow>,
+        role: Option<ERole>,
+        endpoint_id: &str,
+        state: Option<u32>,
+        should_refresh: bool,
+    ) {
+        crate::trace::event(
+            data_dir,
+            None,
+            "App",
+            "APP.audio_device_event",
+            "ok",
+            Some(json!({
+                "event_type": event_type,
+                "flow": flow.map(flow_label),
+                "role": role.map(role_label),
+                "endpoint_id": endpoint_id,
+                "state": state,
+                "refresh_requested": should_refresh,
+            })),
+        );
+
+        if should_refresh {
+            cache.request_refresh(
+                data_dir.to_path_buf(),
+                format!(
+                    "device_event:{}:{}:{}",
+                    event_type,
+                    flow.map(flow_label).unwrap_or_else(|| "none".to_string()),
+                    role.map(role_label).unwrap_or_else(|| "none".to_string())
+                ),
+            );
+        }
     }
 
     fn flow_label(flow: EDataFlow) -> String {
