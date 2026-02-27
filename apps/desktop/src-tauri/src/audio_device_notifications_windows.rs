@@ -79,6 +79,7 @@ mod imp {
 
     use serde_json::json;
     use windows::core::{implement, Interface, PCWSTR};
+    use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
     use windows::Win32::Media::Audio::{
         eAll, eCapture, eCommunications, eConsole, eMultimedia, eRender, EDataFlow, ERole,
         IMMDeviceEnumerator, IMMNotificationClient, IMMNotificationClient_Impl, MMDeviceEnumerator,
@@ -86,7 +87,6 @@ mod imp {
     };
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
-        RPC_E_CHANGED_MODE,
     };
     use windows::Win32::UI::Shell::PropertiesSystem::PROPERTYKEY;
 
@@ -198,7 +198,7 @@ mod imp {
         ))
     }
 
-    #[implement(Windows::Win32::Media::Audio::IMMNotificationClient)]
+    #[implement(windows::Win32::Media::Audio::IMMNotificationClient)]
     struct DeviceNotificationClient {
         data_dir: PathBuf,
         cache: RecordInputCacheState,
