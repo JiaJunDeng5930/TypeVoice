@@ -22,6 +22,7 @@
 - `verify_quick.py` 会在本地模型缺失时直接失败（`models/Qwen3-ASR-0.6B`）；在无模型环境中先补齐模型资产再跑 gate，避免把环境缺失误判为代码回归。
 - `verify_quick.py` 在仓库根目录缺失 `./.venv` 时会直接失败（`FAIL: .venv missing`）；在执行 gate 之前先恢复项目本地虚拟环境。
 - 用户要求“严格按文档执行”时，任何自行加步骤（哪怕是为了排障）都会被判定为偏移；必须先原样回传文档命令报错，再按文档明示步骤处理。
+- 从 WSL 路径直接执行 `scripts/windows/windows_gate.ps1` 会让脚本在 `\\wsl.localhost\...` 工作区内创建/升级 `.venv`，可能把 Linux `.venv/pyvenv.cfg` 改写为 Windows 解释器（如 `C:\\Python312`），造成环境污染。`windows_gate.ps1` 只允许在 Windows 工作区 `D:\\Projects\\TypeVoice` 执行；若已污染，先用 `/usr/bin/python3 -m venv --upgrade .venv` 原地修复。
 
 ## 4. 全局热键链路
 

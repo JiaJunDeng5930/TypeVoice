@@ -67,6 +67,7 @@
 - [VERIFIED] 2026-02-26：本轮回归通过 `cargo test -q`（25 passed）与 `npm run build`（通过）。
 - [VERIFIED] 2026-02-26：本轮 Python 测试仍不可执行：`.venv` 缺失，且系统 `python3` 未安装 `pytest`。
 - [VERIFIED] 2026-02-27：热键 overlay 已接入音量波形：后端录音进程同步输出 PCM 到 `stdout` 并按 50ms 窗口计算 `rms/peak` 事件 `tv_overlay_audio_level`；前端 `OverlayApp` 在 `REC/RECORDING` 状态显示 5 条音量条并按音量实时更新。WSL 侧 `cargo test -q` 与 `npm run build` 通过，Windows 侧 `run-latest.ps1` 已拉起单实例 `typevoice-desktop`（PID `21900`）。
+- [VERIFIED] 2026-02-27：误在 WSL 路径执行 `scripts/windows/windows_gate.ps1`，导致仓库 `.venv/pyvenv.cfg` 被改写为 Windows 解释器（`C:\\Python312`）。已执行 `/usr/bin/python3 -m venv --upgrade .venv` 原地修复，并验证 `./.venv/bin/python -m pytest tests -m quick -x` 通过（3 passed）。
 
 ### 当前工作集
 
