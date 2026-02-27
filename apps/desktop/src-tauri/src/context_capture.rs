@@ -4,14 +4,14 @@ use std::path::Path;
 
 use crate::context_pack::{ContextBudget, ContextSnapshot, HistorySnippet};
 use crate::{history, settings};
-use crate::{trace, trace::Span};
+use crate::{obs, obs::Span};
 #[cfg(windows)]
 use anyhow::{anyhow, Result};
 #[cfg(windows)]
 use uuid::Uuid;
 
 #[cfg(windows)]
-use crate::debug_log;
+use crate::obs::debug;
 
 #[derive(Debug, Clone)]
 pub struct ContextConfig {
@@ -461,17 +461,15 @@ impl ContextService {
 
                     // Optional debug artifact: persist the screenshot PNG for manual inspection.
                     // This is OFF by default because screenshots are sensitive.
-                    if debug_log::verbose_enabled() && debug_log::include_screenshots() {
+                    if debug::verbose_enabled() && debug::include_screenshots() {
                         if let Some(sc) = snap.screenshot.as_ref() {
-                            if let Some(info) =
-                                debug_log::write_payload_binary_no_truncate_best_effort(
-                                    data_dir,
-                                    task_id,
-                                    "prev_window.png",
-                                    sc.png_bytes.clone(),
-                                )
-                            {
-                                debug_log::emit_debug_event_best_effort(
+                            if let Some(info) = debug::write_payload_binary_no_truncate_best_effort(
+                                data_dir,
+                                task_id,
+                                "prev_window.png",
+                                sc.png_bytes.clone(),
+                            ) {
+                                debug::emit_debug_event_best_effort(
                                     data_dir,
                                     "debug_prev_window_png",
                                     task_id,
@@ -512,7 +510,7 @@ impl ContextService {
 
         // Mark the overall span as ok (it may contain inner errs/skips).
         // Note: we intentionally do not fail the pipeline based on context capture.
-        trace::event(
+        obs::event(
             data_dir,
             Some(task_id),
             "ContextCapture",

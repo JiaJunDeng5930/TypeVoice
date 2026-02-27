@@ -8,8 +8,8 @@ use std::{
 use anyhow::{anyhow, Context, Result};
 use serde::Serialize;
 
-use crate::debug_log;
-use crate::trace::Span;
+use crate::obs::debug;
+use crate::obs::Span;
 
 const MAX_TOOL_STDERR_BYTES: usize = 4096;
 
@@ -306,8 +306,8 @@ pub fn preprocess_ffmpeg_cancellable(
             if !status.success() {
                 let excerpt = stderr_excerpt_from_child(child.stderr.take());
                 *pid_slot.lock().unwrap() = None;
-                if debug_log::verbose_enabled() {
-                    let _ = debug_log::write_payload_best_effort(
+                if debug::verbose_enabled() {
+                    let _ = debug::write_payload_best_effort(
                         data_dir,
                         task_id,
                         "ffmpeg_stderr.txt",

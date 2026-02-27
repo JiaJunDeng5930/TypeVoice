@@ -8,7 +8,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::trace::Span;
+use crate::obs::Span;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromptTemplate {

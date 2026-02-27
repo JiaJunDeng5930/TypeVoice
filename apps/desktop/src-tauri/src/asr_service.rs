@@ -10,8 +10,9 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
-use crate::trace::Span;
-use crate::{debug_log, pipeline};
+use crate::obs::debug;
+use crate::obs::Span;
+use crate::pipeline;
 
 const READY_STDERR_MAX_CHARS: usize = 1_024;
 
@@ -509,7 +510,7 @@ impl AsrService {
                     }
                 };
 
-                if debug_log::verbose_enabled() && debug_log::include_asr_segments() {
+                if debug::verbose_enabled() && debug::include_asr_segments() {
                     if let Some(segments) = resp.segments.clone() {
                         let payload = serde_json::to_vec_pretty(&serde_json::json!({
                             "task_id": task_id,
@@ -517,7 +518,7 @@ impl AsrService {
                             "segments": segments,
                         }))
                         .unwrap_or_default();
-                        if let Some(info) = debug_log::write_payload_best_effort(
+                        if let Some(info) = debug::write_payload_best_effort(
                             data_dir,
                             task_id,
                             "asr_segments.json",
@@ -537,7 +538,7 @@ impl AsrService {
                                         format!("chunking_enabled=false num_segments={}", s.len())
                                     })
                                 });
-                            debug_log::emit_debug_event_best_effort(
+                            debug::emit_debug_event_best_effort(
                                 data_dir,
                                 "debug_asr_segments",
                                 task_id,

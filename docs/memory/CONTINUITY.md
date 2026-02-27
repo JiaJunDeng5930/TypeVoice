@@ -46,6 +46,9 @@
 - [VERIFIED] 任务启动 runtime 创建失败已补发终态：`tokio runtime build Err` 分支会发 `task_event.failed(E_INTERNAL)`，避免 UI 卡住无终态。
 - [VERIFIED] trace 并发写入已加全局互斥，新增并发 JSONL 可解析测试 `trace::tests::concurrent_emit_keeps_jsonl_lines_parseable`。
 - [VERIFIED] gate 已纳入可调试性自动化：`verify_quick/full` 新增 Rust 可调试性契约测试步骤，并要求 ASR 失败时必须有结构化 `error.code`。
+- [VERIFIED] 日志系统已完成模块化重构：新增 `apps/desktop/src-tauri/src/obs/`（`schema/writer/trace/metrics/debug/startup/panic`），`trace.jsonl` 与 `metrics.jsonl` 统一走“有界队列 + 单写线程”串行落盘，业务代码不再直接 append 文件。
+- [VERIFIED] 结构化指标统一完成：`TaskManager` 与 debug artifact 均改为 `MetricsRecord` 写入，`metrics.jsonl` 新增稳定 `type` 标签与 `ts_ms` 字段，队列拥塞时记录 `logger_dropped`。
+- [VERIFIED] 可调试性契约新增并通过：`obs::writer::tests::concurrent_metrics_emit_keeps_jsonl_lines_parseable` 与 `obs::writer::tests::trace_rotation_creates_suffix_file`；`scripts/verify_quick.py` 与 `scripts/verify_full.py` 已纳入 metrics 并发可解析测试。
 - [VERIFIED] 本仓已完成回归：`cargo check --locked`、`npm run build`、`pytest -q tests`、`verify_quick.py`、`verify_full.py` 全部通过。
 - [VERIFIED] 2026-02-14：已清理错误路径 `/home/atticusdeng/Projects/TypeVoice` 下误拉取产物（`.venv`、`models`、`apps/desktop/node_modules`、toolchain 可执行）；随后按文档在 `D:\Projects\TypeVoice` 执行 `.\scripts\windows\run-latest.ps1`，成功拉起 Windows runtime（`typevoice-desktop.exe`, PID `38500`）。
 - [VERIFIED] `TaskManager` 已引入可注入依赖缝隙：新增 `AsrClient`、`ContextCollector` 与 `TaskManagerDeps`，核心编排不再硬编码外部依赖构造。
@@ -105,7 +108,7 @@
 
 ## 关键文件（当前可直接核验）
 
-- `apps/desktop/src-tauri/src/trace.rs`：trace/diagnostic 主流程。
+- `apps/desktop/src-tauri/src/obs/trace.rs`、`apps/desktop/src-tauri/src/obs/writer.rs`：trace/metrics 统一日志落盘主流程（异步单写线程）。
 - `apps/desktop/src-tauri/src/context_capture.rs`、`apps/desktop/src-tauri/src/context_capture_windows.rs`：上下文采集。
 - `apps/desktop/src-tauri/src/lib.rs`、`pipeline.rs`、`settings.rs`、`templates.rs`：流程入口与配置。
 - `scripts/verify_quick.py`、`scripts/verify_full.py`：验收闭环。

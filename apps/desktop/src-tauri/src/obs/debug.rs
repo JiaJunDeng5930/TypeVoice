@@ -1,21 +1,21 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    sync::{Mutex, OnceLock},
+    time::UNIX_EPOCH,
 };
 
 use sha2::{Digest, Sha256};
 
-use crate::metrics;
+use super::{metrics, schema};
+use crate::obs::schema::MetricsRecord;
 
 const DEFAULT_MAX_PAYLOAD_BYTES: usize = 2_000_000; // 2MB
 const DEFAULT_MAX_TASKS: usize = 50;
 
-fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+fn write_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
 }
 
 fn env_bool(key: &str) -> bool {
@@ -40,7 +40,6 @@ pub fn verbose_enabled() -> bool {
 }
 
 pub fn include_llm() -> bool {
-    // Only meaningful when verbose is enabled. Default: enabled.
     match std::env::var("TYPEVOICE_DEBUG_INCLUDE_LLM") {
         Ok(_) => env_bool("TYPEVOICE_DEBUG_INCLUDE_LLM"),
         Err(_) => true,
@@ -48,7 +47,6 @@ pub fn include_llm() -> bool {
 }
 
 pub fn include_asr_segments() -> bool {
-    // Default: enabled.
     match std::env::var("TYPEVOICE_DEBUG_INCLUDE_ASR_SEGMENTS") {
         Ok(_) => env_bool("TYPEVOICE_DEBUG_INCLUDE_ASR_SEGMENTS"),
         Err(_) => true,
@@ -57,7 +55,6 @@ pub fn include_asr_segments() -> bool {
 
 #[allow(dead_code)]
 pub fn include_screenshots() -> bool {
-    // Default: disabled. Screenshots are sensitive and should only be persisted when explicitly enabled.
     env_bool("TYPEVOICE_DEBUG_INCLUDE_SCREENSHOT")
 }
 
@@ -104,6 +101,13 @@ fn truncate_with_suffix(mut b: Vec<u8>, max_bytes: usize, suffix: &[u8]) -> (Vec
     (b, true)
 }
 
+fn to_payload_path(data_dir: &Path, path: &Path) -> String {
+    match path.strip_prefix(data_dir) {
+        Ok(p) => p.to_string_lossy().to_string(),
+        Err(_) => path.to_string_lossy().to_string(),
+    }
+}
+
 pub fn write_payload_best_effort(
     data_dir: &Path,
     task_id: &str,
@@ -114,6 +118,7 @@ pub fn write_payload_best_effort(
         return None;
     }
 
+    let _guard = write_lock().lock().unwrap();
     let max_bytes = max_payload_bytes();
     let suffix = b"\n...(truncated)\n";
     let (out, truncated) = truncate_with_suffix(bytes, max_bytes, suffix);
@@ -130,7 +135,6 @@ pub fn write_payload_best_effort(
         return None;
     }
 
-    // Keep the directory from growing without bound.
     prune_debug_dir_best_effort(data_dir);
 
     Some(PayloadInfo {
@@ -152,8 +156,7 @@ pub fn write_payload_binary_no_truncate_best_effort(
         return None;
     }
 
-    // For binary payloads (e.g. screenshots), truncation would corrupt the file.
-    // We enforce the same size limit but skip writing if it's too large.
+    let _guard = write_lock().lock().unwrap();
     let max_bytes = max_payload_bytes();
     if bytes.len() > max_bytes {
         crate::safe_eprintln!(
@@ -197,17 +200,17 @@ pub fn emit_debug_event_best_effort(
         return;
     }
 
-    let obj = serde_json::json!({
-        "type": event_type,
-        "ts_ms": now_ms(),
-        "task_id": task_id,
-        "payload_path": info.path.to_string_lossy().to_string(),
-        "payload_bytes": info.bytes_written,
-        "truncated": info.truncated,
-        "sha256": info.sha256,
-        "note": note,
-    });
-    if let Err(e) = metrics::append_jsonl(data_dir, &obj) {
+    let rec = MetricsRecord::DebugArtifact {
+        ts_ms: schema::now_ms(),
+        task_id: task_id.to_string(),
+        artifact_type: event_type.to_string(),
+        payload_path: to_payload_path(data_dir, &info.path),
+        payload_bytes: info.bytes_written,
+        truncated: info.truncated,
+        sha256: info.sha256.clone(),
+        note,
+    };
+    if let Err(e) = metrics::emit(data_dir, rec) {
         crate::safe_eprintln!("debug_log: metrics append failed: {e:#}");
     }
 }
@@ -224,26 +227,26 @@ pub fn prune_debug_dir_best_effort(data_dir: &Path) {
         Err(_) => return,
     };
 
-    let mut dirs: Vec<(SystemTime, PathBuf)> = Vec::new();
+    let mut dirs: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
     for ent in entries.flatten() {
         let p = ent.path();
         if !p.is_dir() {
             continue;
         }
-        let m = ent
+        let modified = ent
             .metadata()
             .ok()
             .and_then(|m| m.modified().ok())
             .unwrap_or(UNIX_EPOCH);
-        dirs.push((m, p));
+        dirs.push((modified, p));
     }
+
     if dirs.len() <= max_keep {
         return;
     }
 
-    // Newest first; delete old ones.
     dirs.sort_by(|a, b| b.0.cmp(&a.0));
-    for (_m, p) in dirs.into_iter().skip(max_keep) {
+    for (_modified, p) in dirs.into_iter().skip(max_keep) {
         if let Err(e) = fs::remove_dir_all(&p) {
             crate::safe_eprintln!("debug_log: remove_dir_all failed: {}: {e}", p.display());
         }

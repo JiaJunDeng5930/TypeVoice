@@ -5,8 +5,8 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
+use crate::obs::Span;
 use crate::settings::Settings;
-use crate::trace::Span;
 
 #[derive(Debug, Clone)]
 struct HotkeyConfig {
@@ -164,7 +164,7 @@ impl HotkeyManager {
             let mut prev = self.registered.lock().unwrap();
             for shortcut in prev.iter() {
                 if let Err(e) = gs.unregister(shortcut.as_str()) {
-                    crate::trace::event(
+                    crate::obs::event(
                         data_dir,
                         None,
                         "Hotkeys",
@@ -232,7 +232,7 @@ impl HotkeyManager {
                 };
                 let _ = app.emit("tv_hotkey_record", payload);
             }) {
-                crate::trace::event(
+                crate::obs::event(
                     data_dir,
                     None,
                     "Hotkeys",
@@ -285,7 +285,7 @@ impl HotkeyManager {
                 };
                 let _ = app.emit("tv_hotkey_record", payload);
             }) {
-                crate::trace::event(
+                crate::obs::event(
                     data_dir,
                     None,
                     "Hotkeys",

@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
-use crate::trace::Span;
+use crate::obs::Span;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryItem {

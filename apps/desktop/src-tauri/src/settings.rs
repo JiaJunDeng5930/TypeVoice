@@ -6,7 +6,7 @@ use std::{
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::trace::Span;
+use crate::obs::Span;
 
 pub const DEFAULT_ASR_PROVIDER: &str = "local";
 pub const DEFAULT_REMOTE_ASR_URL: &str = "http://api.server/transcribe";

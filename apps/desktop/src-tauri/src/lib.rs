@@ -6,14 +6,12 @@ mod context_capture;
 mod context_capture_windows;
 mod context_pack;
 mod data_dir;
-mod debug_log;
 mod export;
 mod history;
 mod hotkeys;
 mod llm;
-mod metrics;
 mod model;
-mod panic_log;
+mod obs;
 mod pipeline;
 mod python_runtime;
 mod record_input;
@@ -21,22 +19,20 @@ mod record_input_cache;
 mod remote_asr;
 mod safe_print;
 mod settings;
-mod startup_trace;
 mod task_manager;
 mod templates;
 mod toolchain;
-mod trace;
 
 use history::HistoryItem;
 use llm::ApiKeyStatus;
 use model::ModelStatus;
+use obs::Span;
 use settings::Settings;
 use settings::SettingsPatch;
 use task_manager::TaskManager;
 use tauri::Emitter;
 use tauri::Manager;
 use templates::PromptTemplate;
-use trace::Span;
 
 struct RuntimeState {
     toolchain: std::sync::Mutex<toolchain::ToolchainStatus>,
@@ -1568,11 +1564,11 @@ async fn download_asr_model() -> Result<ModelStatus, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    startup_trace::mark_best_effort("run_enter");
-    panic_log::install_best_effort();
-    startup_trace::mark_best_effort("panic_hook_installed");
+    obs::startup::mark_best_effort("run_enter");
+    obs::panic::install_best_effort();
+    obs::startup::mark_best_effort("panic_hook_installed");
     let ctx = tauri::generate_context!();
-    startup_trace::mark_best_effort("context_generated");
+    obs::startup::mark_best_effort("context_generated");
     tauri::Builder::default()
         .manage(TaskManager::new())
         .manage(RuntimeState::new())
@@ -1596,7 +1592,7 @@ pub fn run() {
             let _ = app.emit("tv_single_instance", Payload { args: argv, cwd });
 
             if let Ok(dir) = data_dir::data_dir() {
-                trace::event(
+                obs::event(
                     &dir,
                     None,
                     "App",
@@ -1608,7 +1604,7 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
-            startup_trace::mark_best_effort("setup_enter");
+            obs::startup::mark_best_effort("setup_enter");
 
             // Small always-on-top overlay window for hotkey-driven UX.
             // Keep it hidden by default; the frontend will invoke overlay_set_state to show/hide.
@@ -1657,7 +1653,7 @@ pub fn run() {
                             app.state::<audio_device_notifications_windows::AudioDeviceNotificationState>();
                         listener.start_best_effort(&dir, record_input_cache.inner().clone());
                     } else {
-                        trace::event(
+                        obs::event(
                             &dir,
                             None,
                             "App",
@@ -1687,7 +1683,7 @@ pub fn run() {
                         hk.apply_from_settings_best_effort(&app.handle(), &dir, &s);
                     }
                     Err(e) => {
-                        trace::event(
+                        obs::event(
                             &dir,
                             None,
                             "App",
@@ -1702,7 +1698,7 @@ pub fn run() {
                 }
             }
 
-            startup_trace::mark_best_effort("setup_exit");
+            obs::startup::mark_best_effort("setup_exit");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

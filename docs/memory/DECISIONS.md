@@ -7,7 +7,7 @@
 
 - 决策：失败定位以落盘结构化日志为优先依据，不依赖控制台输出。
 - 依据：Windows release 缺少稳定控制台，错误链路必须包含 `step_id`、`code`、`error_chain`、`backtrace`。
-- 执行：以 `apps/desktop/src-tauri/src/trace.rs` 为主入口，错误由日志完成归因。
+- 执行：以 `apps/desktop/src-tauri/src/obs/trace.rs` 与 `apps/desktop/src-tauri/src/obs/writer.rs` 为主入口，错误由结构化日志完成归因。
 
 ## Windows-only 改动的最小验证门
 
@@ -198,3 +198,13 @@
 - 决策：ASR runner 禁止使用进程级全局退出标记。
 - 依据：全局可变状态会污染同进程重复测试并降低可预测性。
 - 执行：`runner.py` 引入 `RunnerRuntime` 实例管理退出状态，signal handler 写实例字段，不再使用全局 `_should_exit`。
+
+## 日志统一写入架构（异步单写线程）
+
+- 决策：结构化日志统一收敛到 `obs` 模块，`trace.jsonl` 与 `metrics.jsonl` 使用“有界队列 + 单写线程”写入；业务代码只提交结构化事件，不直接处理并发写文件。
+- 依据：原实现中 `trace` 与 `metrics` 的并发保障不一致（`trace` 有互斥，`metrics` 无互斥），容易出现 JSONL 粘连、语义分散与维护成本上升。
+- 执行：
+  - 新增 `apps/desktop/src-tauri/src/obs/`：`schema.rs`（统一事件结构）、`writer.rs`（队列与单写线程）、`trace.rs`、`metrics.rs`、`debug.rs`、`startup.rs`、`panic.rs`。
+  - 删除旧模块：`trace.rs`、`metrics.rs`、`debug_log.rs`、`startup_trace.rs`、`panic_log.rs`。
+  - `TaskManager` 与 debug artifact 统一使用 `MetricsRecord`，`metrics.jsonl` 强制包含稳定 `type` 与 `ts_ms`。
+  - 队列拥塞时不阻塞主流程，记录 `logger_dropped` 指标，确保丢弃可观测。

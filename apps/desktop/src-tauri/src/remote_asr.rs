@@ -8,7 +8,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::llm::ApiKeyStatus;
-use crate::trace::Span;
+use crate::obs::Span;
 
 const KEYRING_SERVICE: &str = "typevoice";
 const KEYRING_USER: &str = "remote_asr_api_key";

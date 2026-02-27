@@ -114,6 +114,10 @@
 
 - 追加写入结构化 metrics（建议 JSONL 一行一条）
 - quick/full 验证只需要控制台摘要 + JSONL 指标，不生成长报告
+- 日志写入统一由 `apps/desktop/src-tauri/src/obs/` 模块负责：
+  - `trace.jsonl` 与 `metrics.jsonl` 使用“有界队列 + 单写线程”串行落盘，业务代码只提交结构化事件，不直接打开文件。
+  - `trace` 继续保留 `step_id/code/error_chain/backtrace` 诊断语义；`metrics` 统一使用 `type` 标签化记录（`task_event/task_perf/task_done/debug_artifact/logger_dropped`）。
+  - 队列拥塞时不阻塞主流程，采用丢弃计数并写入 `logger_dropped` 指标，保证可观测。
 
 ## 3. 核心端口（Ports）建议
 

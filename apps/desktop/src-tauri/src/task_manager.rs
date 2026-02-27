@@ -8,14 +8,12 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use serde::Serialize;
-use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::{
-    asr_service, data_dir, history, llm, metrics, pipeline, remote_asr, settings, templates,
-};
+use crate::obs::{metrics, schema::MetricsRecord};
+use crate::{asr_service, data_dir, history, llm, pipeline, remote_asr, settings, templates};
 use crate::{context_capture, context_pack};
 
 pub trait AsrClient: Send + Sync {
@@ -128,7 +126,6 @@ struct TaskManagerDeps {
     cleanup_audio_artifacts: fn(&Path, &Path) -> Result<()>,
     get_template: fn(&Path, &str) -> Result<templates::PromptTemplate>,
     history_append: fn(&Path, &history::HistoryItem) -> Result<()>,
-    metrics_append_jsonl: fn(&Path, &Value) -> Result<()>,
 }
 
 impl Default for TaskManagerDeps {
@@ -140,7 +137,6 @@ impl Default for TaskManagerDeps {
             cleanup_audio_artifacts: pipeline::cleanup_audio_artifacts,
             get_template: templates::get_template,
             history_append: history::append,
-            metrics_append_jsonl: metrics::append_jsonl,
         }
     }
 }
@@ -574,7 +570,6 @@ impl TaskManager {
         let cleanup_audio_artifacts = self.deps.cleanup_audio_artifacts;
         let get_template = self.deps.get_template;
         let history_append = self.deps.history_append;
-        let metrics_append_jsonl = self.deps.metrics_append_jsonl;
         let ctx_cfg = opts.context_cfg.clone();
         let mut capture_ctx_cfg = ctx_cfg.clone();
         if opts.pre_captured_context.is_some() {
@@ -594,7 +589,7 @@ impl TaskManager {
             if ctx_cfg.include_prev_window_screenshot {
                 ctx_snap.screenshot = pre.screenshot;
             }
-            crate::trace::event(
+            crate::obs::event(
                 &data_dir,
                 Some(&task_id),
                 "ContextCapture",
@@ -622,7 +617,7 @@ impl TaskManager {
         if !ctx_cfg.llm_supports_vision {
             ctx_snap.screenshot = None;
         }
-        crate::trace::event(
+        crate::obs::event(
             &data_dir,
             Some(&task_id),
             "Task",
@@ -917,7 +912,7 @@ impl TaskManager {
         let mut rewrite_ms = None;
         let mut template_id = None;
         let rewrite_entered = rewrite_entered(&opts);
-        crate::trace::event(
+        crate::obs::event(
             &data_dir,
             Some(&task_id),
             "Task",
@@ -1082,9 +1077,14 @@ impl TaskManager {
             template_id,
         };
         let _ = app.emit("task_done", done.clone());
-        if let Err(e) = metrics_append_jsonl(
+        if let Err(e) = metrics::emit(
             &data_dir,
-            &json!({"type":"task_done","task_id":task_id,"rtf":done.rtf,"device":done.device_used}),
+            MetricsRecord::TaskDone {
+                ts_ms: chrono_now_ms(),
+                task_id: task_id.clone(),
+                rtf: done.rtf,
+                device: done.device_used.clone(),
+            },
         ) {
             crate::safe_eprintln!("metrics append failed (task_done): {e:#}");
         }
@@ -1092,30 +1092,30 @@ impl TaskManager {
         // Perf summary (machine-readable, no sensitive payload).
         let overhead_ms_u128 = asr_ms.saturating_sub(runner_elapsed_ms.max(0) as u128);
         let overhead_ms = overhead_ms_u128.min(u64::MAX as u128) as u64;
-        if let Err(e) = metrics_append_jsonl(
+        if let Err(e) = metrics::emit(
             &data_dir,
-            &json!({
-                "type": "task_perf",
-                "task_id": task_id,
-                "asr_provider": asr_provider,
-                "audio_seconds": audio_seconds,
-                "preprocess_ms": preprocess_ms,
-                "asr_roundtrip_ms": asr_ms,
-                "asr_runner_elapsed_ms": runner_elapsed_ms,
-                "asr_overhead_ms": overhead_ms,
-                "rtf": rtf,
-                "rewrite_ms": rewrite_ms,
-                "device_used": done.device_used,
-                "asr_model_id": asr_model_id,
-                "asr_model_version": asr_model_version,
-                "remote_asr_slice_count": remote_slice_count,
-                "remote_asr_concurrency_used": remote_concurrency_used,
-                "asr_preprocess_silence_trim_enabled": opts.asr_preprocess.silence_trim_enabled,
-                "asr_preprocess_threshold_db": opts.asr_preprocess.silence_threshold_db,
-                "asr_preprocess_trim_start_ms": opts.asr_preprocess.silence_trim_start_ms,
-                "asr_preprocess_trim_end_ms": opts.asr_preprocess.silence_trim_end_ms,
-                "asr_warmup_ms": self.asr.warmup_ms(),
-            }),
+            MetricsRecord::TaskPerf {
+                ts_ms: chrono_now_ms(),
+                task_id,
+                asr_provider,
+                audio_seconds,
+                preprocess_ms,
+                asr_roundtrip_ms: asr_ms,
+                asr_runner_elapsed_ms: runner_elapsed_ms,
+                asr_overhead_ms: overhead_ms,
+                rtf,
+                rewrite_ms,
+                device_used: done.device_used.clone(),
+                asr_model_id,
+                asr_model_version,
+                remote_asr_slice_count: remote_slice_count,
+                remote_asr_concurrency_used: remote_concurrency_used,
+                asr_preprocess_silence_trim_enabled: opts.asr_preprocess.silence_trim_enabled,
+                asr_preprocess_threshold_db: opts.asr_preprocess.silence_threshold_db,
+                asr_preprocess_trim_start_ms: opts.asr_preprocess.silence_trim_start_ms,
+                asr_preprocess_trim_end_ms: opts.asr_preprocess.silence_trim_end_ms,
+                asr_warmup_ms: self.asr.warmup_ms(),
+            },
         ) {
             crate::safe_eprintln!("metrics append failed (task_perf): {e:#}");
         }
@@ -1220,9 +1220,17 @@ fn internal_failure_event(task_id: &str, message: String) -> TaskEvent {
 
 fn emit_event(app: &AppHandle, data_dir: &Path, ev: TaskEvent) {
     let _ = app.emit("task_event", ev.clone());
-    if let Err(e) = metrics::append_jsonl(
+    if let Err(e) = metrics::emit(
         data_dir,
-        &json!({"type":"task_event", "task_id":ev.task_id, "stage":ev.stage, "status":ev.status, "elapsed_ms":ev.elapsed_ms, "error_code":ev.error_code, "message":ev.message}),
+        MetricsRecord::TaskEvent {
+            ts_ms: chrono_now_ms(),
+            task_id: ev.task_id,
+            stage: ev.stage,
+            status: ev.status,
+            elapsed_ms: ev.elapsed_ms,
+            error_code: ev.error_code,
+            message: ev.message,
+        },
     ) {
         crate::safe_eprintln!("metrics append failed (task_event): {e:#}");
     }

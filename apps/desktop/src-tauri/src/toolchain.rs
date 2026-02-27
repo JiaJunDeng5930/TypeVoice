@@ -8,7 +8,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tauri::{path::BaseDirectory, AppHandle, Manager};
 
-use crate::trace;
+use crate::obs;
 
 const MANIFEST_VERSION: &str = "7.0.2";
 
@@ -177,7 +177,7 @@ pub fn initialize_and_verify(app: &AppHandle, data_dir: &Path) -> ToolchainStatu
         Ok(s) => s,
         Err(e) => {
             let msg = e.to_string();
-            trace::event(
+            obs::event(
                 data_dir,
                 None,
                 "Toolchain",
@@ -200,7 +200,7 @@ pub fn initialize_and_verify(app: &AppHandle, data_dir: &Path) -> ToolchainStatu
         Ok(d) => d,
         Err(e) => {
             let msg = e.to_string();
-            trace::event(
+            obs::event(
                 data_dir,
                 None,
                 "Toolchain",
@@ -227,7 +227,7 @@ pub fn initialize_and_verify(app: &AppHandle, data_dir: &Path) -> ToolchainStatu
 
     match verify_toolchain_dir(&dir, spec) {
         Ok(()) => {
-            trace::event(
+            obs::event(
                 data_dir,
                 None,
                 "Toolchain",
@@ -253,7 +253,7 @@ pub fn initialize_and_verify(app: &AppHandle, data_dir: &Path) -> ToolchainStatu
             let code = detect_code(&msg)
                 .unwrap_or("E_TOOLCHAIN_NOT_READY")
                 .to_string();
-            trace::event(
+            obs::event(
                 data_dir,
                 None,
                 "Toolchain",

@@ -6,7 +6,7 @@ use std::{
 use anyhow::{anyhow, Context, Result};
 use serde::Serialize;
 
-use crate::trace;
+use crate::obs;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PythonStatus {
@@ -96,7 +96,7 @@ pub fn initialize_and_verify(data_dir: &Path, repo_root: &Path) -> PythonStatus 
         Ok(p) => p,
         Err(e) => {
             let msg = e.to_string();
-            trace::event(
+            obs::event(
                 data_dir,
                 None,
                 "Python",
@@ -120,7 +120,7 @@ pub fn initialize_and_verify(data_dir: &Path, repo_root: &Path) -> PythonStatus 
     match verify_python_version(&resolved) {
         Ok(version) => {
             std::env::set_var("TYPEVOICE_PYTHON", resolved.display().to_string());
-            trace::event(
+            obs::event(
                 data_dir,
                 None,
                 "Python",
@@ -141,7 +141,7 @@ pub fn initialize_and_verify(data_dir: &Path, repo_root: &Path) -> PythonStatus 
         }
         Err(e) => {
             let msg = e.to_string();
-            trace::event(
+            obs::event(
                 data_dir,
                 None,
                 "Python",

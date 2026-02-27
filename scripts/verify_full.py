@@ -87,6 +87,10 @@ def main() -> int:
             cwd=tauri_dir,
         )
         subprocess.check_call(
+            ["cargo", "test", "--locked", "concurrent_metrics_emit_keeps_jsonl_lines_parseable"],
+            cwd=tauri_dir,
+        )
+        subprocess.check_call(
             ["cargo", "test", "--locked", "parse_runner_error_from_value"],
             cwd=tauri_dir,
         )

@@ -65,7 +65,7 @@ impl RecordInputCacheState {
         data_dir: &Path,
         reason: &str,
     ) -> Result<CachedRecordInput, String> {
-        let span = crate::trace::Span::start(
+        let span = crate::obs::Span::start(
             data_dir,
             None,
             "App",

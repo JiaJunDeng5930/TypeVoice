@@ -27,7 +27,7 @@ impl AudioDeviceNotificationState {
 
         #[cfg(windows)]
         {
-            let span = crate::trace::Span::start(
+            let span = crate::obs::Span::start(
                 data_dir,
                 None,
                 "App",
@@ -304,7 +304,7 @@ mod imp {
         state: Option<u32>,
         should_refresh: bool,
     ) {
-        crate::trace::event(
+        crate::obs::event(
             data_dir,
             None,
             "App",

@@ -4,9 +4,9 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 use crate::context_pack::PreparedContext;
-use crate::debug_log;
+use crate::obs::debug;
+use crate::obs::{event, Span};
 use crate::settings;
-use crate::trace::{event, Span};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ApiKeyStatus {
@@ -344,7 +344,7 @@ pub async fn rewrite_with_context(
         reasoning_effort: cfg.reasoning_effort.clone(),
     };
 
-    if debug_log::verbose_enabled() && debug_log::include_llm() {
+    if debug::verbose_enabled() && debug::include_llm() {
         if let Ok(req_value) = serde_json::to_value(&req_debug) {
             let url2 = url.clone();
             let wrapper = serde_json::json!({
@@ -353,9 +353,9 @@ pub async fn rewrite_with_context(
             });
             let bytes = serde_json::to_vec_pretty(&wrapper).unwrap_or_default();
             if let Some(info) =
-                debug_log::write_payload_best_effort(data_dir, task_id, "llm_request.json", bytes)
+                debug::write_payload_best_effort(data_dir, task_id, "llm_request.json", bytes)
             {
-                debug_log::emit_debug_event_best_effort(
+                debug::emit_debug_event_best_effort(
                     data_dir,
                     "debug_llm_request",
                     task_id,
@@ -389,14 +389,14 @@ pub async fn rewrite_with_context(
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
 
-    if debug_log::verbose_enabled() && debug_log::include_llm() {
-        if let Some(info) = debug_log::write_payload_best_effort(
+    if debug::verbose_enabled() && debug::include_llm() {
+        if let Some(info) = debug::write_payload_best_effort(
             data_dir,
             task_id,
             "llm_response.txt",
             body.as_bytes().to_vec(),
         ) {
-            debug_log::emit_debug_event_best_effort(
+            debug::emit_debug_event_best_effort(
                 data_dir,
                 "debug_llm_response",
                 task_id,
