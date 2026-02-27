@@ -189,18 +189,14 @@ pub struct StartOpts {
     pub rewrite_include_glossary: bool,
     pub context_cfg: context_capture::ContextConfig,
     pub pre_captured_context: Option<context_pack::ContextSnapshot>,
-    pub recording_session_id: Option<String>,
     pub record_elapsed_ms: u128,
     pub record_label: String,
 }
 
 #[derive(Debug, Clone)]
-struct RecordingSession {
-    pub session_id: String,
-    pub task_id: Option<String>,
-    pub capture_required: bool,
-    pub pre_captured_context: Option<context_pack::ContextSnapshot>,
+struct PendingHotkeyContext {
     pub created_at_ms: i64,
+    pub pre_captured_context: context_pack::ContextSnapshot,
 }
 
 #[derive(Debug)]
@@ -213,7 +209,7 @@ pub enum RecordingTerminal {
 #[derive(Clone)]
 pub struct TaskManager {
     inner: Arc<Mutex<Option<ActiveTask>>>,
-    recording_sessions: Arc<Mutex<HashMap<String, RecordingSession>>>,
+    pending_hotkey_contexts: Arc<Mutex<HashMap<String, PendingHotkeyContext>>>,
     asr: Arc<dyn AsrClient>,
     ctx: Arc<dyn ContextCollector>,
     deps: TaskManagerDeps,
@@ -242,7 +238,7 @@ impl TaskManager {
     ) -> Self {
         Self {
             inner: Arc::new(Mutex::new(None)),
-            recording_sessions: Arc::new(Mutex::new(HashMap::new())),
+            pending_hotkey_contexts: Arc::new(Mutex::new(HashMap::new())),
             asr,
             ctx,
             deps,
@@ -310,75 +306,47 @@ impl TaskManager {
         self.ctx.last_external_hwnd_best_effort()
     }
 
-    pub fn open_recording_session(
+    pub fn open_hotkey_task(
         &self,
         data_dir: &Path,
         context_cfg: &context_capture::ContextConfig,
         capture_required: bool,
     ) -> Result<String> {
-        self.cleanup_orphan_recording_sessions(60_000);
+        self.cleanup_orphan_pending_hotkey_contexts(60_000);
 
-        let session_id = Uuid::new_v4().to_string();
-        let pre_captured_context = if capture_required {
+        let task_id = Uuid::new_v4().to_string();
+        if capture_required {
             let capture_id = self.ctx.capture_hotkey_context_now(data_dir, context_cfg)?;
-            Some(
-                self.ctx
-                    .take_hotkey_context_once(&capture_id)
-                    .ok_or_else(|| anyhow!("failed to retrieve hotkey context payload"))?,
-            )
-        } else {
-            None
-        };
-
-        let mut g = self.recording_sessions.lock().unwrap();
-        g.insert(
-            session_id.clone(),
-            RecordingSession {
-                session_id: session_id.clone(),
-                task_id: None,
-                capture_required,
-                pre_captured_context,
-                created_at_ms: now_ms(),
-            },
-        );
-        Ok(session_id)
-    }
-
-    pub fn bind_recording_session_to_task(
-        &self,
-        session_id: &str,
-        task_id: &str,
-    ) -> Result<Option<context_pack::ContextSnapshot>> {
-        let mut g = self.recording_sessions.lock().unwrap();
-        let session = g
-            .get_mut(session_id)
-            .ok_or_else(|| anyhow!("recording session not found"))?;
-        if session.task_id.is_some() {
-            return Err(anyhow!("recording session already in use"));
+            let pre_captured_context = self
+                .ctx
+                .take_hotkey_context_once(&capture_id)
+                .ok_or_else(|| anyhow!("failed to retrieve hotkey context payload"))?;
+            let mut g = self.pending_hotkey_contexts.lock().unwrap();
+            g.insert(
+                task_id.clone(),
+                PendingHotkeyContext {
+                    created_at_ms: now_ms(),
+                    pre_captured_context,
+                },
+            );
         }
-        session.task_id = Some(task_id.to_string());
-        Ok(session.pre_captured_context.clone())
+        Ok(task_id)
     }
 
-    pub fn abort_recording_session(&self, session_id: &str) -> bool {
-        let mut g = self.recording_sessions.lock().unwrap();
-        g.remove(session_id).is_some()
+    fn take_pending_hotkey_context(&self, task_id: &str) -> Option<context_pack::ContextSnapshot> {
+        let mut g = self.pending_hotkey_contexts.lock().unwrap();
+        g.remove(task_id).map(|ctx| ctx.pre_captured_context)
     }
 
-    pub fn cleanup_orphan_recording_sessions(&self, max_age_ms: i64) {
+    pub fn abort_pending_task(&self, task_id: &str) -> bool {
+        let mut g = self.pending_hotkey_contexts.lock().unwrap();
+        g.remove(task_id).is_some()
+    }
+
+    pub fn cleanup_orphan_pending_hotkey_contexts(&self, max_age_ms: i64) {
         let now = now_ms();
-        let mut g = self.recording_sessions.lock().unwrap();
-        g.retain(|_, v| {
-            if v.task_id.is_some() {
-                return true;
-            }
-            now.saturating_sub(v.created_at_ms) <= max_age_ms
-        });
-    }
-
-    pub fn finalize_recording_session_by_task(&self, task_id: &str) {
-        let mut g = self.recording_sessions.lock().unwrap();
-        g.retain(|_, v| v.task_id.as_deref() != Some(task_id));
+        let mut g = self.pending_hotkey_contexts.lock().unwrap();
+        g.retain(|_, v| now.saturating_sub(v.created_at_ms) <= max_age_ms);
     }
 
     pub fn restart_asr_best_effort(&self, reason: &str) {
@@ -423,6 +391,17 @@ impl TaskManager {
         self.start_audio(app, input, opts)
     }
 
+    pub fn start_fixture_with_task_id(
+        &self,
+        app: AppHandle,
+        task_id: String,
+        fixture_name: String,
+        opts: StartOpts,
+    ) -> Result<String> {
+        let input = (self.deps.fixture_path)(&fixture_name)?;
+        self.start_audio_with_task_id(app, task_id, input, opts)
+    }
+
     pub fn start_recording_file(
         &self,
         app: AppHandle,
@@ -431,6 +410,23 @@ impl TaskManager {
     ) -> Result<String> {
         let cleanup_input = input_path.clone();
         match self.start_audio(app, input_path, opts) {
+            Ok(task_id) => Ok(task_id),
+            Err(e) => {
+                let _ = (self.deps.cleanup_audio_artifacts)(&cleanup_input, &cleanup_input);
+                Err(e)
+            }
+        }
+    }
+
+    pub fn start_recording_file_with_task_id(
+        &self,
+        app: AppHandle,
+        task_id: String,
+        input_path: PathBuf,
+        opts: StartOpts,
+    ) -> Result<String> {
+        let cleanup_input = input_path.clone();
+        match self.start_audio_with_task_id(app, task_id, input_path, opts) {
             Ok(task_id) => Ok(task_id),
             Err(e) => {
                 let _ = (self.deps.cleanup_audio_artifacts)(&cleanup_input, &cleanup_input);
@@ -451,16 +447,13 @@ impl TaskManager {
         input: PathBuf,
         mut opts: StartOpts,
     ) -> Result<String> {
-        if let Some(session_id) = opts.recording_session_id.clone() {
-            opts.pre_captured_context =
-                self.bind_recording_session_to_task(&session_id, &task_id)?;
-        }
-
         {
             let mut g = self.inner.lock().unwrap();
             if g.is_some() {
-                self.finalize_recording_session_by_task(&task_id);
                 return Err(anyhow!("another task is already running"));
+            }
+            if opts.pre_captured_context.is_none() {
+                opts.pre_captured_context = self.take_pending_hotkey_context(&task_id);
             }
             *g = Some(ActiveTask {
                 task_id: task_id.clone(),
@@ -511,7 +504,6 @@ impl TaskManager {
                                 *g = None;
                             }
                         }
-                        this.finalize_recording_session_by_task(&task_id);
                     });
                 }
                 Err(e) => {
@@ -527,7 +519,6 @@ impl TaskManager {
                     if g.as_ref().map(|a| &a.task_id) == Some(&task_id) {
                         *g = None;
                     }
-                    this.finalize_recording_session_by_task(&task_id);
                     let _ = (this.deps.cleanup_audio_artifacts)(&input, &input);
                 }
             }
@@ -1303,7 +1294,6 @@ mod tests {
             rewrite_include_glossary: true,
             context_cfg: context_capture::ContextConfig::default(),
             pre_captured_context: None,
-            recording_session_id: None,
             record_elapsed_ms: 0,
             record_label: "Record".to_string(),
         }

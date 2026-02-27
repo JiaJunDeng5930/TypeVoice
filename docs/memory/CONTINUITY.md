@@ -13,7 +13,7 @@
 ### 已确认
 
 - 结构化诊断链路已启用：`TYPEVOICE_DATA_DIR/trace.jsonl` 为主日志入口，关键路径记录稳定的 `step_id` 与 `code`。
-- 热键上下文采集已改为“录音会话（recording_session_id）”路径：按热键在按下瞬间创建会话并缓存上下文快照，开始转写时消费该会话并在任务收尾统一清理，剔除“capture_id 60 秒有效期”分支。
+- 热键上下文采集已改为“`task_id` 单生命周期”路径：按热键在按下瞬间生成 `task_id` 并缓存上下文快照，开始转写时消费该上下文并在任务收尾或显式 abort 时统一清理，剔除“capture_id 60 秒有效期”分支。
 - 上下文采集与改写参数链路按设置主源，支持配置缺失即失败（fail-fast），不引入静默兜底。
 - `docs/` 文档索引与命名清洗已完成，历史版本后缀已移除。
 - 可复用的执行索引文件已新增：`docs/index.md`。
@@ -28,7 +28,9 @@
 - [UNCONFIRMED] 录音中间产物已切换为后端托管 `recording_asset_id` 语义：任务启动不再接收裸文件路径，资产由后端租约回收。
 - [UNCONFIRMED] 后端同步清理了旧转写命令实现，当前命令面仅保留统一任务链路。
 - [UNCONFIRMED] 热键注册已改为“作用域化注销”语义：`HotkeyManager` 仅注销自身曾注册快捷键，不再调用 `unregister_all`；待校验路径：热键重复保存设置后仍可触发，且不影响其他 scope。
-- [UNCONFIRMED] 热键会话清理链路已补齐：新增 `abort_recording_session` 命令，前端在录音失败/转写启动失败/组件卸载时会回收未消费 `recording_session_id`；待校验路径：trace 中无悬挂 session。
+- [UNCONFIRMED] 热键预采样上下文清理链路已更新为 `task_id` 语义：新增 `abort_pending_task` 命令，前端在录音失败/转写启动失败/组件卸载时会回收未消费 `task_id`；待校验路径：trace 中无悬挂 pending context。
+- [VERIFIED] 2026-02-27：后端已完成“session 生命周期并入 task 生命周期”改造：`recording_session_id` 字段与 `RecordingSession` 容器已移除；热键事件改为携带 `task_id`，`start_task` 支持输入并复用外部 `task_id`，并新增 `abort_pending_task` 回收未消费热键上下文。WSL 侧 `cargo test -q`（30 passed）与 `npm run build` 通过。
+- [UNCONFIRMED] 2026-02-27：Windows 热键链路尚需回归验证（同一 `task_id` 贯穿 `tv_hotkey_record`、`task_event`、`task_done`，以及异常分支 `abort_pending_task` 清理）。
 - [UNCONFIRMED] 上下文窗口采样语义已向“前台窗口即时采样”收敛：hotkey 与任务内上下文均优先使用 `foreground_window_*` 路径；待校验路径：同 task_id 下两入口截图来源一致。
 - [UNCONFIRMED] 录音停止诊断链路已增强：`start_backend_recording` 增加 ffmpeg 早退探测（避免“启动已失败但在 stop 才暴露”），`stop_backend_recording` 在失败时附带 stderr 末行，前端停止失败提示改为展示真实错误提示（不再固定 `STOP FAILED`）；待校验路径：Windows 下复现一次录音设备异常并确认错误文案含 `E_RECORD_*` 与 stderr 线索。
 - [VERIFIED] Windows 侧已定位 `Recording failed` 根因为 dshow 输入规格 `audio=default` 在当前设备集上不可解析；`ffmpeg` 直接探测显示 `Error opening input files: I/O error`。固定为设备 `Alternative name`（如 `audio="@device_cm_{...}\\wave_{...}"`）后可稳定录制，且不受蓝牙耳机连接导致默认设备切换的影响。
@@ -92,7 +94,7 @@
 
 ## 下一步建议
 
-- 在 Windows 下补一次完整闭环验证：热键按下->开始录音->停止/取消->转写完成/失败，确认同一 `recording_session_id` 仅在任务结束时清理一次。
+- 在 Windows 下补一次完整闭环验证：热键按下->开始录音->停止/取消->转写完成/失败，确认同一 `task_id` 贯穿热键事件、任务事件与结果输出，且未消费上下文可被 `abort_pending_task` 清理。
 - 在 Windows 会话里补齐一次“热键录音 -> 转写 -> 改写 -> persist -> copy”闭环，并将观察结果回写：
   - 正常：同一 `task_id` 链路内 `CMD.start...`、`TASK.rewrite_effective`、`task_done` 一致。
   - 异常：将复现条件与处理思路写入 `docs/memory/PITFALLS.md`。

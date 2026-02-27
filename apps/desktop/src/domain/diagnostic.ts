@@ -40,7 +40,7 @@ function titleForCode(code: string, fallback: string): string {
   if (code === "E_CONTEXT_CAPTURE_REQUIRED") return "CONTEXT CAPTURE REQUIRED";
   if (code === "E_CONTEXT_CAPTURE_NOT_FOUND") return "CONTEXT CAPTURE EXPIRED";
   if (code === "E_CONTEXT_CAPTURE_INVALID") return "CONTEXT CAPTURE INVALID";
-  if (code === "E_RECORDING_SESSION_OPEN") return "RECORDING SESSION FAILED";
+  if (code === "E_HOTKEY_TASK_OPEN") return "HOTKEY TASK OPEN FAILED";
   if (code === "E_RECORD_ALREADY_ACTIVE") return "RECORDING BUSY";
   if (code === "E_TASK_ALREADY_ACTIVE") return "TASK BUSY";
   if (code === "E_RECORD_UNSUPPORTED") return "RECORDING UNSUPPORTED";
@@ -93,7 +93,7 @@ export function toDiagnosticLine(diag: DiagnosticView): string {
 export function hotkeyCaptureHint(errCode?: string | null): string {
   if (!errCode) return "HOTKEY CAPTURE FAILED";
   if (errCode.includes("E_CONTEXT_SCREENSHOT_DISABLED")) return "SCREENSHOT DISABLED";
-  if (errCode.includes("E_RECORDING_SESSION_OPEN")) return "HOTKEY SESSION OPEN FAILED";
+  if (errCode.includes("E_HOTKEY_TASK_OPEN")) return "HOTKEY TASK OPEN FAILED";
   if (errCode.includes("E_HOTKEY_CAPTURE")) return "WINDOW CAPTURE FAILED";
   return "HOTKEY CAPTURE FAILED";
 }

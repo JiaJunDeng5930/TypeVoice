@@ -125,7 +125,7 @@ struct StartTaskRequest {
     record_mode: String,    // recording_asset|fixture
     recording_asset_id: Option<String>,
     fixture_name: Option<String>,
-    recording_session_id: Option<String>,
+    task_id: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -233,19 +233,28 @@ fn start_opts_from_settings(data_dir: &std::path::Path) -> Result<task_manager::
         rewrite_include_glossary: s.rewrite_include_glossary.unwrap_or(true),
         asr_preprocess,
         pre_captured_context: None,
-        recording_session_id: None,
         record_elapsed_ms: 0,
         record_label: "Record".to_string(),
     })
 }
 
-fn abort_recording_session_if_present(
-    state: &tauri::State<'_, TaskManager>,
-    recording_session_id: &Option<String>,
-) {
-    if let Some(id) = recording_session_id.as_deref() {
-        state.abort_recording_session(id);
+fn abort_pending_task_if_present(state: &tauri::State<'_, TaskManager>, task_id: &Option<String>) {
+    if let Some(id) = task_id.as_deref() {
+        state.abort_pending_task(id);
     }
+}
+
+fn normalize_task_id(task_id: Option<&str>) -> Result<Option<String>, String> {
+    let raw = match task_id {
+        Some(v) => v.trim(),
+        None => return Ok(None),
+    };
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    let parsed = uuid::Uuid::parse_str(raw)
+        .map_err(|e| format!("E_START_TASK_ID_INVALID: invalid task_id ({e})"))?;
+    Ok(Some(parsed.to_string()))
 }
 
 fn cleanup_expired_recording_assets(
@@ -425,20 +434,22 @@ async fn start_task(
     let dir = match data_dir::data_dir() {
         Ok(v) => v,
         Err(e) => {
-            abort_recording_session_if_present(&state, &req.recording_session_id);
+            if let Some(task_id) = req.task_id.as_deref() {
+                state.abort_pending_task(task_id.trim());
+            }
             return Err(e.to_string());
         }
     };
+    let requested_task_id = normalize_task_id(req.task_id.as_deref())?;
     let mut opts = match start_opts_from_settings(&dir) {
         Ok(v) => v,
         Err(e) => {
             let span = cmd_span(&dir, None, "CMD.start_task.settings", None);
             span.err("config", "E_SETTINGS_INVALID", &e, None);
-            abort_recording_session_if_present(&state, &req.recording_session_id);
+            abort_pending_task_if_present(&state, &requested_task_id);
             return Err(e);
         }
     };
-    opts.recording_session_id = req.recording_session_id.clone();
 
     let span = cmd_span(
         &dir,
@@ -449,30 +460,30 @@ async fn start_task(
             "record_mode": req.record_mode.as_str(),
             "has_recording_asset_id": req.recording_asset_id.as_deref().map(|v| !v.trim().is_empty()).unwrap_or(false),
             "fixture_name": req.fixture_name.as_deref(),
-            "has_recording_session_id": opts.recording_session_id.as_ref().map(|v| !v.trim().is_empty()).unwrap_or(false),
+            "has_task_id": requested_task_id.as_ref().map(|v| !v.trim().is_empty()).unwrap_or(false),
             "rewrite_enabled": opts.rewrite_enabled,
             "template_id": opts.template_id.as_deref(),
         })),
     );
-    let session_id_for_cleanup = opts.recording_session_id.clone();
+    let task_id_for_cleanup = requested_task_id.clone();
 
     cleanup_expired_recording_assets(&recorder, std::time::Duration::from_secs(120));
     if state.has_active_task() {
         let msg = "E_TASK_ALREADY_ACTIVE: another task is already running";
         span.err("task", "E_TASK_ALREADY_ACTIVE", msg, None);
-        abort_recording_session_if_present(&state, &session_id_for_cleanup);
+        abort_pending_task_if_present(&state, &task_id_for_cleanup);
         return Err(msg.to_string());
     }
     if has_active_recording(&recorder) {
         let msg = "E_RECORD_ALREADY_ACTIVE: recording is still active";
         span.err("task", "E_RECORD_ALREADY_ACTIVE", msg, None);
-        abort_recording_session_if_present(&state, &session_id_for_cleanup);
+        abort_pending_task_if_present(&state, &task_id_for_cleanup);
         return Err(msg.to_string());
     }
 
     if let Some((code, msg)) = runtime_not_ready(&runtime) {
         span.err("config", code, &msg, None);
-        abort_recording_session_if_present(&state, &session_id_for_cleanup);
+        abort_pending_task_if_present(&state, &task_id_for_cleanup);
         return Err(msg);
     }
 
@@ -487,7 +498,7 @@ async fn start_task(
                         "recording_asset_id is required when record_mode=recording_asset",
                         None,
                     );
-                    abort_recording_session_if_present(&state, &session_id_for_cleanup);
+                    abort_pending_task_if_present(&state, &task_id_for_cleanup);
                     return Err(
                         "E_START_TASK_ASSET_MISSING: recording_asset_id is required".to_string()
                     );
@@ -502,7 +513,7 @@ async fn start_task(
                         "recording asset not found",
                         None,
                     );
-                    abort_recording_session_if_present(&state, &session_id_for_cleanup);
+                    abort_pending_task_if_present(&state, &task_id_for_cleanup);
                     return Err(
                         "E_RECORD_ASSET_NOT_FOUND: recording asset not found or expired"
                             .to_string(),
@@ -518,10 +529,14 @@ async fn start_task(
                     "recorded file missing",
                     None,
                 );
-                abort_recording_session_if_present(&state, &session_id_for_cleanup);
+                abort_pending_task_if_present(&state, &task_id_for_cleanup);
                 return Err("E_RECORD_OUTPUT_MISSING: recorded file missing".to_string());
             }
-            state.start_recording_file(app, asset.output_path, opts)
+            if let Some(task_id) = requested_task_id.clone() {
+                state.start_recording_file_with_task_id(app, task_id, asset.output_path, opts)
+            } else {
+                state.start_recording_file(app, asset.output_path, opts)
+            }
         }
         "fixture" => {
             opts.record_elapsed_ms = 0;
@@ -535,13 +550,17 @@ async fn start_task(
                         "fixture_name is required when record_mode=fixture",
                         None,
                     );
-                    abort_recording_session_if_present(&state, &session_id_for_cleanup);
+                    abort_pending_task_if_present(&state, &task_id_for_cleanup);
                     return Err(
                         "E_START_TASK_FIXTURE_MISSING: fixture_name is required".to_string()
                     );
                 }
             };
-            state.start_fixture(app, fixture_name, opts)
+            if let Some(task_id) = requested_task_id.clone() {
+                state.start_fixture_with_task_id(app, task_id, fixture_name, opts)
+            } else {
+                state.start_fixture(app, fixture_name, opts)
+            }
         }
         _ => {
             span.err(
@@ -550,7 +569,7 @@ async fn start_task(
                 "record_mode must be recording_asset|fixture",
                 None,
             );
-            abort_recording_session_if_present(&state, &session_id_for_cleanup);
+            abort_pending_task_if_present(&state, &task_id_for_cleanup);
             return Err("E_START_TASK_MODE_INVALID: invalid record_mode".to_string());
         }
     };
@@ -562,7 +581,7 @@ async fn start_task(
         }
         Err(e) => {
             span.err_anyhow("task", "E_START_TASK_FAILED", &e, None);
-            abort_recording_session_if_present(&state, &session_id_for_cleanup);
+            abort_pending_task_if_present(&state, &task_id_for_cleanup);
             Err(e.to_string())
         }
     }
@@ -929,24 +948,19 @@ fn cancel_task(state: tauri::State<TaskManager>, task_id: &str) -> Result<(), St
 }
 
 #[tauri::command]
-fn abort_recording_session(
-    state: tauri::State<TaskManager>,
-    recording_session_id: &str,
-) -> Result<(), String> {
+fn abort_pending_task(state: tauri::State<TaskManager>, task_id: &str) -> Result<(), String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let span = cmd_span(
         &dir,
         None,
-        "CMD.abort_recording_session",
-        Some(
-            serde_json::json!({"has_recording_session_id": !recording_session_id.trim().is_empty()}),
-        ),
+        "CMD.abort_pending_task",
+        Some(serde_json::json!({"has_task_id": !task_id.trim().is_empty()})),
     );
-    if recording_session_id.trim().is_empty() {
+    if task_id.trim().is_empty() {
         span.ok(Some(serde_json::json!({"removed": false})));
         return Ok(());
     }
-    let removed = state.abort_recording_session(recording_session_id);
+    let removed = state.abort_pending_task(task_id.trim());
     span.ok(Some(serde_json::json!({"removed": removed})));
     Ok(())
 }
@@ -1707,7 +1721,7 @@ pub fn run() {
             stop_backend_recording,
             abort_backend_recording,
             cancel_task,
-            abort_recording_session,
+            abort_pending_task,
             list_templates,
             upsert_template,
             delete_template,

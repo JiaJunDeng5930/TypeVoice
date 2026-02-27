@@ -47,7 +47,7 @@
 
 - 启动任务只允许 `start_task(req)` 一个命令入口；不再并存多入口命令。
 - 任务启动时必须生成不可变 `TaskConfigSnapshot`，后续阶段仅消费该快照，禁止运行中回读 settings 形成配置漂移。
-- 录音会话生命周期必须进入单一终态 `Finalized` 后再释放，禁止悬挂会话。
+- 热键路径在按下瞬间生成 `task_id` 并注入预采样上下文；上下文生命周期并入该 `task_id`，进入终态或显式 abort 后必须释放，禁止悬挂。
 - 主录音链路由后端命令托管（`start_backend_recording` / `stop_backend_recording` / `abort_backend_recording`）；`stop_backend_recording` 仅产出 `recording_asset_id`，任务启动统一经 `start_task(req)` 并消费该资产。
 - `recording_asset_id` 必须具备短时租约与自动清理语义，避免“停止录音后未启动任务”造成中间产物悬挂。
 

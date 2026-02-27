@@ -32,7 +32,7 @@ type HotkeyRecordEvent = {
   state: "Pressed" | "Released";
   shortcut: string;
   ts_ms: number;
-  recording_session_id?: string | null;
+  task_id?: string | null;
   capture_status?: "ok" | "err" | null;
   capture_error_code?: string | null;
   capture_error_message?: string | null;
@@ -77,7 +77,7 @@ export function MainScreen({
   const activeTaskIdRef = useRef<string>("");
   const backendRecordingIdRef = useRef<string>("");
   const hotkeySessionRef = useRef<boolean>(false);
-  const pendingRecordingSessionIdRef = useRef<string | null>(null);
+  const pendingTaskIdRef = useRef<string | null>(null);
 
   const hasHotkeyConfig =
     typeof settings?.hotkeys_enabled === "boolean" &&
@@ -129,10 +129,10 @@ export function MainScreen({
     });
   }
 
-  async function abortRecordingSessionBestEffort(sessionId: string | null) {
-    if (!sessionId || !sessionId.trim()) return;
+  async function abortPendingTaskBestEffort(taskId: string | null) {
+    if (!taskId || !taskId.trim()) return;
     try {
-      await gateway.invoke("abort_recording_session", { recordingSessionId: sessionId });
+      await gateway.invoke("abort_pending_task", { taskId });
     } catch {
       // ignore
     }
@@ -295,7 +295,7 @@ export function MainScreen({
         const cur = uiRef.current;
         if (hk.kind === "ptt") {
           if (hk.state === "Pressed" && cur === "idle") {
-            if (hk.capture_status !== "ok" || !hk.recording_session_id) {
+            if (hk.capture_status !== "ok" || !hk.task_id) {
               const hint = hotkeyCaptureHint(hk.capture_error_code);
               const detail = compactDetail(
                 [hk.capture_error_code || "E_HOTKEY_CAPTURE", hk.capture_error_message || hint]
@@ -310,7 +310,7 @@ export function MainScreen({
               }, 1200);
               return;
             }
-            void startRecording("hotkey", hk.recording_session_id);
+            void startRecording("hotkey", hk.task_id);
           }
           if (hk.state === "Released" && cur === "recording") {
             void stopAndTranscribe();
@@ -321,7 +321,7 @@ export function MainScreen({
         // toggle
         if (hk.state !== "Pressed") return;
         if (cur === "idle") {
-          if (hk.capture_status !== "ok" || !hk.recording_session_id) {
+          if (hk.capture_status !== "ok" || !hk.task_id) {
             const hint = hotkeyCaptureHint(hk.capture_error_code);
             const detail = compactDetail(
               [hk.capture_error_code || "E_HOTKEY_CAPTURE", hk.capture_error_message || hint]
@@ -336,7 +336,7 @@ export function MainScreen({
             }, 1200);
             return;
           }
-          void startRecording("hotkey", hk.recording_session_id);
+          void startRecording("hotkey", hk.task_id);
         }
         else if (cur === "recording") void stopAndTranscribe();
         else if (cur === "transcribing") void cancelActiveTask();
@@ -352,9 +352,9 @@ export function MainScreen({
       if (staleRecordingId) {
         void gateway.invoke("abort_backend_recording", { recordingId: staleRecordingId }).catch(() => {});
       }
-      const staleSessionId = pendingRecordingSessionIdRef.current;
-      pendingRecordingSessionIdRef.current = null;
-      void abortRecordingSessionBestEffort(staleSessionId);
+      const staleTaskId = pendingTaskIdRef.current;
+      pendingTaskIdRef.current = null;
+      void abortPendingTaskBestEffort(staleTaskId);
       for (const fn of unlistenFns) {
         try {
           fn();
@@ -365,9 +365,9 @@ export function MainScreen({
     };
   }, []);
 
-  async function startRecording(source: "ui" | "hotkey" = "ui", recordingSessionId: string | null = null) {
+  async function startRecording(source: "ui" | "hotkey" = "ui", taskId: string | null = null) {
     hotkeySessionRef.current = source === "hotkey";
-    pendingRecordingSessionIdRef.current = source === "hotkey" ? recordingSessionId : null;
+    pendingTaskIdRef.current = source === "hotkey" ? taskId : null;
     setDiagnosticLine("");
     try {
       const rid = (await gateway.invoke("start_backend_recording")) as string;
@@ -375,13 +375,13 @@ export function MainScreen({
       setUi("recording");
       if (hotkeySessionRef.current) void overlaySet(true, "REC");
     } catch (err) {
-      const staleSessionId = pendingRecordingSessionIdRef.current;
-      void abortRecordingSessionBestEffort(staleSessionId);
+      const staleTaskId = pendingTaskIdRef.current;
+      void abortPendingTaskBestEffort(staleTaskId);
       setUi("idle");
       const diag = buildDiagnostic(err, "RECORDING FAILED");
       pushToastRef.current(diag.title, "danger");
       setDiagnosticLine(toDiagnosticLine(diag));
-      pendingRecordingSessionIdRef.current = null;
+      pendingTaskIdRef.current = null;
       if (hotkeySessionRef.current) {
         overlayFlash("ERROR", 1200, diag.code);
         hotkeySessionRef.current = false;
@@ -402,10 +402,10 @@ export function MainScreen({
     } catch (err) {
       void gateway.invoke("abort_backend_recording", { recordingId: rid }).catch(() => {});
       backendRecordingIdRef.current = "";
-      const staleSessionId = pendingRecordingSessionIdRef.current;
-      void abortRecordingSessionBestEffort(staleSessionId);
+      const staleTaskId = pendingTaskIdRef.current;
+      void abortPendingTaskBestEffort(staleTaskId);
       setUi("idle");
-      pendingRecordingSessionIdRef.current = null;
+      pendingTaskIdRef.current = null;
       const diag = buildDiagnostic(err, "RECORDING FAILED");
       pushToastRef.current(diag.title, "danger");
       setDiagnosticLine(toDiagnosticLine(diag));
@@ -424,16 +424,16 @@ export function MainScreen({
           triggerSource: hotkeySessionRef.current ? "hotkey" : "ui",
           recordMode: "recording_asset",
           recordingAssetId: stopResult.recordingAssetId,
-          recordingSessionId: pendingRecordingSessionIdRef.current,
+          taskId: pendingTaskIdRef.current,
         },
       })) as string;
       activeTaskIdRef.current = id;
-      pendingRecordingSessionIdRef.current = null;
+      pendingTaskIdRef.current = null;
     } catch (err) {
-      const staleSessionId = pendingRecordingSessionIdRef.current;
-      void abortRecordingSessionBestEffort(staleSessionId);
+      const staleTaskId = pendingTaskIdRef.current;
+      void abortPendingTaskBestEffort(staleTaskId);
       setUi("idle");
-      pendingRecordingSessionIdRef.current = null;
+      pendingTaskIdRef.current = null;
       const diag = buildDiagnostic(err, "TRANSCRIBE FAILED");
       pushToastRef.current(diag.title, "danger");
       setDiagnosticLine(toDiagnosticLine(diag));
