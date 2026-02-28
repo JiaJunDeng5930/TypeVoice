@@ -2,6 +2,17 @@
   "name": "typevoice-desktop",
   "private": true,
   "version": "0.1.0",
+  "description": "TypeVoice desktop app",
+  "license": "MIT",
+  "author": "Jiajun Deng",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JiaJunDeng5930/TypeVoice.git"
+  },
+  "bugs": {
+    "url": "https://github.com/JiaJunDeng5930/TypeVoice/issues"
+  },
+  "homepage": "https://github.com/JiaJunDeng5930/TypeVoice#readme",
   "type": "module",
   "scripts": {
     "dev": "vite",

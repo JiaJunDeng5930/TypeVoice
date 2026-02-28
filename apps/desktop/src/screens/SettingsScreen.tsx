@@ -99,7 +99,7 @@ export function SettingsScreen({
 }: Props) {
   const [asrModel, setAsrModel] = useState("");
   const [asrProvider, setAsrProvider] = useState("local");
-  const [remoteAsrUrl, setRemoteAsrUrl] = useState("http://api.server/transcribe");
+  const [remoteAsrUrl, setRemoteAsrUrl] = useState("https://api.server/transcribe");
   const [remoteAsrModel, setRemoteAsrModel] = useState("");
   const [remoteAsrConcurrency, setRemoteAsrConcurrency] = useState("4");
   const [remoteAsrKeyDraft, setRemoteAsrKeyDraft] = useState("");
@@ -148,7 +148,7 @@ export function SettingsScreen({
     if (!settings) return;
     setAsrModel(settings.asr_model ?? "");
     setAsrProvider(settings.asr_provider === "remote" ? "remote" : "local");
-    setRemoteAsrUrl(settings.remote_asr_url?.trim() || "http://api.server/transcribe");
+    setRemoteAsrUrl(settings.remote_asr_url?.trim() || "https://api.server/transcribe");
     setRemoteAsrModel(settings.remote_asr_model ?? "");
     {
       const raw = Number(settings.remote_asr_concurrency ?? 4);
@@ -693,7 +693,7 @@ export function SettingsScreen({
 
   const asrStatusText = useMemo(() => {
     if (asrProvider === "remote") {
-      return `REMOTE ${remoteAsrUrl.trim() || "http://api.server/transcribe"}`;
+      return `REMOTE ${remoteAsrUrl.trim() || "https://api.server/transcribe"}`;
     }
     if (!modelStatus) return "UNKNOWN";
 
@@ -741,7 +741,7 @@ export function SettingsScreen({
               <PixelInput
                 value={remoteAsrUrl}
                 onChange={setRemoteAsrUrl}
-                placeholder="remote ASR URL (e.g. http://api.server/transcribe)"
+                placeholder="remote ASR URL (e.g. https://api.server/transcribe)"
               />
               <PixelInput
                 value={remoteAsrModel}

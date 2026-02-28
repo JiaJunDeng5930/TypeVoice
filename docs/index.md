@@ -19,6 +19,8 @@
 - [windows-dev.md](./windows-dev.md)：从 WSL 到 Windows 的开发流程与常见操作顺序。
 - [windows-gate.md](./windows-gate.md)：Windows 一键门禁与快速编译检查。
 - [llm-prompt-lab.md](./llm-prompt-lab.md)：LLM 提示词实验脚本与调参流程。
+- [privacy-data-flow.md](./privacy-data-flow.md)：本地/远程 ASR 与 LLM 改写的数据流与隐私边界。
+- [release-process.md](./release-process.md)：版本发布、changelog 与 release notes 流程。
 
 ## 外置记忆（memory）
 

@@ -16,6 +16,7 @@
 - 如需 sudo，必须加 `-n`；若无权限需反馈用户。
 
 ## 工作方式与约束
+- 当前仓库治理基线已确认：项目许可证固定为 MIT，`CODEOWNERS` 采用“仅维护者本人”模式。
 - 做“验证/验收/回归”时，Linux 侧与 Windows 侧都要一起验证：不能只测一边就算完成（尤其是涉及 Tauri/Rust/热键/窗口等 Windows-only 行为时）。
 - 对于所有 bug 修复与功能更新：必须先在 Windows 侧同步到最新源码，然后重新编译，并以 Debug 模式拉起后再做验证（不能只停留在 Linux 侧）。
 - Windows Debug 拉起时只保留“一个最新且有效”的开发会话，避免多套 `tauri dev`/`vite`/`typevoice-desktop` 并存造成端口占用和诊断混淆。

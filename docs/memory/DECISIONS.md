@@ -220,3 +220,21 @@
   - 删除旧模块：`trace.rs`、`metrics.rs`、`debug_log.rs`、`startup_trace.rs`、`panic_log.rs`。
   - `TaskManager` 与 debug artifact 统一使用 `MetricsRecord`，`metrics.jsonl` 强制包含稳定 `type` 与 `ts_ms`。
   - 队列拥塞时不阻塞主流程，记录 `logger_dropped` 指标，确保丢弃可观测。
+
+## 仓库许可证选择（MIT）
+
+- 决策：仓库整体许可证固定为 MIT。
+- 依据：项目维护者明确选择“最宽松许可”作为当前对外发布策略。
+- 执行：仓库根目录新增 `LICENSE`（MIT 文本），并在包元数据与 README 中同步标注。
+
+## 代码所有权模型（单维护者）
+
+- 决策：`CODEOWNERS` 采用单维护者模式，当前仅维护者本人负责目录评审归属。
+- 依据：当前阶段无协同维护者，代码评审责任由维护者独立承担。
+- 执行：仓库根目录新增 `CODEOWNERS`，全局路径映射到维护者账号。
+
+## FFmpeg 合规声明固定口径
+
+- 决策：当前内置 FFmpeg 二进制按 GPL 路线声明，仓库持续维护第三方声明入口文件。
+- 依据：当前内置二进制构建参数包含 `--enable-gpl` 与 `libx264/libx265`。
+- 执行：新增 `THIRD_PARTY_NOTICES.md`，并在 `docs/tech-spec.md` 固化 FFmpeg 版本、来源与许可口径。

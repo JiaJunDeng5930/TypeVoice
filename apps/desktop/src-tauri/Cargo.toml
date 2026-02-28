@@ -1,8 +1,10 @@
 [package]
 name = "typevoice-desktop"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "TypeVoice desktop app built with Tauri"
+authors = ["Jiajun Deng <3230105930@zju.edu.cn>"]
+license = "MIT"
+repository = "https://github.com/JiaJunDeng5930/TypeVoice"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

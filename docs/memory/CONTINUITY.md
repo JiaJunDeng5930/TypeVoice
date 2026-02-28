@@ -12,6 +12,12 @@
 
 ### 已确认
 
+- [VERIFIED] 2026-02-28：仓库已补齐开源基线文件：`LICENSE(MIT)`、`CHANGELOG.md`、`CODEOWNERS`、`SECURITY.md`、`CONTRIBUTING.md`、`CODE_OF_CONDUCT.md`、`SUPPORT.md`、`GOVERNANCE.md`、`MAINTAINERS.md`、`CITATION.cff`。
+- [VERIFIED] 2026-02-28：已新增 `.github/` 协作与自动化骨架（Issue/PR 模板、`ci.yml`、`codeql.yml`、`scorecards.yml`、`dependabot.yml`、`release.yml`）。
+- [VERIFIED] 2026-02-28：已补齐第三方声明文件 `THIRD_PARTY_NOTICES.md`，并在 `docs/tech-spec.md` 固化 FFmpeg 版本/来源/GPL 路线说明；`FFmpeg 许可证声明写法` 已从待确认项移除。
+- [VERIFIED] 2026-02-28：已补齐可复现环境文件：`requirements.txt`、`requirements-asr.txt`、`rust-toolchain.toml`、`.nvmrc`、`.python-version`。
+- [VERIFIED] 2026-02-28：根 README 与 `apps/desktop/README.md` 已重写，补齐安装、使用、测试、反馈、贡献、许可与隐私数据流入口契约。
+- [VERIFIED] 2026-02-28：远程 ASR 默认示例 URL 已从 `http://api.server/transcribe` 调整为 `https://api.server/transcribe`（`settings.rs`、`SettingsScreen.tsx`、`docs/memory/SPEC.md` 同步）。
 - [VERIFIED] 2026-02-28：新增前端到后端结构化错误上报命令 `ui_log_event`（`stage=UI`），支持 `toast/diagnostic/invoke_error` 三类事件落盘 `trace.jsonl`，包含稳定 `error.code` 与结构化上下文。
 - [VERIFIED] 2026-02-28：热键失败链路补齐结构化证据：`HK.hotkey_rejected`（`E_TASK_ALREADY_ACTIVE`）、`HK.task_open_failed`（`E_HOTKEY_TASK_OPEN`）、`HK.emit_failed`（`E_HK_EMIT_FAILED`）已写入 trace。
 - [VERIFIED] 2026-02-28：前端热键 fallback 错误码从模糊 `E_HOTKEY_CAPTURE` 改为 `E_HOTKEY_EVENT_INCOMPLETE`，并新增对应提示映射，避免误判为截图失败。

@@ -1292,7 +1292,7 @@ mod tests {
     fn base_start_opts() -> StartOpts {
         StartOpts {
             asr_provider: "local".to_string(),
-            remote_asr_url: "http://api.server/transcribe".to_string(),
+            remote_asr_url: "https://api.server/transcribe".to_string(),
             remote_asr_model: None,
             remote_asr_concurrency: 4,
             rewrite_enabled: false,

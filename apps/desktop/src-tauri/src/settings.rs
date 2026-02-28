@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::obs::Span;
 
 pub const DEFAULT_ASR_PROVIDER: &str = "local";
-pub const DEFAULT_REMOTE_ASR_URL: &str = "http://api.server/transcribe";
+pub const DEFAULT_REMOTE_ASR_URL: &str = "https://api.server/transcribe";
 pub const DEFAULT_REMOTE_ASR_CONCURRENCY: usize = 4;
 pub const MAX_REMOTE_ASR_CONCURRENCY: usize = 16;
 

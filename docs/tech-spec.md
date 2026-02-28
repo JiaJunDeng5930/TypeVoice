@@ -70,7 +70,16 @@
 
 ### 3.1 分发形态
 
-- Windows 安装包内置 `ffmpeg.exe`（具体路径与命名需要固定并可在运行时定位）。
+- 安装包内置 FFmpeg 工具链（`ffmpeg` / `ffprobe`），运行时路径通过
+  `apps/desktop/src-tauri/toolchain/ffmpeg_manifest.json` 固定定位。
+- 当前固定版本：`7.0.2`。
+- 当前固定来源：
+  - Windows：`GyanD/codexffmpeg` release archive
+  - Linux：`johnvansickle.com` static build archive
+- 当前内置二进制构建口径为 GPL 路线（包含 `--enable-gpl`，并启用
+  `libx264` / `libx265`）。
+- 随包与仓库必须包含第三方许可证与声明文件，统一入口为
+  根目录 `THIRD_PARTY_NOTICES.md`。
 
 ### 3.2 输入输出约束
 
@@ -238,7 +247,6 @@
 
 - PyTorch CUDA 的打包策略与 ASR Runner 的分发形式（独立 Python 环境、嵌入式 Python、或其他方式）。
 - 模型下载源与镜像策略。
-- FFmpeg 版本、构建选项与许可证声明写法。
 
 ## 11. 可测试性约束（冻结）
 

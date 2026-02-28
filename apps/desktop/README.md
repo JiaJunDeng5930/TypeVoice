@@ -1,7 +1,31 @@
-# Tauri + React + Typescript
+# TypeVoice Desktop
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+Desktop app built with Tauri + React + TypeScript.
 
-## Recommended IDE Setup
+## Prerequisites
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+- Node.js (see repository `.nvmrc`)
+- Rust toolchain (see repository `rust-toolchain.toml`)
+
+## Install
+
+```bash
+npm ci
+```
+
+## Run
+
+```bash
+npm run dev
+npm run tauri dev
+```
+
+## Build
+
+```bash
+npm run build
+```
+
+## More
+
+For full project docs and verification gates, see repository root `README.md` and `docs/index.md`.

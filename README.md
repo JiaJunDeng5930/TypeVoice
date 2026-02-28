@@ -1,19 +1,93 @@
 # TypeVoice
 
-面向中文输入场景的 Windows 桌面“录完再出稿”语音打字工具。
+面向中文输入场景的桌面端“录完再出稿”语音输入工具。
 
-本仓库当前阶段以“规格冻结”为主：只有写入文档的内容才视为可靠的工程约束与验收依据。
+## 功能概览
 
-## 文档
+- 本地录音 -> FFmpeg 预处理 -> ASR 转写 -> 可选 LLM 改写 -> 复制/自动粘贴
+- 历史记录仅保存文本与元信息，不保存音频
+- 支持本地 ASR（默认）与远程 ASR（可选）
+- 提供 `quick/full` 验证脚本
 
-- `docs/index.md`：文档导航与摘要索引。
-- `docs/base-spec.md`：基础规格（业务需求 + 质量保证 + 性能要求 + 验收标准）
-- `docs/tech-spec.md`：技术规格（模块边界、接口、数据与错误模型、分发与依赖策略）
-- `docs/perf-spike.md`：性能验证计划（RTF 指标、样本集、测量口径、通过标准）
-- `docs/verification.md`：分级验证（quick/full）的度量、保证与验收口径
-- `docs/fixtures-sources.md`：本机 fixtures 音频来源与命名约定（音频本身不提交）
-- `docs/architecture.md`：架构边界与接口（为 Gate 反推的工程结构）
-- `docs/roadmap.md`：里程碑与 Gate（每个里程碑的验收条件与验证方式）
-- `docs/tasks.md`：任务拆解（按里程碑的可执行 checklist，直接绑定 quick/full Gate）
-- `docs/windows-gate.md`：Windows 原生验收 Gate（PowerShell 一键脚本）
-- `docs/llm-prompt-lab.md`：LLM Prompt 调参脚本（请求/响应落盘，人工判断输出）
+## 快速开始
+
+### 1) 安装前端依赖
+
+```bash
+cd apps/desktop
+npm ci
+```
+
+### 2) 准备 Python 环境
+
+```bash
+cd /path/to/TypeVoice
+python3 -m venv .venv
+./.venv/bin/python -m pip install -r requirements.txt
+# 需要本地 ASR 时再安装运行时依赖
+./.venv/bin/python -m pip install -r requirements-asr.txt
+```
+
+### 3) 下载本地 ASR 模型（可选）
+
+```bash
+./.venv/bin/python scripts/download_asr_model.py
+```
+
+### 4) 启动桌面应用
+
+```bash
+cd apps/desktop
+npm run tauri dev
+```
+
+## 常用验证命令
+
+在仓库根目录执行：
+
+```bash
+./.venv/bin/python -m pytest -q tests
+./.venv/bin/python scripts/verify_quick.py
+./.venv/bin/python scripts/verify_full.py
+```
+
+Windows 一键门禁参见 [docs/windows-gate.md](./docs/windows-gate.md)。
+
+## 使用说明
+
+1. 开始录音
+2. 结束录音
+3. 等待转写（可选改写）
+4. 复制结果或自动粘贴到目标输入框
+
+## 隐私与数据流
+
+- 默认本地 ASR：音频在本机处理，不上传音频。
+- 启用远程 ASR：音频会发送到你配置的远程 ASR 服务。
+- 启用 LLM 改写：仅发送转写文本与必要上下文，不发送音频。
+- API Key 存储在系统安全存储（keyring）中，不写入日志。
+
+详细说明见 [docs/privacy-data-flow.md](./docs/privacy-data-flow.md)。
+
+## 反馈与支持
+
+- Bug/需求：<https://github.com/JiaJunDeng5930/TypeVoice/issues>
+- 支持边界：见 [SUPPORT.md](./SUPPORT.md)
+- 安全问题：见 [SECURITY.md](./SECURITY.md)
+
+## 贡献
+
+贡献流程见 [CONTRIBUTING.md](./CONTRIBUTING.md)。
+
+## 文档导航
+
+- 文档索引： [docs/index.md](./docs/index.md)
+- 基础规格： [docs/base-spec.md](./docs/base-spec.md)
+- 技术规格： [docs/tech-spec.md](./docs/tech-spec.md)
+- 验证规范： [docs/verification.md](./docs/verification.md)
+- 发布流程： [docs/release-process.md](./docs/release-process.md)
+
+## 许可证与第三方声明
+
+- 本项目许可证： [LICENSE](./LICENSE)（MIT）
+- 第三方组件声明： [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)
