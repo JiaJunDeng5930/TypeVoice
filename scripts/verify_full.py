@@ -13,6 +13,7 @@ from scripts._verify_util import (  # noqa: E402
     append_jsonl,
     cancel_asr_run,
     cancel_ffmpeg_preprocess,
+    ensure_fixtures_ready_or_exit,
     ensure_dirs,
     ffmpeg_preprocess_to_wav,
     now_ms,
@@ -58,10 +59,7 @@ def main() -> int:
         print("FAIL: .venv missing")
         return 2
 
-    for p in [FIX_10, FIX_60, FIX_5M]:
-        if not os.path.exists(p):
-            print(f"FAIL: fixture missing: {p}")
-            return 2
+    ensure_fixtures_ready_or_exit(["zh_10s.ogg", "zh_60s.ogg", "zh_5m.ogg"])
 
     ensure_dirs()
     jsonl = os.path.join(REPO_ROOT, "metrics", "verify.jsonl")

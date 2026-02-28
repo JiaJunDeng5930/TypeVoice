@@ -33,7 +33,7 @@ if [[ ! -f "$manifest" ]]; then
   exit 2
 fi
 
-for cmd in jq curl sha256sum tar unzip; do
+for cmd in jq curl sha256sum tar unzip gpg; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "FAIL: missing command: $cmd" >&2
     exit 2
@@ -81,6 +81,69 @@ esac
 
 work_root="$(mktemp -d)"
 trap 'rm -rf "$work_root"' EXIT
+
+verify_ffmpeg_upstream_release() {
+  local key_url sig_url src_url src_sha expected_fpr
+  key_url="$(jq -r '.upstream_release_verification.signing_key_url // empty' "$manifest")"
+  sig_url="$(jq -r '.upstream_release_verification.source_sig_url // empty' "$manifest")"
+  src_url="$(jq -r '.upstream_release_verification.source_url // empty' "$manifest")"
+  src_sha="$(jq -r '.upstream_release_verification.source_sha256 // empty' "$manifest")"
+  expected_fpr="$(jq -r '.upstream_release_verification.signing_key_fingerprint // empty' "$manifest")"
+
+  if [[ -z "$key_url" || -z "$sig_url" || -z "$src_url" || -z "$src_sha" || -z "$expected_fpr" ]]; then
+    echo "FAIL: upstream_release_verification is incomplete in $manifest" >&2
+    exit 2
+  fi
+
+  local ver_dir key_path src_path sig_path gnupg_home
+  ver_dir="$work_root/upstream"
+  mkdir -p "$ver_dir"
+  key_path="$ver_dir/ffmpeg-devel.asc"
+  src_path="$ver_dir/ffmpeg-release.tar.xz"
+  sig_path="$ver_dir/ffmpeg-release.tar.xz.asc"
+  gnupg_home="$ver_dir/gnupg"
+  mkdir -p "$gnupg_home"
+  chmod 700 "$gnupg_home"
+
+  echo "INFO: verify FFmpeg upstream release signature"
+  curl -fL "$key_url" -o "$key_path"
+  curl -fL "$src_url" -o "$src_path"
+  curl -fL "$sig_url" -o "$sig_path"
+
+  local got_src_sha
+  got_src_sha="$(sha256sum "$src_path" | awk '{print $1}')"
+  if [[ "${got_src_sha,,}" != "${src_sha,,}" ]]; then
+    echo "FAIL: ffmpeg upstream source sha256 mismatch" >&2
+    echo "  expected=$src_sha" >&2
+    echo "  actual=$got_src_sha" >&2
+    exit 1
+  fi
+
+  gpg --homedir "$gnupg_home" --batch --import "$key_path" >/dev/null 2>&1
+  local gpg_status valid_fpr
+  gpg_status="$(
+    gpg --homedir "$gnupg_home" --status-fd=1 --batch --verify "$sig_path" "$src_path" 2>/dev/null || true
+  )"
+  if ! echo "$gpg_status" | grep -q '^\[GNUPG:\] GOODSIG '; then
+    echo "FAIL: ffmpeg upstream signature verification failed (GOODSIG missing)" >&2
+    exit 1
+  fi
+  valid_fpr="$(echo "$gpg_status" | awk '/^\[GNUPG:\] VALIDSIG / {print $3; exit}')"
+  if [[ -z "$valid_fpr" ]]; then
+    echo "FAIL: ffmpeg upstream signature verification failed (VALIDSIG missing)" >&2
+    exit 1
+  fi
+  if [[ "${valid_fpr^^}" != "${expected_fpr^^}" ]]; then
+    echo "FAIL: ffmpeg signing fingerprint mismatch" >&2
+    echo "  expected=$expected_fpr" >&2
+    echo "  actual=$valid_fpr" >&2
+    exit 1
+  fi
+
+  echo "INFO: PASS: ffmpeg upstream signature verified ($valid_fpr)"
+}
+
+verify_ffmpeg_upstream_release
 
 for p in "${platforms[@]}"; do
   echo "INFO: prepare ffmpeg toolchain for $p"

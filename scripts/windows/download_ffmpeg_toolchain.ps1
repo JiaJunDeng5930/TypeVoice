@@ -29,6 +29,12 @@ function Get-FileSha256([string]$path) {
   return (Get-FileHash -Algorithm SHA256 -Path $path).Hash.ToLowerInvariant()
 }
 
+function Ensure-Command([string]$name) {
+  if (-not (Get-Command $name -ErrorAction SilentlyContinue)) {
+    Fail ("missing command: " + $name)
+  }
+}
+
 $RepoRoot = Resolve-RepoRoot
 $ManifestPath = Join-Path $RepoRoot "apps\desktop\src-tauri\toolchain\ffmpeg_manifest.json"
 if (-not (Test-Path $ManifestPath)) {
@@ -36,6 +42,12 @@ if (-not (Test-Path $ManifestPath)) {
 }
 
 $Manifest = Get-Content -Raw -Path $ManifestPath | ConvertFrom-Json
+$Upstream = $Manifest.upstream_release_verification
+if ($null -eq $Upstream) {
+  Fail "manifest missing upstream_release_verification section"
+}
+
+Ensure-Command "gpg"
 $targets = @()
 
 switch ($Platform) {
@@ -58,6 +70,62 @@ $workRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("typevoice_ffmpeg_" + [
 New-Item -ItemType Directory -Force -Path $workRoot | Out-Null
 
 try {
+  $verifyDir = Join-Path $workRoot "upstream_verify"
+  New-Item -ItemType Directory -Force -Path $verifyDir | Out-Null
+  $keyPath = Join-Path $verifyDir "ffmpeg-devel.asc"
+  $sourcePath = Join-Path $verifyDir "ffmpeg-release.tar.xz"
+  $sourceSigPath = Join-Path $verifyDir "ffmpeg-release.tar.xz.asc"
+  $gnupgHome = Join-Path $verifyDir "gnupg"
+  New-Item -ItemType Directory -Force -Path $gnupgHome | Out-Null
+
+  Info "verify FFmpeg upstream release signature"
+  & curl.exe -L --fail --silent --show-error --output $keyPath $Upstream.signing_key_url
+  if ($LASTEXITCODE -ne 0) {
+    Fail ("download signing key failed: " + $Upstream.signing_key_url)
+  }
+  & curl.exe -L --fail --silent --show-error --output $sourcePath $Upstream.source_url
+  if ($LASTEXITCODE -ne 0) {
+    Fail ("download source archive failed: " + $Upstream.source_url)
+  }
+  & curl.exe -L --fail --silent --show-error --output $sourceSigPath $Upstream.source_sig_url
+  if ($LASTEXITCODE -ne 0) {
+    Fail ("download source signature failed: " + $Upstream.source_sig_url)
+  }
+
+  $sourceSha = Get-FileSha256 $sourcePath
+  if ($sourceSha -ne $Upstream.source_sha256.ToLowerInvariant()) {
+    Fail ("ffmpeg upstream source sha256 mismatch expected=" + $Upstream.source_sha256 + " actual=" + $sourceSha)
+  }
+
+  & gpg --homedir $gnupgHome --batch --import $keyPath | Out-Null
+  if ($LASTEXITCODE -ne 0) {
+    Fail "failed to import ffmpeg signing key"
+  }
+
+  $status = & gpg --homedir $gnupgHome --status-fd=1 --batch --verify $sourceSigPath $sourcePath 2>$null
+  if ($LASTEXITCODE -ne 0) {
+    Fail "ffmpeg upstream signature verify command failed"
+  }
+  $goodSig = $status | Where-Object { $_ -match "^\[GNUPG:\] GOODSIG " } | Select-Object -First 1
+  if ($null -eq $goodSig) {
+    Fail "ffmpeg upstream signature verification failed (GOODSIG missing)"
+  }
+  $validSig = $status | Where-Object { $_ -match "^\[GNUPG:\] VALIDSIG " } | Select-Object -First 1
+  if ($null -eq $validSig) {
+    Fail "ffmpeg upstream signature verification failed (VALIDSIG missing)"
+  }
+  $parts = $validSig -split " "
+  if ($parts.Length -lt 3) {
+    Fail ("unexpected gpg status line: " + $validSig)
+  }
+  $actualFpr = $parts[2].ToUpperInvariant()
+  $expectedFpr = $Upstream.signing_key_fingerprint.ToUpperInvariant()
+  if ($actualFpr -ne $expectedFpr) {
+    Fail ("ffmpeg signing fingerprint mismatch expected=" + $expectedFpr + " actual=" + $actualFpr)
+  }
+
+  Info ("PASS: ffmpeg upstream signature verified (" + $actualFpr + ")")
+
   foreach ($target in $targets) {
     $spec = $Manifest.platforms.$target
     if ($null -eq $spec) {

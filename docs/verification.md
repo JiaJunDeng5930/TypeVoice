@@ -9,7 +9,10 @@
 
 ## 2. 通用度量对象（冻结）
 
-- 固定样本音频：本机 `fixtures/` 下的 `zh_10s.ogg`、`zh_60s.ogg`、`zh_5m.ogg`（来源与时长见 `docs/fixtures-sources.md`；音频不提交到 git）。
+- 固定样本音频：`fixtures/` 下的 `zh_10s.ogg`、`zh_60s.ogg`、`zh_5m.ogg`。
+  - 音频本体不提交到 git。
+  - 下载地址与 `sha256` 固化在 `scripts/fixtures_manifest.json`。
+  - `verify_quick.py` / `verify_full.py` 会在运行前自动下载并校验缺失样本。
 - 结构化指标：每次验证输出关键指标（RTF、device_used、cancel_latency_ms、成功/失败与错误码）。只需要机器可读记录 + 控制台摘要，不需要长报告。
 
 ## 3. 关键约束（冻结）

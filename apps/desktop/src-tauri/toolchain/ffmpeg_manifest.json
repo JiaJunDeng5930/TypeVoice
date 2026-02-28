@@ -1,5 +1,12 @@
 {
   "version": "7.0.2",
+  "upstream_release_verification": {
+    "source_url": "https://ffmpeg.org/releases/ffmpeg-7.0.2.tar.xz",
+    "source_sig_url": "https://ffmpeg.org/releases/ffmpeg-7.0.2.tar.xz.asc",
+    "source_sha256": "8646515b638a3ad303e23af6a3587734447cb8fc0a0c064ecdb8e95c4fd8b389",
+    "signing_key_url": "https://ffmpeg.org/ffmpeg-devel.asc",
+    "signing_key_fingerprint": "FCF986EA15E6E293A5644F10B4322F04D67658D8"
+  },
   "platforms": {
     "windows-x86_64": {
       "archive_url": "https://github.com/GyanD/codexffmpeg/releases/download/7.0.2/ffmpeg-7.0.2-essentials_build.zip",

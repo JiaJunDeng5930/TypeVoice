@@ -78,6 +78,8 @@
   - Linux：`johnvansickle.com` static build archive
 - 当前内置二进制构建口径为 GPL 路线（包含 `--enable-gpl`，并启用
   `libx264` / `libx265`）。
+- 工具链下载脚本必须先验证 FFmpeg 官方 release source 的 PGP 签名
+  （`ffmpeg-devel.asc` 对应指纹），再执行预编译二进制下载与 `sha256` 校验。
 - 随包与仓库必须包含第三方许可证与声明文件，统一入口为
   根目录 `THIRD_PARTY_NOTICES.md`。
 

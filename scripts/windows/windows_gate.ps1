@@ -36,6 +36,7 @@ Ensure-Command "python"
 Ensure-Command "node"
 Ensure-Command "npm"
 Ensure-Command "cargo"
+Ensure-Command "gpg"
 
 # Fast fail: Windows-only compile gate (catches Send/Sync and other Windows-specific errors).
 Info "running windows compile gate"

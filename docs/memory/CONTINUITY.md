@@ -12,6 +12,9 @@
 
 ### 已确认
 
+- [VERIFIED] 2026-02-28：`tauri.conf.json` 已将 `csp` 从 `null` 收敛为显式策略，限制默认资源来源并约束脚本/连接来源。
+- [VERIFIED] 2026-02-28：FFmpeg 工具链下载脚本已接入上游签名链校验：先校验 FFmpeg 官方 release source 的 `sha256` 与 PGP 签名（`ffmpeg-devel.asc` 指纹固定），再下载并校验预编译二进制。
+- [VERIFIED] 2026-02-28：`verify_quick.py` / `verify_full.py` 已接入 fixtures manifest 自动拉取与 `sha256` 校验；新增 `scripts/fixtures_manifest.json` 与 `scripts/download_fixtures.py`。
 - [VERIFIED] 2026-02-28：仓库已补齐开源基线文件：`LICENSE(MIT)`、`CHANGELOG.md`、`CODEOWNERS`、`SECURITY.md`、`CONTRIBUTING.md`、`CODE_OF_CONDUCT.md`、`SUPPORT.md`、`GOVERNANCE.md`、`MAINTAINERS.md`、`CITATION.cff`。
 - [VERIFIED] 2026-02-28：已新增 `.github/` 协作与自动化骨架（Issue/PR 模板、`ci.yml`、`codeql.yml`、`scorecards.yml`、`dependabot.yml`、`release.yml`）。
 - [VERIFIED] 2026-02-28：已补齐第三方声明文件 `THIRD_PARTY_NOTICES.md`，并在 `docs/tech-spec.md` 固化 FFmpeg 版本/来源/GPL 路线说明；`FFmpeg 许可证声明写法` 已从待确认项移除。

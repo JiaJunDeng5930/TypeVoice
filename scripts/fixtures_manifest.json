@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "fixtures": [
+    {
+      "file": "zh_10s.ogg",
+      "url": "https://commons.wikimedia.org/wiki/Special:FilePath/Zero%20to%20ten%20in%20Mandarin%20Chinese.ogg",
+      "sha256": "27e96d9a8f994fbeb64ea55ce9de040f639af9340a66f1b898a2804a33633721",
+      "duration_sec": 11.807347,
+      "source_name": "Zero to ten in Mandarin Chinese.ogg"
+    },
+    {
+      "file": "zh_60s.ogg",
+      "url": "https://commons.wikimedia.org/wiki/Special:FilePath/Zh-Template%20Demo.ogg",
+      "sha256": "89daec6522bcd5bbbbf45dd99041efd9f8d5644b4953ddb846c37d6325f6d14c",
+      "duration_sec": 52.0064,
+      "source_name": "Zh-Template Demo.ogg"
+    },
+    {
+      "file": "zh_5m.ogg",
+      "url": "https://commons.wikimedia.org/wiki/Special:FilePath/Zh-%E5%B1%95%E9%96%8B%20(%E5%B9%BE%E4%BD%95).ogg",
+      "sha256": "3cf3d7e206c8af76e013d034ab00b19a591c53139e90dd00d39840dd20f3ce08",
+      "duration_sec": 297.723061,
+      "source_name": "Zh-展開 (幾何).ogg"
+    }
+  ]
+}

@@ -238,3 +238,21 @@
 - 决策：当前内置 FFmpeg 二进制按 GPL 路线声明，仓库持续维护第三方声明入口文件。
 - 依据：当前内置二进制构建参数包含 `--enable-gpl` 与 `libx264/libx265`。
 - 执行：新增 `THIRD_PARTY_NOTICES.md`，并在 `docs/tech-spec.md` 固化 FFmpeg 版本、来源与许可口径。
+
+## Tauri CSP 显式化
+
+- 决策：前端安全策略由 `csp=null` 调整为显式 CSP 字符串，禁止无策略运行。
+- 依据：`null` 配置无法提供 WebView 侧基础脚本/连接来源限制。
+- 执行：`apps/desktop/src-tauri/tauri.conf.json` 固化非空 CSP，允许 dev 所需 localhost/ws 与业务 HTTPS 连接。
+
+## Fixtures 可复现下载清单
+
+- 决策：验证音频样本改为“manifest 固定 + 自动下载 + sha256 校验”流程，不再依赖手工准备。
+- 依据：`quick/full` 在新环境与 CI 中需要可直接复现，且音频本体不入库。
+- 执行：新增 `scripts/fixtures_manifest.json` 与 `scripts/download_fixtures.py`，并在 `verify_quick.py` / `verify_full.py` 运行前自动校验样本完整性。
+
+## FFmpeg 上游签名链校验
+
+- 决策：工具链脚本增加 FFmpeg 上游 release source PGP 验签与签名指纹固定校验。
+- 依据：仅有下载包 `sha256` 只能校验完整性，无法验证发布者身份。
+- 执行：`scripts/download_ffmpeg_toolchain.sh` 与 `scripts/windows/download_ffmpeg_toolchain.ps1` 先验证 `ffmpeg-devel.asc` 与 source `.asc` 签名，再执行预编译包下载校验。

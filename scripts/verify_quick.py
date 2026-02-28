@@ -11,6 +11,7 @@ from scripts._verify_util import (  # noqa: E402
     VENV_PYTHON,
     append_jsonl,
     cancel_asr_run,
+    ensure_fixtures_ready_or_exit,
     ensure_dirs,
     ffprobe_duration_seconds,
     now_ms,
@@ -28,9 +29,7 @@ def main() -> int:
         print("FAIL: .venv missing (create project-local venv first)")
         return 2
 
-    if not os.path.exists(FIXTURE_10S):
-        print(f"FAIL: fixture missing: {FIXTURE_10S}")
-        return 2
+    ensure_fixtures_ready_or_exit(["zh_10s.ogg", "zh_5m.ogg"])
 
     ensure_dirs()
     jsonl = os.path.join(REPO_ROOT, "metrics", "verify.jsonl")

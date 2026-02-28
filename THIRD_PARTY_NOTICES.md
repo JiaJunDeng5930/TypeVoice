@@ -14,6 +14,11 @@ This project redistributes and/or integrates third-party components.
   - Linux: `https://johnvansickle.com/ffmpeg/releases/ffmpeg-7.0.2-amd64-static.tar.xz`
 - License notice:
   - Current bundled builds are GPL route builds (`--enable-gpl` with `libx264/libx265`), therefore distributed under GPLv3-or-later terms for those binaries.
+- Supply-chain verification:
+  - Toolchain scripts verify FFmpeg upstream source archive signature against
+    `https://ffmpeg.org/ffmpeg-devel.asc` and pinned fingerprint
+    `FCF986EA15E6E293A5644F10B4322F04D67658D8` before consuming prebuilt binaries.
+  - Verification metadata is pinned in `apps/desktop/src-tauri/toolchain/ffmpeg_manifest.json`.
 - Corresponding source references:
   - `https://github.com/GyanD/codexffmpeg/tree/7.0.2`
   - `https://johnvansickle.com/ffmpeg/release-source/`

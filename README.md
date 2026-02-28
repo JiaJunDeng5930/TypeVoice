@@ -34,7 +34,13 @@ python3 -m venv .venv
 ./.venv/bin/python scripts/download_asr_model.py
 ```
 
-### 4) 启动桌面应用
+### 4) 下载验证 fixtures（建议）
+
+```bash
+./.venv/bin/python scripts/download_fixtures.py
+```
+
+### 5) 启动桌面应用
 
 ```bash
 cd apps/desktop
@@ -50,6 +56,9 @@ npm run tauri dev
 ./.venv/bin/python scripts/verify_quick.py
 ./.venv/bin/python scripts/verify_full.py
 ```
+
+说明：`verify_quick.py` / `verify_full.py` 会按 `scripts/fixtures_manifest.json`
+自动下载并校验缺失的 fixture 音频。
 
 Windows 一键门禁参见 [docs/windows-gate.md](./docs/windows-gate.md)。
 

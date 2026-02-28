@@ -76,5 +76,6 @@ cargo install sccache
 The script intentionally fails fast if any of these are missing:
 
 - `python`, `node`, `npm`, `cargo` are not in PATH.
+- `gpg` is not in PATH (required for FFmpeg upstream release signature verification).
 - bundled FFmpeg toolchain download/checksum validation fails.
 - `torch.cuda.is_available()` is `False` after installing Torch wheels.

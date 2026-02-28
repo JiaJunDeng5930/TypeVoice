@@ -1,9 +1,12 @@
+import hashlib
 import json
 import os
 import signal
+import shutil
 import subprocess
 import sys
 import time
+import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
@@ -19,6 +22,8 @@ def _venv_python_path(repo_root: str) -> str:
 VENV_PYTHON = _venv_python_path(REPO_ROOT)
 
 DEFAULT_LOCAL_MODEL_DIR = os.path.join(REPO_ROOT, "models", "Qwen3-ASR-0.6B")
+DEFAULT_FIXTURES_DIR = os.path.join(REPO_ROOT, "fixtures")
+DEFAULT_FIXTURES_MANIFEST = os.path.join(REPO_ROOT, "scripts", "fixtures_manifest.json")
 
 
 def _default_toolchain_dir() -> str:
@@ -58,6 +63,88 @@ def resolve_asr_model_id_or_exit() -> str:
     print(f"Expected local model dir: {DEFAULT_LOCAL_MODEL_DIR}")
     print("Hint: run: .venv/bin/python scripts/download_asr_model.py")
     raise SystemExit(2)
+
+
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _load_fixtures_manifest_or_exit() -> dict[str, Any]:
+    manifest_path = os.environ.get("TYPEVOICE_FIXTURES_MANIFEST", "").strip() or DEFAULT_FIXTURES_MANIFEST
+    if not os.path.exists(manifest_path):
+        print(f"FAIL: fixtures manifest missing: {manifest_path}")
+        raise SystemExit(2)
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"FAIL: cannot parse fixtures manifest: {manifest_path} ({e})")
+        raise SystemExit(2)
+
+    fixtures = data.get("fixtures")
+    if not isinstance(fixtures, list):
+        print(f"FAIL: invalid fixtures manifest format: {manifest_path}")
+        raise SystemExit(2)
+    return data
+
+
+def ensure_fixtures_ready_or_exit(required_files: list[str]) -> None:
+    data = _load_fixtures_manifest_or_exit()
+    fixtures = data["fixtures"]
+    by_file: dict[str, dict[str, Any]] = {}
+    for item in fixtures:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("file")
+        if isinstance(name, str) and name:
+            by_file[name] = item
+
+    fixtures_dir = os.environ.get("TYPEVOICE_FIXTURES_DIR", "").strip() or DEFAULT_FIXTURES_DIR
+    os.makedirs(fixtures_dir, exist_ok=True)
+
+    for name in required_files:
+        spec = by_file.get(name)
+        if spec is None:
+            print(f"FAIL: fixture not declared in manifest: {name}")
+            raise SystemExit(2)
+
+        url = str(spec.get("url") or "").strip()
+        expected_sha256 = str(spec.get("sha256") or "").strip().lower()
+        if not url or not expected_sha256:
+            print(f"FAIL: fixture spec incomplete for: {name}")
+            raise SystemExit(2)
+
+        target_path = os.path.join(fixtures_dir, name)
+        if os.path.exists(target_path):
+            got = _sha256_file(target_path).lower()
+            if got == expected_sha256:
+                continue
+            print(f"WARN: fixture checksum mismatch, re-downloading: {target_path}")
+
+        tmp_path = target_path + ".download"
+        try:
+            with urllib.request.urlopen(url, timeout=120) as resp, open(tmp_path, "wb") as out:
+                shutil.copyfileobj(resp, out)
+        except Exception as e:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            print(f"FAIL: fixture download failed for {name} from {url}: {e}")
+            raise SystemExit(2)
+
+        got_sha256 = _sha256_file(tmp_path).lower()
+        if got_sha256 != expected_sha256:
+            os.remove(tmp_path)
+            print(f"FAIL: fixture checksum mismatch for {name}")
+            print(f"  expected={expected_sha256}")
+            print(f"  actual={got_sha256}")
+            raise SystemExit(2)
+
+        os.replace(tmp_path, target_path)
+        print(f"INFO: fixture ready: {target_path}")
 
 
 def now_ms() -> int:
