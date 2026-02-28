@@ -249,6 +249,14 @@ impl TaskManager {
         self.inner.lock().unwrap().is_some()
     }
 
+    pub fn active_task_id_best_effort(&self) -> Option<String> {
+        self.inner
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|task| task.task_id.clone())
+    }
+
     fn env_bool_default_true(key: &str) -> bool {
         match std::env::var(key) {
             Ok(v) => {

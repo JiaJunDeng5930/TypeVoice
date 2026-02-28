@@ -12,6 +12,10 @@
 
 ### 已确认
 
+- [VERIFIED] 2026-02-28：新增前端到后端结构化错误上报命令 `ui_log_event`（`stage=UI`），支持 `toast/diagnostic/invoke_error` 三类事件落盘 `trace.jsonl`，包含稳定 `error.code` 与结构化上下文。
+- [VERIFIED] 2026-02-28：热键失败链路补齐结构化证据：`HK.hotkey_rejected`（`E_TASK_ALREADY_ACTIVE`）、`HK.task_open_failed`（`E_HOTKEY_TASK_OPEN`）、`HK.emit_failed`（`E_HK_EMIT_FAILED`）已写入 trace。
+- [VERIFIED] 2026-02-28：前端热键 fallback 错误码从模糊 `E_HOTKEY_CAPTURE` 改为 `E_HOTKEY_EVENT_INCOMPLETE`，并新增对应提示映射，避免误判为截图失败。
+- [VERIFIED] 2026-02-28：本轮改动已通过 WSL 本地构建校验：`apps/desktop/src-tauri cargo check --locked`、`apps/desktop npm run build`。
 - 结构化诊断链路已启用：`TYPEVOICE_DATA_DIR/trace.jsonl` 为主日志入口，关键路径记录稳定的 `step_id` 与 `code`。
 - 热键上下文采集已改为“`task_id` 单生命周期”路径：按热键在按下瞬间生成 `task_id` 并缓存上下文快照，开始转写时消费该上下文并在任务收尾或显式 abort 时统一清理，剔除“capture_id 60 秒有效期”分支。
 - 上下文采集与改写参数链路按设置主源，支持配置缺失即失败（fail-fast），不引入静默兜底。

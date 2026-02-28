@@ -40,6 +40,7 @@ function titleForCode(code: string, fallback: string): string {
   if (code === "E_CONTEXT_CAPTURE_REQUIRED") return "CONTEXT CAPTURE REQUIRED";
   if (code === "E_CONTEXT_CAPTURE_NOT_FOUND") return "CONTEXT CAPTURE EXPIRED";
   if (code === "E_CONTEXT_CAPTURE_INVALID") return "CONTEXT CAPTURE INVALID";
+  if (code === "E_HOTKEY_EVENT_INCOMPLETE") return "HOTKEY EVENT INCOMPLETE";
   if (code === "E_HOTKEY_TASK_OPEN") return "HOTKEY TASK OPEN FAILED";
   if (code === "E_RECORD_ALREADY_ACTIVE") return "RECORDING BUSY";
   if (code === "E_TASK_ALREADY_ACTIVE") return "TASK BUSY";
@@ -59,6 +60,7 @@ function actionHintForCode(code: string): string {
     return "CHECK ASR MODEL + CUDA RUNTIME";
   }
   if (code.startsWith("HTTP_")) return "CHECK LLM ENDPOINT / API KEY";
+  if (code === "E_HOTKEY_EVENT_INCOMPLETE") return "CHECK HOTKEY EVENT PAYLOAD IN TRACE.JSONL";
   if (code === "E_TASK_ALREADY_ACTIVE" || code === "E_RECORD_ALREADY_ACTIVE") {
     return "WAIT FOR CURRENT TASK OR RECORDING TO FINISH";
   }
@@ -93,6 +95,8 @@ export function toDiagnosticLine(diag: DiagnosticView): string {
 export function hotkeyCaptureHint(errCode?: string | null): string {
   if (!errCode) return "HOTKEY CAPTURE FAILED";
   if (errCode.includes("E_CONTEXT_SCREENSHOT_DISABLED")) return "SCREENSHOT DISABLED";
+  if (errCode.includes("E_TASK_ALREADY_ACTIVE")) return "TASK BUSY";
+  if (errCode.includes("E_HOTKEY_EVENT_INCOMPLETE")) return "HOTKEY EVENT INCOMPLETE";
   if (errCode.includes("E_HOTKEY_TASK_OPEN")) return "HOTKEY TASK OPEN FAILED";
   if (errCode.includes("E_HOTKEY_CAPTURE")) return "WINDOW CAPTURE FAILED";
   return "HOTKEY CAPTURE FAILED";

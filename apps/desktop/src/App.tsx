@@ -24,7 +24,25 @@ export default function App() {
   const pushToast = useCallback((message: string, tone: ToastTone = "default") => {
     const id = uid();
     setToasts((prev) => [{ id, message, tone }, ...prev].slice(0, 3));
-  }, []);
+    if (tone === "danger") {
+      void defaultTauriGateway
+        .invoke("ui_log_event", {
+          req: {
+            kind: "toast",
+            code: "E_UI_TOAST_DANGER",
+            message,
+            tone,
+            tab,
+            screen: tab,
+            tsMs: Date.now(),
+            extra: { toastId: id },
+          },
+        })
+        .catch(() => {
+          // ignore ui logging failure
+        });
+    }
+  }, [tab]);
 
   const dismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));

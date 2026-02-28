@@ -194,20 +194,66 @@ impl HotkeyManager {
             let ctx_cfg = crate::context_capture::config_from_settings(s);
             let data_dir_buf = data_dir.to_path_buf();
             if let Err(e) = gs.on_shortcut(ptt.as_str(), move |app, shortcut, event| {
+                let shortcut_value = shortcut.into_string();
                 let (task_id, capture_status, capture_error_code, capture_error_message) =
                     if event.state == ShortcutState::Pressed {
                         let tm = app.state::<crate::task_manager::TaskManager>();
                         if tm.has_active_task() {
-                            (None, None, None, None)
+                            let active_task_id = tm.active_task_id_best_effort();
+                            let reason = match active_task_id.as_deref() {
+                                Some(id) => {
+                                    format!("E_TASK_ALREADY_ACTIVE: task is already active ({id})")
+                                }
+                                None => "E_TASK_ALREADY_ACTIVE: task is already active".to_string(),
+                            };
+                            crate::obs::event_err(
+                                &data_dir_buf,
+                                None,
+                                "Hotkeys",
+                                "HK.hotkey_rejected",
+                                "logic",
+                                "E_TASK_ALREADY_ACTIVE",
+                                &reason,
+                                Some(serde_json::json!({
+                                    "kind": "ptt",
+                                    "state": "Pressed",
+                                    "shortcut": shortcut_value.clone(),
+                                    "capture_required": capture_required,
+                                    "active_task_id": active_task_id,
+                                })),
+                            );
+                            (
+                                None,
+                                Some("err".to_string()),
+                                Some("E_TASK_ALREADY_ACTIVE".to_string()),
+                                Some(reason),
+                            )
                         } else {
                             match tm.open_hotkey_task(&data_dir_buf, &ctx_cfg, capture_required) {
                                 Ok(id) => (Some(id), Some("ok".to_string()), None, None),
-                                Err(e) => (
-                                    None,
-                                    Some("err".to_string()),
-                                    Some("E_HOTKEY_TASK_OPEN".to_string()),
-                                    Some(e.to_string()),
-                                ),
+                                Err(e) => {
+                                    crate::obs::event_err_anyhow(
+                                        &data_dir_buf,
+                                        None,
+                                        "Hotkeys",
+                                        "HK.task_open_failed",
+                                        "logic",
+                                        "E_HOTKEY_TASK_OPEN",
+                                        &e,
+                                        Some(serde_json::json!({
+                                            "kind": "ptt",
+                                            "state": "Pressed",
+                                            "shortcut": shortcut_value.clone(),
+                                            "capture_required": capture_required,
+                                        })),
+                                    );
+                                    (
+                                        None,
+                                        Some("err".to_string()),
+                                        Some("E_HOTKEY_TASK_OPEN".to_string()),
+                                        Some(e.to_string()),
+                                    )
+                                }
                             }
                         }
                     } else {
@@ -219,14 +265,32 @@ impl HotkeyManager {
                         ShortcutState::Pressed => "Pressed".to_string(),
                         ShortcutState::Released => "Released".to_string(),
                     },
-                    shortcut: shortcut.into_string(),
+                    shortcut: shortcut_value.clone(),
                     ts_ms: now_ms(),
                     task_id,
                     capture_status,
                     capture_error_code,
                     capture_error_message,
                 };
-                let _ = app.emit("tv_hotkey_record", payload);
+                if let Err(err) = app.emit("tv_hotkey_record", payload.clone()) {
+                    crate::obs::event_err(
+                        &data_dir_buf,
+                        None,
+                        "Hotkeys",
+                        "HK.emit_failed",
+                        "unknown",
+                        "E_HK_EMIT_FAILED",
+                        &err.to_string(),
+                        Some(serde_json::json!({
+                            "event_name": "tv_hotkey_record",
+                            "kind": payload.kind,
+                            "state": payload.state,
+                            "shortcut": payload.shortcut,
+                            "capture_status": payload.capture_status,
+                            "capture_error_code": payload.capture_error_code,
+                        })),
+                    );
+                }
             }) {
                 crate::obs::event(
                     data_dir,
@@ -247,35 +311,99 @@ impl HotkeyManager {
             let ctx_cfg = crate::context_capture::config_from_settings(s);
             let data_dir_buf = data_dir.to_path_buf();
             if let Err(e) = gs.on_shortcut(toggle.as_str(), move |app, shortcut, event| {
+                let shortcut_value = shortcut.into_string();
                 if event.state != ShortcutState::Pressed {
                     return;
                 }
                 let tm = app.state::<crate::task_manager::TaskManager>();
                 let (task_id, capture_status, capture_error_code, capture_error_message) =
                     if tm.has_active_task() {
-                        (None, None, None, None)
+                        let active_task_id = tm.active_task_id_best_effort();
+                        let reason = match active_task_id.as_deref() {
+                            Some(id) => {
+                                format!("E_TASK_ALREADY_ACTIVE: task is already active ({id})")
+                            }
+                            None => "E_TASK_ALREADY_ACTIVE: task is already active".to_string(),
+                        };
+                        crate::obs::event_err(
+                            &data_dir_buf,
+                            None,
+                            "Hotkeys",
+                            "HK.hotkey_rejected",
+                            "logic",
+                            "E_TASK_ALREADY_ACTIVE",
+                            &reason,
+                            Some(serde_json::json!({
+                                "kind": "toggle",
+                                "state": "Pressed",
+                                "shortcut": shortcut_value.clone(),
+                                "capture_required": capture_required,
+                                "active_task_id": active_task_id,
+                            })),
+                        );
+                        (
+                            None,
+                            Some("err".to_string()),
+                            Some("E_TASK_ALREADY_ACTIVE".to_string()),
+                            Some(reason),
+                        )
                     } else {
                         match tm.open_hotkey_task(&data_dir_buf, &ctx_cfg, capture_required) {
                             Ok(id) => (Some(id), Some("ok".to_string()), None, None),
-                            Err(e) => (
-                                None,
-                                Some("err".to_string()),
-                                Some("E_HOTKEY_TASK_OPEN".to_string()),
-                                Some(e.to_string()),
-                            ),
+                            Err(e) => {
+                                crate::obs::event_err_anyhow(
+                                    &data_dir_buf,
+                                    None,
+                                    "Hotkeys",
+                                    "HK.task_open_failed",
+                                    "logic",
+                                    "E_HOTKEY_TASK_OPEN",
+                                    &e,
+                                    Some(serde_json::json!({
+                                        "kind": "toggle",
+                                        "state": "Pressed",
+                                        "shortcut": shortcut_value.clone(),
+                                        "capture_required": capture_required,
+                                    })),
+                                );
+                                (
+                                    None,
+                                    Some("err".to_string()),
+                                    Some("E_HOTKEY_TASK_OPEN".to_string()),
+                                    Some(e.to_string()),
+                                )
+                            }
                         }
                     };
                 let payload = HotkeyRecordEvent {
                     kind: "toggle".to_string(),
                     state: "Pressed".to_string(),
-                    shortcut: shortcut.into_string(),
+                    shortcut: shortcut_value.clone(),
                     ts_ms: now_ms(),
                     task_id,
                     capture_status,
                     capture_error_code,
                     capture_error_message,
                 };
-                let _ = app.emit("tv_hotkey_record", payload);
+                if let Err(err) = app.emit("tv_hotkey_record", payload.clone()) {
+                    crate::obs::event_err(
+                        &data_dir_buf,
+                        None,
+                        "Hotkeys",
+                        "HK.emit_failed",
+                        "unknown",
+                        "E_HK_EMIT_FAILED",
+                        &err.to_string(),
+                        Some(serde_json::json!({
+                            "event_name": "tv_hotkey_record",
+                            "kind": payload.kind,
+                            "state": payload.state,
+                            "shortcut": payload.shortcut,
+                            "capture_status": payload.capture_status,
+                            "capture_error_code": payload.capture_error_code,
+                        })),
+                    );
+                }
             }) {
                 crate::obs::event(
                     data_dir,

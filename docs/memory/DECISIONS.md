@@ -9,6 +9,18 @@
 - 依据：Windows release 缺少稳定控制台，错误链路必须包含 `step_id`、`code`、`error_chain`、`backtrace`。
 - 执行：以 `apps/desktop/src-tauri/src/obs/trace.rs` 与 `apps/desktop/src-tauri/src/obs/writer.rs` 为主入口，错误由结构化日志完成归因。
 
+## 前端错误统一落盘
+
+- 决策：前端可见错误必须以结构化事件回传后端并落盘到 `trace.jsonl`，不能只依赖 UI 文案或 overlay 状态。
+- 依据：仅有 `CMD.overlay_set_state(status=ERROR)` 无法还原真实失败原因，且前端 fallback 文案会造成误导。
+- 执行：新增 `ui_log_event` 命令，统一记录 `UI.toast` / `UI.diagnostic` / `UI.invoke_error` 事件，并要求包含稳定 `error.code` 与上下文字段。
+
+## 热键失败码显式化
+
+- 决策：热键失败场景必须输出准确错误码，禁止把“任务占用/事件不完整”误记为 `E_HOTKEY_CAPTURE`。
+- 依据：`E_HOTKEY_CAPTURE` 应仅表达窗口捕获失败；混用会直接误导排障方向。
+- 执行：后端在热键占用分支输出 `E_TASK_ALREADY_ACTIVE`，前端缺字段 fallback 改为 `E_HOTKEY_EVENT_INCOMPLETE`，并在 `Hotkeys` stage 记录拒绝/打开失败/事件发射失败三类结构化错误事件。
+
 ## Windows-only 改动的最小验证门
 
 - 决策：触及 `windows` 分支、窗口截图、热键路径的提交，必须在目标 Windows 环境执行一次验证命令链路。

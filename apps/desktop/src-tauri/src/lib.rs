@@ -152,6 +152,164 @@ struct ExportTextResult {
     error_message: Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UiLogEventRequest {
+    kind: String,
+    code: Option<String>,
+    title: Option<String>,
+    message: Option<String>,
+    detail: Option<String>,
+    action_hint: Option<String>,
+    tone: Option<String>,
+    tab: Option<String>,
+    screen: Option<String>,
+    command: Option<String>,
+    trigger_source: Option<String>,
+    task_id: Option<String>,
+    ts_ms: Option<i64>,
+    extra: Option<serde_json::Value>,
+}
+
+fn sanitize_ui_text(raw: Option<String>, max_chars: usize) -> Option<String> {
+    let input = raw?;
+    let compact = input.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.is_empty() {
+        return None;
+    }
+    let redacted = crate::obs::trace::redact_user_paths(&compact).replace('\0', "");
+    let mut out = String::with_capacity(std::cmp::min(redacted.len(), max_chars));
+    for (idx, ch) in redacted.chars().enumerate() {
+        if idx >= max_chars {
+            break;
+        }
+        out.push(ch);
+    }
+    if out.is_empty() { None } else { Some(out) }
+}
+
+fn parse_ui_error_code(raw: &str) -> Option<String> {
+    for token in raw.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
+        if token.starts_with("E_") && token.len() > 2 {
+            return Some(token.to_string());
+        }
+        if token.starts_with("HTTP_")
+            && token.len() > 5
+            && token[5..].chars().all(|c| c.is_ascii_digit())
+        {
+            return Some(token.to_string());
+        }
+    }
+    None
+}
+
+#[tauri::command]
+fn ui_log_event(req: UiLogEventRequest) -> Result<(), String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+
+    let UiLogEventRequest {
+        kind,
+        code,
+        title,
+        message,
+        detail,
+        action_hint,
+        tone,
+        tab,
+        screen,
+        command,
+        trigger_source,
+        task_id,
+        ts_ms,
+        extra,
+    } = req;
+
+    let norm_kind = sanitize_ui_text(Some(kind.clone()), 40).unwrap_or_else(|| "event".to_string());
+    let step_id = match norm_kind.as_str() {
+        "toast" => "UI.toast",
+        "diagnostic" => "UI.diagnostic",
+        "invoke_error" => "UI.invoke_error",
+        _ => "UI.event",
+    };
+    let fallback_code = match step_id {
+        "UI.toast" => "E_UI_TOAST",
+        "UI.diagnostic" => "E_UI_DIAGNOSTIC",
+        "UI.invoke_error" => "E_UI_INVOKE",
+        _ => "E_UI_EVENT",
+    };
+
+    let norm_message = sanitize_ui_text(message, 240);
+    let norm_detail = sanitize_ui_text(detail, 320);
+    let norm_title = sanitize_ui_text(title, 80);
+    let norm_action_hint = sanitize_ui_text(action_hint, 160);
+    let norm_tone = sanitize_ui_text(tone, 24);
+    let norm_tab = sanitize_ui_text(tab, 24);
+    let norm_screen = sanitize_ui_text(screen, 48);
+    let norm_command = sanitize_ui_text(command, 80);
+    let norm_trigger_source = sanitize_ui_text(trigger_source, 32);
+    let mut norm_code = sanitize_ui_text(code, 64);
+    if norm_code.is_none() {
+        if let Some(ref message_text) = norm_message {
+            norm_code = parse_ui_error_code(message_text);
+        }
+    }
+    if norm_code.is_none() {
+        if let Some(ref detail_text) = norm_detail {
+            norm_code = parse_ui_error_code(detail_text);
+        }
+    }
+    let final_code = norm_code.unwrap_or_else(|| fallback_code.to_string());
+    let final_message = norm_message
+        .or_else(|| norm_detail.clone())
+        .or_else(|| norm_title.clone())
+        .unwrap_or_else(|| "ui event".to_string());
+
+    let mut ctx = serde_json::Map::new();
+    ctx.insert("kind".to_string(), serde_json::json!(norm_kind));
+    if let Some(v) = norm_title {
+        ctx.insert("title".to_string(), serde_json::json!(v));
+    }
+    if let Some(v) = norm_detail {
+        ctx.insert("detail".to_string(), serde_json::json!(v));
+    }
+    if let Some(v) = norm_action_hint {
+        ctx.insert("action_hint".to_string(), serde_json::json!(v));
+    }
+    if let Some(v) = norm_tone {
+        ctx.insert("tone".to_string(), serde_json::json!(v));
+    }
+    if let Some(v) = norm_tab {
+        ctx.insert("tab".to_string(), serde_json::json!(v));
+    }
+    if let Some(v) = norm_screen {
+        ctx.insert("screen".to_string(), serde_json::json!(v));
+    }
+    if let Some(v) = norm_command {
+        ctx.insert("command".to_string(), serde_json::json!(v));
+    }
+    if let Some(v) = norm_trigger_source {
+        ctx.insert("trigger_source".to_string(), serde_json::json!(v));
+    }
+    if let Some(v) = ts_ms {
+        ctx.insert("ui_ts_ms".to_string(), serde_json::json!(v));
+    }
+    if let Some(v) = extra {
+        ctx.insert("extra".to_string(), v);
+    }
+
+    crate::obs::event_err(
+        &dir,
+        task_id.as_deref(),
+        "UI",
+        step_id,
+        "ui",
+        &final_code,
+        &final_message,
+        Some(serde_json::Value::Object(ctx)),
+    );
+    Ok(())
+}
+
 #[tauri::command]
 fn overlay_set_state(app: tauri::AppHandle, state: OverlayState) -> Result<(), String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
@@ -1745,6 +1903,7 @@ pub fn run() {
             runtime_toolchain_status,
             runtime_python_status,
             overlay_set_state,
+            ui_log_event,
             asr_model_status,
             download_asr_model
         ])

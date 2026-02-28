@@ -172,6 +172,66 @@ pub fn event(
     );
 }
 
+pub fn event_err(
+    data_dir: &Path,
+    task_id: Option<&str>,
+    stage: &str,
+    step_id: &str,
+    kind: &str,
+    code: &str,
+    message: &str,
+    ctx: Option<Value>,
+) {
+    emit_event(
+        data_dir,
+        &TraceEvent {
+            ts_ms: now_ms(),
+            task_id: task_id.map(|s| s.to_string()),
+            stage: stage.to_string(),
+            step_id: step_id.to_string(),
+            op: "event".to_string(),
+            status: "err".to_string(),
+            duration_ms: None,
+            error: Some(TraceError {
+                kind: kind.to_string(),
+                code: code.to_string(),
+                message: message.to_string(),
+            }),
+            ctx: ctx_with_backtrace(ctx),
+        },
+    );
+}
+
+pub fn event_err_anyhow(
+    data_dir: &Path,
+    task_id: Option<&str>,
+    stage: &str,
+    step_id: &str,
+    kind: &str,
+    code: &str,
+    err: &AnyhowError,
+    ctx: Option<Value>,
+) {
+    emit_event(
+        data_dir,
+        &TraceEvent {
+            ts_ms: now_ms(),
+            task_id: task_id.map(|s| s.to_string()),
+            stage: stage.to_string(),
+            step_id: step_id.to_string(),
+            op: "event".to_string(),
+            status: "err".to_string(),
+            duration_ms: None,
+            error: Some(TraceError {
+                kind: kind.to_string(),
+                code: code.to_string(),
+                message: err.to_string(),
+            }),
+            ctx: Some(ctx_for_anyhow_error(err, ctx)),
+        },
+    );
+}
+
 pub struct Span {
     data_dir: PathBuf,
     task_id: Option<String>,

@@ -12,6 +12,7 @@ import {
   buildTaskEventDiagnostic,
   compactDetail,
   hotkeyCaptureHint,
+  type DiagnosticView,
   toDiagnosticLine,
 } from "../domain/diagnostic";
 import type {
@@ -138,6 +139,28 @@ export function MainScreen({
     }
   }
 
+  async function logUiEventBestEffort(req: Record<string, unknown>) {
+    try {
+      await gateway.invoke("ui_log_event", { req });
+    } catch {
+      // ignore
+    }
+  }
+
+  function logDiagnosticBestEffort(diag: DiagnosticView, extra?: Record<string, unknown>) {
+    void logUiEventBestEffort({
+      kind: "diagnostic",
+      code: diag.code,
+      title: diag.title,
+      detail: diag.detail,
+      actionHint: diag.actionHint,
+      screen: "main",
+      tab: "main",
+      tsMs: Date.now(),
+      extra: extra || null,
+    });
+  }
+
   useEffect(() => {
     if (!hasHotkeyConfig) {
       pushToast("SETTINGS INVALID: HOTKEY FLAGS MISSING", "danger");
@@ -237,6 +260,7 @@ export function MainScreen({
           }
         } catch (err) {
           const diag = buildDiagnostic(err, "EXPORT FAILED");
+          logDiagnosticBestEffort(diag, { source: "task_done_export" });
           pushToastRef.current(diag.title, "danger");
           setDiagnosticLine(toDiagnosticLine(diag));
           if (fromHotkey) {
@@ -259,6 +283,12 @@ export function MainScreen({
           activeTaskIdRef.current = "";
           setUi("idle");
           const diag = buildTaskEventDiagnostic(ev, "TRANSCRIBE FAILED");
+          logDiagnosticBestEffort(diag, {
+            source: "task_event",
+            taskStage: ev.stage,
+            taskStatus: ev.status,
+            taskId: ev.task_id,
+          });
           pushToastRef.current(diag.title, "danger");
           setDiagnosticLine(toDiagnosticLine(diag));
           if (hotkeySessionRef.current) {
@@ -268,6 +298,12 @@ export function MainScreen({
         }
         if (ev.status === "failed" && ev.stage === "Rewrite") {
           const diag = buildTaskEventDiagnostic(ev, "REWRITE FAILED");
+          logDiagnosticBestEffort(diag, {
+            source: "task_event",
+            taskStage: ev.stage,
+            taskStatus: ev.status,
+            taskId: ev.task_id,
+          });
           pushToastRef.current(diag.title, "danger");
           setDiagnosticLine(toDiagnosticLine(diag));
         }
@@ -296,12 +332,31 @@ export function MainScreen({
         if (hk.kind === "ptt") {
           if (hk.state === "Pressed" && cur === "idle") {
             if (hk.capture_status !== "ok" || !hk.task_id) {
-              const hint = hotkeyCaptureHint(hk.capture_error_code);
+              const captureCode = hk.capture_error_code || "E_HOTKEY_EVENT_INCOMPLETE";
+              const hint = hotkeyCaptureHint(captureCode);
               const detail = compactDetail(
-                [hk.capture_error_code || "E_HOTKEY_CAPTURE", hk.capture_error_message || hint]
+                [captureCode, hk.capture_error_message || hint]
                   .filter(Boolean)
                   .join(": "),
               );
+              void logUiEventBestEffort({
+                kind: "diagnostic",
+                code: captureCode,
+                title: hint,
+                detail,
+                actionHint: "CHECK TRACE.JSONL WITH THIS ERROR CODE",
+                screen: "main",
+                tab: "main",
+                triggerSource: "hotkey",
+                tsMs: Date.now(),
+                extra: {
+                  hotkeyKind: hk.kind,
+                  hotkeyState: hk.state,
+                  captureStatus: hk.capture_status || null,
+                  hasTaskId: !!hk.task_id,
+                  shortcut: hk.shortcut,
+                },
+              });
               setDiagnosticLine(detail);
               pushToastRef.current(hint, "danger");
               void overlaySet(true, "ERROR", hint);
@@ -322,12 +377,31 @@ export function MainScreen({
         if (hk.state !== "Pressed") return;
         if (cur === "idle") {
           if (hk.capture_status !== "ok" || !hk.task_id) {
-            const hint = hotkeyCaptureHint(hk.capture_error_code);
+            const captureCode = hk.capture_error_code || "E_HOTKEY_EVENT_INCOMPLETE";
+            const hint = hotkeyCaptureHint(captureCode);
             const detail = compactDetail(
-              [hk.capture_error_code || "E_HOTKEY_CAPTURE", hk.capture_error_message || hint]
+              [captureCode, hk.capture_error_message || hint]
                 .filter(Boolean)
                 .join(": "),
             );
+            void logUiEventBestEffort({
+              kind: "diagnostic",
+              code: captureCode,
+              title: hint,
+              detail,
+              actionHint: "CHECK TRACE.JSONL WITH THIS ERROR CODE",
+              screen: "main",
+              tab: "main",
+              triggerSource: "hotkey",
+              tsMs: Date.now(),
+              extra: {
+                hotkeyKind: hk.kind,
+                hotkeyState: hk.state,
+                captureStatus: hk.capture_status || null,
+                hasTaskId: !!hk.task_id,
+                shortcut: hk.shortcut,
+              },
+            });
             setDiagnosticLine(detail);
             pushToastRef.current(hint, "danger");
             void overlaySet(true, "ERROR", hint);
@@ -379,6 +453,7 @@ export function MainScreen({
       void abortPendingTaskBestEffort(staleTaskId);
       setUi("idle");
       const diag = buildDiagnostic(err, "RECORDING FAILED");
+      logDiagnosticBestEffort(diag, { source: "start_backend_recording" });
       pushToastRef.current(diag.title, "danger");
       setDiagnosticLine(toDiagnosticLine(diag));
       pendingTaskIdRef.current = null;
@@ -407,6 +482,7 @@ export function MainScreen({
       setUi("idle");
       pendingTaskIdRef.current = null;
       const diag = buildDiagnostic(err, "RECORDING FAILED");
+      logDiagnosticBestEffort(diag, { source: "stop_backend_recording" });
       pushToastRef.current(diag.title, "danger");
       setDiagnosticLine(toDiagnosticLine(diag));
       if (hotkeySessionRef.current) {
@@ -435,6 +511,7 @@ export function MainScreen({
       setUi("idle");
       pendingTaskIdRef.current = null;
       const diag = buildDiagnostic(err, "TRANSCRIBE FAILED");
+      logDiagnosticBestEffort(diag, { source: "start_task" });
       pushToastRef.current(diag.title, "danger");
       setDiagnosticLine(toDiagnosticLine(diag));
       if (hotkeySessionRef.current) {
@@ -456,6 +533,7 @@ export function MainScreen({
     } catch (err) {
       setUi("transcribing");
       const diag = buildDiagnostic(err, "CANCEL FAILED");
+      logDiagnosticBestEffort(diag, { source: "cancel_task", taskId: id });
       pushToastRef.current(diag.title, "danger");
       setDiagnosticLine(toDiagnosticLine(diag));
       if (hotkeySessionRef.current) {
