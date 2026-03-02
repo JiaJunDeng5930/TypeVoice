@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 use tauri::{path::BaseDirectory, AppHandle, Manager};
 
 use crate::obs;
+use crate::subprocess::CommandNoConsoleExt;
 
 const MANIFEST_VERSION: &str = "7.0.2";
 
@@ -342,6 +343,7 @@ fn sha256_file(path: &Path) -> Result<String> {
 fn verify_version(bin: &Path, expected_version: &str, tool_name: &str) -> Result<()> {
     let out = Command::new(bin)
         .arg("-version")
+        .no_console()
         .output()
         .with_context(|| format!("run {} -version failed: {}", tool_name, bin.display()))?;
 

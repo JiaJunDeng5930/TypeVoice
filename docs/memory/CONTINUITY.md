@@ -33,6 +33,7 @@
 - 词汇表重写入口已完成：新增 `rewrite_glossary` 配置持久化与 rewrite content 透传，默认提示词已加入 `### GLOSSARY` 约束说明。
 - [VERIFIED] Windows 侧补齐“最新源码构建并启动”流程：新增 `scripts/windows/run-latest.ps1`，并在 `docs/windows-dev.md` / `docs/windows-gate.md` 固化一键执行路径。
 - [VERIFIED] `scripts/windows/run-latest.ps1` 启动 `npm run tauri dev` 时改为隐藏 `cmd` 窗口（`Start-Process ... -WindowStyle Hidden`），避免开发启动弹出黑色终端框，同时保留原日志重定向与进程探活逻辑。
+- [VERIFIED] 2026-03-02：Windows release 子进程窗口隐藏能力已全链路接通：新增 Rust 侧 `subprocess::CommandNoConsoleExt`，并在 ASR daemon、FFmpeg 录音/预处理、录音输入枚举/probe、toolchain 版本探测、Python 版本检查、模型下载、Windows `taskkill` 路径统一调用 `.no_console()`；`asr_runner/runner.py` 的 `ffprobe` 调用同步增加 `creationflags=subprocess.CREATE_NO_WINDOW`（仅 Windows）。
 - [VERIFIED] 已将“严格按文档执行”升级为零偏移禁制令，并同步写入 `AGENTS.md`、`docs/windows-dev.md`、`docs/windows-gate.md`、`docs/memory/USER_PREFS.md`（含禁止动作清单与失败处理唯一路径）。
 - [VERIFIED] ASR 预处理新增可配置项已接通：新增 `asr_preprocess_silence_*` 设置字段，`Settings` 与 `SettingsPatch` 持久化，并在 `SettingsScreen` 新增 `PREPROCESS` 开关/参数面板（静音裁剪开关、阈值、首尾静音时长）。
 - [VERIFIED] 预处理配置已纳入运行链路：`task_manager::StartOpts`、`StartOpts` 组装、FFmpeg 预处理阶段与日志指标（`task_perf`）均记录 `asr_preprocess_*`，用于比对配置对 ASR 时延的影响。

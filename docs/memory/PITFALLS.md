@@ -12,6 +12,7 @@
 - 在 Windows 上若 `ffmpeg` 前置可执行不存在，任务会在入口 preflight 阶段失败；应以仓库 toolchain 与清单方式补齐，而非依赖外部猜测安装。
 - 未清理旧会话重新拉起 `tauri dev` 时，热键和文件锁问题可能被放大，需先清会话再验证。
 - ASR runner 在 ready 前若返回 `ok=false/error.code`，上层若仅等待 `asr_ready` 会误报 EOF；必须优先识别结构化错误行并透传错误码。
+- Windows release 下黑框治理不能只处理一处 spawn：除 Rust 侧 `Command` 外，Python runner 内部 `ffprobe` 子进程也必须设置 `CREATE_NO_WINDOW`，否则仍会在探测时弹框。
 
 ## 3. 环境与路径
 

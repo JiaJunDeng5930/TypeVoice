@@ -7,6 +7,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::Serialize;
 
 use crate::obs;
+use crate::subprocess::CommandNoConsoleExt;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PythonStatus {
@@ -65,6 +66,7 @@ pub fn resolve_python_binary(repo_root: &Path) -> Result<PathBuf> {
 fn verify_python_version(python: &Path) -> Result<String> {
     let out = Command::new(python)
         .arg("--version")
+        .no_console()
         .output()
         .with_context(|| format!("run python --version failed: {}", python.display()))?;
     if !out.status.success() {

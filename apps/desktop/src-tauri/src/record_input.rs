@@ -2,6 +2,7 @@ use std::path::Path;
 
 use crate::audio_devices_windows::{self, AudioEndpointInfo, DefaultCaptureRole};
 use crate::settings::{self, Settings};
+use crate::subprocess::CommandNoConsoleExt;
 
 const STRATEGY_FOLLOW_DEFAULT: &str = "follow_default";
 const STRATEGY_FIXED_DEVICE: &str = "fixed_device";
@@ -245,6 +246,7 @@ fn list_dshow_audio_devices(ffmpeg: &Path) -> Result<Vec<DshowDevice>, String> {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
+        .no_console()
         .output()
         .map_err(|e| {
             format!("E_RECORD_INPUT_DISCOVERY_FAILED: enumerate dshow device failed: {e}")
@@ -275,6 +277,7 @@ fn probe_record_input_spec(ffmpeg: &Path, spec: &str) -> Result<(), String> {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
+        .no_console()
         .output()
         .map_err(|e| format!("probe spawn failed: {e}"))?;
     if output.status.success() {

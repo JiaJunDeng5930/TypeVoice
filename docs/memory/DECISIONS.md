@@ -33,6 +33,12 @@
 - 依据：路径漂移会在前期 preflight 形成确定性失败，难以与 ASR 运行时问题区分。
 - 执行：`apps/desktop/src-tauri/src/pipeline.rs` 与相关工具链入口保持单一解析顺序。
 
+## Windows 子进程控制台窗口策略
+
+- 决策：Windows release 下所有外部命令子进程统一使用 `CREATE_NO_WINDOW` 创建标志，禁止弹出控制台窗口。
+- 依据：`python.exe` / `ffmpeg.exe` / `ffprobe.exe` 等为 console 子系统可执行文件；在 GUI 主进程下直接 `spawn/output/status` 会出现黑框，并可能被用户手动关闭导致管道断开（如 ASR 写入 `os error 232`）。
+- 执行：Rust 侧通过 `subprocess::CommandNoConsoleExt` 在关键 `Command` 调用链统一 `.no_console()`；Python runner 内部 `subprocess.check_output`（ffprobe）在 Windows 分支使用 `creationflags=subprocess.CREATE_NO_WINDOW`。
+
 ## 运行时上下文采集策略
 
 - 决策：热键路径采用“按下即时采集 + `task_id` 注入”，禁止任务开始后再回补窗口截图。

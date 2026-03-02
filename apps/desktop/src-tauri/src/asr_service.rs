@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 use crate::obs::debug;
 use crate::obs::Span;
 use crate::pipeline;
+use crate::subprocess::CommandNoConsoleExt;
 
 const READY_STDERR_MAX_CHARS: usize = 1_024;
 
@@ -216,6 +217,7 @@ impl AsrService {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .no_console()
             .spawn()
         {
             Ok(c) => c,
@@ -610,6 +612,7 @@ fn kill_pid(pid: u32) -> Result<()> {
 fn kill_pid(pid: u32) -> Result<()> {
     let status = Command::new("taskkill")
         .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .no_console()
         .status()
         .context("taskkill failed")?;
     if !status.success() {

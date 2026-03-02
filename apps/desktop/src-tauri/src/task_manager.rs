@@ -16,6 +16,9 @@ use crate::obs::{metrics, schema::MetricsRecord};
 use crate::{asr_service, data_dir, history, llm, pipeline, remote_asr, settings, templates};
 use crate::{context_capture, context_pack};
 
+#[cfg(windows)]
+use crate::subprocess::CommandNoConsoleExt;
+
 pub trait AsrClient: Send + Sync {
     fn ensure_started(&self, data_dir: &Path) -> Result<()>;
     fn restart(&self, data_dir: &Path, reason: &str) -> Result<()>;
@@ -1266,6 +1269,7 @@ fn kill_pid(pid: u32) -> Result<()> {
 fn kill_pid(pid: u32) -> Result<()> {
     let status = Command::new("taskkill")
         .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .no_console()
         .status()
         .context("taskkill failed")?;
     if !status.success() {

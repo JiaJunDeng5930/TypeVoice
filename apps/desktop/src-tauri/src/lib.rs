@@ -19,6 +19,7 @@ mod record_input_cache;
 mod remote_asr;
 mod safe_print;
 mod settings;
+mod subprocess;
 mod task_manager;
 mod templates;
 mod toolchain;
@@ -29,6 +30,7 @@ use model::ModelStatus;
 use obs::Span;
 use settings::Settings;
 use settings::SettingsPatch;
+use subprocess::CommandNoConsoleExt;
 use task_manager::TaskManager;
 use tauri::Emitter;
 use tauri::Manager;
@@ -185,7 +187,11 @@ fn sanitize_ui_text(raw: Option<String>, max_chars: usize) -> Option<String> {
         }
         out.push(ch);
     }
-    if out.is_empty() { None } else { Some(out) }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 fn parse_ui_error_code(raw: &str) -> Option<String> {
@@ -826,6 +832,7 @@ fn start_backend_recording(
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        .no_console()
         .spawn()
     {
         Ok(child) => child,

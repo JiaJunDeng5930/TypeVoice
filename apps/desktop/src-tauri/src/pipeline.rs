@@ -10,6 +10,7 @@ use serde::Serialize;
 
 use crate::obs::debug;
 use crate::obs::Span;
+use crate::subprocess::CommandNoConsoleExt;
 
 const MAX_TOOL_STDERR_BYTES: usize = 4096;
 
@@ -254,6 +255,7 @@ pub fn preprocess_ffmpeg_cancellable(
         .args(args)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
+        .no_console()
         .spawn()
     {
         Ok(c) => c,

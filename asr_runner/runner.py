@@ -22,6 +22,9 @@ def _ffprobe_bin() -> str:
 def _ffprobe_duration_seconds(path: str) -> float:
     # We rely on ffprobe being available in PATH during development. For the
     # desktop app we will bundle FFmpeg and point to it explicitly.
+    kwargs: dict[str, Any] = {"text": True}
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
     out = subprocess.check_output(
         [
             _ffprobe_bin(),
@@ -33,7 +36,7 @@ def _ffprobe_duration_seconds(path: str) -> float:
             "default=noprint_wrappers=1:nokey=1",
             path,
         ],
-        text=True,
+        **kwargs,
     ).strip()
     return float(out)
 

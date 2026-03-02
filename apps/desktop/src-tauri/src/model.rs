@@ -9,6 +9,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+use crate::subprocess::CommandNoConsoleExt;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelStatus {
     pub model_dir: String,
@@ -156,6 +158,7 @@ pub fn download_model(
         .current_dir(repo_root)
         .env("TYPEVOICE_ASR_MODEL_DIR", model_dir)
         .arg("scripts/download_asr_model.py")
+        .no_console()
         .status()
         .context("failed to run download_asr_model.py")?;
     if !status.success() {
