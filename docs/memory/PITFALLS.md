@@ -22,6 +22,7 @@
 - `run-latest.ps1` 若报 `tauri-latest-run.txt is being used by another process`，说明旧会话未清理干净；先执行文档中的停止命令清理 `typevoice-desktop.exe` 与 `node.exe`，再重跑同一命令。
 - `verify_quick.py` 会在本地模型缺失时直接失败（`models/Qwen3-ASR-0.6B`）；在无模型环境中先补齐模型资产再跑 gate，避免把环境缺失误判为代码回归。
 - `verify_quick.py` 在仓库根目录缺失 `./.venv` 时会直接失败（`FAIL: .venv missing`）；在执行 gate 之前先恢复项目本地虚拟环境。
+- Windows 上若 `ssh -T git@github.com` 已能通过 1Password agent 成功认证，但 `git fetch origin` 仍报 `Permission denied (publickey)`，优先检查 Git 是否落到了 Git for Windows 自带的 `usr/bin/ssh.exe`；将 Git 的 `core.sshCommand` 指向系统 `C:/Windows/System32/OpenSSH/ssh.exe` 后再重试。
 - 用户要求“严格按文档执行”时，任何自行加步骤（哪怕是为了排障）都会被判定为偏移；必须先原样回传文档命令报错，再按文档明示步骤处理。
 - 从 WSL 路径直接执行 `scripts/windows/windows_gate.ps1` 会让脚本在 `\\wsl.localhost\...` 工作区内创建/升级 `.venv`，可能把 Linux `.venv/pyvenv.cfg` 改写为 Windows 解释器（如 `C:\\Python312`），造成环境污染。`windows_gate.ps1` 只允许在 Windows 工作区 `D:\\Projects\\TypeVoice` 执行；若已污染，先用 `/usr/bin/python3 -m venv --upgrade .venv` 原地修复。
 - Windows `npm ci`/依赖更新阶段可能因 `node_modules` 中 `esbuild`/`@tauri-apps` 二进制被占用触发 `EPERM: operation not permitted, unlink ...`；出现该错误时先排查占用进程（含杀毒扫描与残留 node/tauri 进程）再重试。

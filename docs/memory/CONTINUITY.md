@@ -12,6 +12,7 @@
 
 ### 已确认
 
+- [VERIFIED] 2026-03-06：Dependabot 配置已收敛：`npm` / `cargo` / `pip` 三个生态均新增 `open-pull-requests-limit: 1`，并分别将 `version-updates` 与 `security-updates` 按生态聚合为单个 PR；新增 `docs/repository-automation.md` 并写入 `docs/index.md`。
 - [VERIFIED] 2026-02-28：`tauri.conf.json` 已将 `csp` 从 `null` 收敛为显式策略，限制默认资源来源并约束脚本/连接来源。
 - [VERIFIED] 2026-02-28：FFmpeg 工具链下载脚本已接入上游签名链校验：先校验 FFmpeg 官方 release source 的 `sha256` 与 PGP 签名（`ffmpeg-devel.asc` 指纹固定），再下载并校验预编译二进制。
 - [VERIFIED] 2026-02-28：`verify_quick.py` / `verify_full.py` 已接入 fixtures manifest 自动拉取与 `sha256` 校验；新增 `scripts/fixtures_manifest.json` 与 `scripts/download_fixtures.py`。

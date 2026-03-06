@@ -9,6 +9,12 @@
 - 依据：Windows release 缺少稳定控制台，错误链路必须包含 `step_id`、`code`、`error_chain`、`backtrace`。
 - 执行：以 `apps/desktop/src-tauri/src/obs/trace.rs` 与 `apps/desktop/src-tauri/src/obs/writer.rs` 为主入口，错误由结构化日志完成归因。
 
+## Dependabot 限流与分组策略
+
+- 决策：仓库保留 Dependabot，但按生态聚合更新，并将版本更新 PR 数量限制到每生态同时最多 `1` 个。
+- 依据：默认配置会在一次检查中产生多个分散 PR，增加分支噪音与评审负担；本仓当前更适合“低噪音、可持续处理”的依赖更新节奏。
+- 执行：`.github/dependabot.yml` 对 `npm`、`cargo`、`pip` 统一设置 `open-pull-requests-limit: 1`，并分别为 `version-updates` / `security-updates` 配置 `groups` 聚合规则。
+
 ## 前端错误统一落盘
 
 - 决策：前端可见错误必须以结构化事件回传后端并落盘到 `trace.jsonl`，不能只依赖 UI 文案或 overlay 状态。
