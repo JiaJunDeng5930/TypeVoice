@@ -1,5 +1,17 @@
 # 仓库自动化
 
+## CI
+
+- 配置文件：`.github/workflows/ci.yml`
+- `rust` job 运行在 `ubuntu-latest`，在执行 `cargo check --locked` 之前必须先安装 Tauri Linux 构建依赖：
+  - `libglib2.0-dev`
+  - `libgtk-3-dev`
+  - `libwebkit2gtk-4.1-dev`
+  - `libayatana-appindicator3-dev`
+  - `librsvg2-dev`
+  - `patchelf`
+- 原因：Tauri 的 Linux 依赖通过 `pkg-config` 解析；若缺失这些系统包，CI 会在 `glib-sys` / `gio-sys` / `gobject-sys` 等 crate 的 build script 阶段失败，而不是进入业务代码编译。
+
 ## Dependabot
 
 - 配置文件：`.github/dependabot.yml`
@@ -26,3 +38,4 @@
 
 - 修改配置后，只影响后续 Dependabot 运行。
 - 当前已经打开的 Dependabot PR 不会因为配置变更自动关闭，仍需手动合并或关闭。
+- CI 的 Linux 原生依赖属于 runner 环境约束，新增 Rust/Tauri Linux 依赖时应先同步评估是否需要扩充该安装清单。
