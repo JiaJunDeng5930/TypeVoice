@@ -12,6 +12,7 @@
 
 ### 已确认
 
+- [VERIFIED] 2026-03-06：Windows 环境已通过 `winget install --id GitHub.cli -e --source winget` 安装 GitHub CLI，二进制位于 `C:\Program Files\GitHub CLI\gh.exe`；当前用户尚未执行 `gh auth login`，因此尚不能读取受认证保护的 code scanning alerts API。
 - [VERIFIED] 2026-03-06：GitHub `CI` 的 `rust` job 已补齐 Ubuntu/Tauri Linux 原生依赖安装步骤（`libglib2.0-dev`、`libgtk-3-dev`、`libwebkit2gtk-4.1-dev`、`libayatana-appindicator3-dev`、`librsvg2-dev`、`patchelf`），用于修复 `glib-sys` / `gio-sys` / `gobject-sys` 因缺失 `pkg-config` `.pc` 文件导致的 `cargo check --locked` 失败；`docs/repository-automation.md` 已同步记录。
 - [VERIFIED] 2026-03-06：Dependabot 配置已收敛：`npm` / `cargo` / `pip` 三个生态均新增 `open-pull-requests-limit: 1`，并分别将 `version-updates` 与 `security-updates` 按生态聚合为单个 PR；新增 `docs/repository-automation.md` 并写入 `docs/index.md`。
 - [VERIFIED] 2026-02-28：`tauri.conf.json` 已将 `csp` 从 `null` 收敛为显式策略，限制默认资源来源并约束脚本/连接来源。

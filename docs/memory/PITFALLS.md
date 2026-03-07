@@ -28,6 +28,7 @@
 - Windows `npm ci`/依赖更新阶段可能因 `node_modules` 中 `esbuild`/`@tauri-apps` 二进制被占用触发 `EPERM: operation not permitted, unlink ...`；出现该错误时先排查占用进程（含杀毒扫描与残留 node/tauri 进程）再重试。
 - FFmpeg 工具链下载脚本新增上游 PGP 验签后，若环境缺失 `gpg` 会直接失败；需先安装 `gpg`/`gpg.exe` 再执行下载与 Windows gate。
 - GitHub Ubuntu runner 上执行 Tauri/Rust Linux 编译检查前，不能只装 Rust toolchain；若缺少 `libglib2.0-dev` / `libgtk-3-dev` / `libwebkit2gtk-4.1-dev` / `libayatana-appindicator3-dev` / `librsvg2-dev` / `patchelf`，会先在 `glib-sys` / `gio-sys` / `gobject-sys` 的 `pkg-config` 探测阶段失败，表现为缺失 `glib-2.0.pc`、`gio-2.0.pc`、`gobject-2.0.pc`。
+- 在当前这台 Win11 机器上，`winget install` 若不显式指定 `--source winget`，可能先被损坏的 `msstore` 源证书拦截并报 `0x8a15005e : The server certificate did not match any of the expected values`；安装公开包时优先追加 `--source winget`。
 
 ## 4. 全局热键链路
 
