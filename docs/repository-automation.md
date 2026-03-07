@@ -10,6 +10,7 @@
   - `libayatana-appindicator3-dev`
   - `librsvg2-dev`
   - `patchelf`
+- `rust` job 还必须先在 `apps/desktop` 执行 `npm ci` 和 `npm run build`，确保 Tauri 配置中的 `build.frontendDist=../dist` 已生成；否则 `tauri::generate_context!()` 会在编译期因找不到前端产物而失败。
 - 原因：Tauri 的 Linux 依赖通过 `pkg-config` 解析；若缺失这些系统包，CI 会在 `glib-sys` / `gio-sys` / `gobject-sys` 等 crate 的 build script 阶段失败，而不是进入业务代码编译。
 
 ## Dependabot
