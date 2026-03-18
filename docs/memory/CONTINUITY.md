@@ -101,6 +101,8 @@
 - [VERIFIED] 2026-03-18：设置链路已扩展为可配置上下文模式、文本预算与 app/domain 规则；`SettingsScreen` 不再暴露 screenshot/vision 开关。
 - [VERIFIED] 2026-03-18：本轮本地回归已通过 `apps/desktop npm run build` 与 `apps/desktop/src-tauri cargo test -q`。
 - [VERIFIED] 2026-03-18：仓库根 Python 测试未执行，原因是当前工作区不存在项目级 `.venv/`；失败属于环境缺失而非代码回归。
+- [VERIFIED] 2026-03-18：已修复上下文采集两个回归：关闭 `context_include_prev_window_meta` 时不再经 `focused_app.window_title` 泄露窗口标题；`context_related_before_chars` / `context_related_after_chars` 已分离接入运行时 budget 与 related content 截断链路。
+- [VERIFIED] 2026-03-18：本轮 Rust 本地回归通过 `apps/desktop/src-tauri cargo test -q`（34 passed）；`apps/desktop npm run build` 未执行成功，原因是当前环境缺少前端依赖导致 `tsc` 不在 PATH，而非本轮代码编译错误。
 
 ### 当前工作集
 

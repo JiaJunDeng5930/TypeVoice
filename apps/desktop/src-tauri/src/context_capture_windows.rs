@@ -18,11 +18,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindow,
 };
 
+use crate::context_capture::ContextConfig;
 use crate::context_pack::{
     ContextCaptureDiag, FocusedAppInfo, FocusedElementInfo, FocusedWindowInfo, InputContext,
     RelatedContent,
 };
-use crate::context_capture::ContextConfig;
 
 #[derive(Debug, Clone)]
 pub struct WindowInfo {
@@ -214,7 +214,11 @@ impl WindowsContext {
         let mut out = ForegroundTextContext {
             focused_app: Some(FocusedAppInfo {
                 process_image: process_image.clone(),
-                window_title: title.clone(),
+                window_title: if cfg.include_prev_window_meta {
+                    title.clone()
+                } else {
+                    None
+                },
                 url: None,
                 is_browser: detect_browser(process_image.as_deref()),
                 target_source: Some(target_source.to_string()),
@@ -253,7 +257,8 @@ impl WindowsContext {
         }
 
         if cfg.include_visible_text {
-            out.visible_text = collect_visible_text(&automation, &root, cfg.budget.max_chars_visible_text);
+            out.visible_text =
+                collect_visible_text(&automation, &root, cfg.budget.max_chars_visible_text);
         }
 
         if !allow_focus_context {
@@ -267,7 +272,12 @@ impl WindowsContext {
         let Some(element) = focused else {
             return out;
         };
-        if element.get_process_id().ok().filter(|v| *v == pid).is_none() {
+        if element
+            .get_process_id()
+            .ok()
+            .filter(|v| *v == pid)
+            .is_none()
+        {
             return out;
         }
 
@@ -290,7 +300,8 @@ impl WindowsContext {
                 &automation,
                 &root,
                 &element,
-                cfg.budget.max_chars_related_side,
+                cfg.budget.max_chars_related_before,
+                cfg.budget.max_chars_related_after,
             );
         }
         out
@@ -376,7 +387,12 @@ fn stable_focused_element(automation: &UIAutomation) -> (bool, Option<UIElement>
         };
         let runtime_id = element
             .get_runtime_id()
-            .map(|v| v.into_iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","))
+            .map(|v| {
+                v.into_iter()
+                    .map(|id| id.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
             .unwrap_or_default();
         let control = element
             .get_control_type()
@@ -430,7 +446,10 @@ fn describe_element(element: &UIElement) -> FocusedElementInfo {
 fn extract_input_state(element: &UIElement, max_chars: usize) -> Option<InputContext> {
     let text_pattern = element.get_pattern::<UITextPattern>().ok()?;
     let document = text_pattern.get_document_range().ok()?;
-    let full_text = document.get_text(max_chars as i32).ok().filter(|v| !v.trim().is_empty());
+    let full_text = document
+        .get_text(max_chars as i32)
+        .ok()
+        .filter(|v| !v.trim().is_empty());
 
     let mut selection_text = None;
     let mut selection_start = None;
@@ -442,10 +461,18 @@ fn extract_input_state(element: &UIElement, max_chars: usize) -> Option<InputCon
                 .ok()
                 .filter(|v| !v.trim().is_empty());
             selection_start = document
-                .compare_endpoints(TextPatternRangeEndpoint::Start, &selection, TextPatternRangeEndpoint::Start)
+                .compare_endpoints(
+                    TextPatternRangeEndpoint::Start,
+                    &selection,
+                    TextPatternRangeEndpoint::Start,
+                )
                 .ok();
             selection_end = document
-                .compare_endpoints(TextPatternRangeEndpoint::Start, &selection, TextPatternRangeEndpoint::End)
+                .compare_endpoints(
+                    TextPatternRangeEndpoint::Start,
+                    &selection,
+                    TextPatternRangeEndpoint::End,
+                )
                 .ok();
         }
     }
@@ -464,8 +491,14 @@ fn extract_input_state(element: &UIElement, max_chars: usize) -> Option<InputCon
             TextPatternRangeEndpoint::End,
         );
         (
-            before.get_text(max_chars as i32).ok().filter(|v| !v.trim().is_empty()),
-            after.get_text(max_chars as i32).ok().filter(|v| !v.trim().is_empty()),
+            before
+                .get_text(max_chars as i32)
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            after
+                .get_text(max_chars as i32)
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
         )
     } else {
         (None, None)
@@ -485,7 +518,8 @@ fn extract_related_content(
     automation: &UIAutomation,
     _window_root: &UIElement,
     focused: &UIElement,
-    max_chars: usize,
+    max_chars_before: usize,
+    max_chars_after: usize,
 ) -> Option<RelatedContent> {
     let walker = automation.create_tree_walker().ok()?;
     let parent = walker.get_parent(focused).ok()?;
@@ -494,21 +528,27 @@ fn extract_related_content(
     let mut after = String::new();
     let mut seen_focus = false;
     for sibling in siblings {
-        let is_focus = automation.compare_elements(&sibling, focused).unwrap_or(false);
+        let is_focus = automation
+            .compare_elements(&sibling, focused)
+            .unwrap_or(false);
         if is_focus {
             seen_focus = true;
             continue;
         }
-        let text = collect_element_text(&sibling, max_chars / 2);
-        if text.is_empty() {
-            continue;
-        }
         if seen_focus {
+            let text = collect_element_text(&sibling, max_chars_after);
+            if text.is_empty() {
+                continue;
+            }
             if !after.is_empty() {
                 after.push('\n');
             }
             after.push_str(&text);
         } else {
+            let text = collect_element_text(&sibling, max_chars_before);
+            if text.is_empty() {
+                continue;
+            }
             if !before.is_empty() {
                 before.push('\n');
             }

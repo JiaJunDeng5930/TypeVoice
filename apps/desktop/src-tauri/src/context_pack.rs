@@ -84,7 +84,8 @@ pub struct ContextBudget {
     pub max_chars_per_history_item: usize,
     pub max_chars_clipboard: usize,
     pub max_chars_input: usize,
-    pub max_chars_related_side: usize,
+    pub max_chars_related_before: usize,
+    pub max_chars_related_after: usize,
     pub max_chars_visible_text: usize,
     pub max_total_context_chars: usize,
 }
@@ -97,7 +98,8 @@ impl Default for ContextBudget {
             max_chars_per_history_item: 600,
             max_chars_clipboard: 800,
             max_chars_input: 4_096,
-            max_chars_related_side: 1_200,
+            max_chars_related_before: 1_200,
+            max_chars_related_after: 1_200,
             max_chars_visible_text: 4_000,
             max_total_context_chars: 6_000,
         }
@@ -199,7 +201,13 @@ pub fn prepare(asr_text: &str, snap: &ContextSnapshot, budget: &ContextBudget) -
             body.push_str(&clamp_chars(v, 80));
             body.push('\n');
         }
-        push_section(&mut context_out, "#### FOCUSED APP", &body, &mut remaining, true);
+        push_section(
+            &mut context_out,
+            "#### FOCUSED APP",
+            &body,
+            &mut remaining,
+            true,
+        );
     }
 
     if let Some(window) = &snap.focused_window {
@@ -214,7 +222,13 @@ pub fn prepare(asr_text: &str, snap: &ContextSnapshot, budget: &ContextBudget) -
             body.push_str(&clamp_chars(v, 160));
             body.push('\n');
         }
-        push_section(&mut context_out, "#### FOCUSED WINDOW", &body, &mut remaining, true);
+        push_section(
+            &mut context_out,
+            "#### FOCUSED WINDOW",
+            &body,
+            &mut remaining,
+            true,
+        );
     }
 
     if let Some(element) = &snap.focused_element {
@@ -290,19 +304,25 @@ pub fn prepare(asr_text: &str, snap: &ContextSnapshot, budget: &ContextBudget) -
             body.push_str(&clamp_chars(v, budget.max_chars_input));
             body.push('\n');
         }
-        push_section(&mut context_out, "#### INPUT STATE", &body, &mut remaining, true);
+        push_section(
+            &mut context_out,
+            "#### INPUT STATE",
+            &body,
+            &mut remaining,
+            true,
+        );
     }
 
     if let Some(related) = &snap.related_content {
         let mut body = String::new();
         if let Some(v) = related.before_text.as_deref() {
             body.push_str("before=\n");
-            body.push_str(&clamp_chars(v, budget.max_chars_related_side));
+            body.push_str(&clamp_chars(v, budget.max_chars_related_before));
             body.push('\n');
         }
         if let Some(v) = related.after_text.as_deref() {
             body.push_str("after=\n");
-            body.push_str(&clamp_chars(v, budget.max_chars_related_side));
+            body.push_str(&clamp_chars(v, budget.max_chars_related_after));
             body.push('\n');
         }
         push_section(
@@ -356,7 +376,13 @@ pub fn prepare(asr_text: &str, snap: &ContextSnapshot, budget: &ContextBudget) -
 
     if let Some(cb) = snap.clipboard_text.as_deref() {
         let body = clamp_chars(cb, budget.max_chars_clipboard);
-        push_section(&mut context_out, "#### CLIPBOARD", &body, &mut remaining, true);
+        push_section(
+            &mut context_out,
+            "#### CLIPBOARD",
+            &body,
+            &mut remaining,
+            true,
+        );
     }
 
     if let Some(policy) = &snap.policy_decision {
@@ -505,5 +531,27 @@ mod tests {
         assert!(out.user_text.contains("RECENT HISTORY"));
         assert!(out.user_text.contains("CLIPBOARD"));
         assert!(out.user_text.contains("POLICY"));
+    }
+
+    #[test]
+    fn prepare_uses_separate_related_before_and_after_budgets() {
+        let snap = ContextSnapshot {
+            related_content: Some(RelatedContent {
+                before_text: Some("abcdef".to_string()),
+                after_text: Some("uvwxyz".to_string()),
+            }),
+            ..Default::default()
+        };
+        let budget = ContextBudget {
+            max_chars_related_before: 3,
+            max_chars_related_after: 2,
+            max_total_context_chars: 200,
+            ..ContextBudget::default()
+        };
+
+        let out = prepare("hello", &snap, &budget);
+
+        assert!(out.user_text.contains("before=\nabc"));
+        assert!(out.user_text.contains("after=\nuv"));
     }
 }

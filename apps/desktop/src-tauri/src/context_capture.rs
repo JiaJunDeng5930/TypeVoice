@@ -136,7 +136,12 @@ pub fn config_from_settings(s: &settings::Settings) -> ContextConfig {
     }
     if let Some(v) = s.context_related_before_chars {
         if v > 0 {
-            cfg.budget.max_chars_related_side = v as usize;
+            cfg.budget.max_chars_related_before = v as usize;
+        }
+    }
+    if let Some(v) = s.context_related_after_chars {
+        if v > 0 {
+            cfg.budget.max_chars_related_after = v as usize;
         }
     }
     if let Some(v) = s.context_visible_text_max_chars {
@@ -308,8 +313,12 @@ impl ContextService {
         let mut g = self.inner.lock().unwrap();
         let snapshot = self.capture_runtime_snapshot(&g.win, cfg, false);
         let capture_id = Uuid::new_v4().to_string();
-        g.hotkey_capture_registry
-            .insert(capture_id.clone(), StoredHotkeyCapture { snapshot: snapshot.clone() });
+        g.hotkey_capture_registry.insert(
+            capture_id.clone(),
+            StoredHotkeyCapture {
+                snapshot: snapshot.clone(),
+            },
+        );
 
         span.ok(Some(serde_json::json!({
             "capture_id": capture_id,
@@ -466,7 +475,8 @@ impl ContextService {
                 .and_then(|v| v.process_image.as_deref()),
         );
         if allow_last_external && matches!(self_process.as_deref(), Some("typevoice-desktop.exe")) {
-            if let Some(last_external) = win.capture_last_external_text_context_best_effort(cfg, 5_000)
+            if let Some(last_external) =
+                win.capture_last_external_text_context_best_effort(cfg, 5_000)
             {
                 captured = last_external;
             }
@@ -537,5 +547,25 @@ impl ContextService {
             });
         }
         snap
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::config_from_settings;
+    use crate::settings::Settings;
+
+    #[test]
+    fn config_from_settings_honors_separate_related_limits() {
+        let settings = Settings {
+            context_related_before_chars: Some(111),
+            context_related_after_chars: Some(37),
+            ..Default::default()
+        };
+
+        let cfg = config_from_settings(&settings);
+
+        assert_eq!(cfg.budget.max_chars_related_before, 111);
+        assert_eq!(cfg.budget.max_chars_related_after, 37);
     }
 }
