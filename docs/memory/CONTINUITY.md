@@ -104,6 +104,7 @@
 - [VERIFIED] 2026-03-18：已修复上下文采集两个回归：关闭 `context_include_prev_window_meta` 时不再经 `focused_app.window_title` 泄露窗口标题；`context_related_before_chars` / `context_related_after_chars` 已分离接入运行时 budget 与 related content 截断链路。
 - [VERIFIED] 2026-03-18：已修复上下文策略三处回归：`deny` 规则优先于 `allow`，浏览器地址栏无 scheme 时仍可匹配 domain 规则，热键预采样上下文在 rewrite 阶段会保留原始 `policy_decision/capture_diag` 而非被运行时快照覆盖。
 - [VERIFIED] 2026-03-18：本轮 Rust 本地回归通过 `apps/desktop/src-tauri cargo test -q`（34 passed）；`apps/desktop npm run build` 未执行成功，原因是当前环境缺少前端依赖导致 `tsc` 不在 PATH，而非本轮代码编译错误。
+- [VERIFIED] 2026-03-18：提交 `fix(context): honor deny rules and frozen hotkey policy` 后，`apps/desktop/src-tauri cargo test -q` 通过（40 passed），`scripts/windows/windows_gate.ps1` 的 Windows compile gate 通过，但完整 gate 仍被既有环境问题阻断：FFmpeg 签名 key 导入失败、fixtures 下载 `zh_10s.ogg` 命中 Wikimedia 403、`npm ci` 触发 `@tauri-apps/cli-win32-x64-msvc/cli.win32-x64-msvc.node` 的 `EPERM unlink` 占用错误，导致后续 `tauri` 命令不可用。
 - [VERIFIED] 2026-03-18：本轮按文档执行 `scripts/windows/windows_gate.ps1` 时，Windows compile gate 通过，但后续 gate 未完整通过：FFmpeg 上游签名 key 导入失败、fixtures 下载 `zh_10s.ogg` 遇到 Wikimedia 403、`npm ci` 命中 `@esbuild/win32-x64/esbuild.exe` 的 `EPERM unlink` 占用错误，因此未形成完整 Windows 闭环通过结论。
 
 ### 当前工作集
