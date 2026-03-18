@@ -1022,13 +1022,13 @@ impl TaskManager {
                 if let Some(tpl) = tpl {
                     let prepared = context_pack::prepare(&asr_text, &ctx_snap, &ctx_cfg.budget);
                     let rewrite_ctx_policy = llm::RewriteContextPolicy {
-                        include_history: ctx_cfg.include_history,
-                        include_clipboard: ctx_cfg.include_clipboard,
-                        include_focused_app_meta: ctx_cfg.include_focused_app_meta,
-                        include_focused_element_meta: ctx_cfg.include_focused_element_meta,
-                        include_input_state: ctx_cfg.include_input_state,
-                        include_related_content: ctx_cfg.include_related_content,
-                        include_visible_text: ctx_cfg.include_visible_text,
+                        include_history: !ctx_snap.recent_history.is_empty(),
+                        include_clipboard: ctx_snap.clipboard_text.is_some(),
+                        include_focused_app_meta: ctx_snap.focused_app.is_some(),
+                        include_focused_element_meta: ctx_snap.focused_element.is_some(),
+                        include_input_state: ctx_snap.input_state.is_some(),
+                        include_related_content: ctx_snap.related_content.is_some(),
+                        include_visible_text: ctx_snap.visible_text.is_some(),
                         include_glossary: opts.rewrite_include_glossary,
                     };
                     let rewrite_glossary: &[String] = if opts.rewrite_include_glossary {
@@ -1429,6 +1429,7 @@ mod tests {
                 capture_mode: "balanced".to_string(),
                 app_rule: Some("allow".to_string()),
                 domain_rule: None,
+                allow_input_state: true,
                 allow_related_content: true,
                 allow_visible_text: true,
             }),
@@ -1451,6 +1452,7 @@ mod tests {
                 capture_mode: "minimal".to_string(),
                 app_rule: None,
                 domain_rule: Some("deny".to_string()),
+                allow_input_state: false,
                 allow_related_content: false,
                 allow_visible_text: false,
             }),

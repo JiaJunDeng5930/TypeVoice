@@ -52,6 +52,7 @@ pub struct ContextPolicyDecision {
     pub capture_mode: String,
     pub app_rule: Option<String>,
     pub domain_rule: Option<String>,
+    pub allow_input_state: bool,
     pub allow_related_content: bool,
     pub allow_visible_text: bool,
 }
@@ -400,6 +401,13 @@ pub fn prepare(asr_text: &str, snap: &ContextSnapshot, budget: &ContextBudget) -
             body.push_str(&clamp_chars(v, 64));
             body.push('\n');
         }
+        body.push_str("allow_input_state=");
+        body.push_str(if policy.allow_input_state {
+            "true"
+        } else {
+            "false"
+        });
+        body.push('\n');
         body.push_str("allow_related_content=");
         body.push_str(if policy.allow_related_content {
             "true"
@@ -509,6 +517,7 @@ mod tests {
                 capture_mode: "balanced".to_string(),
                 app_rule: Some("allow".to_string()),
                 domain_rule: None,
+                allow_input_state: true,
                 allow_related_content: true,
                 allow_visible_text: true,
             }),

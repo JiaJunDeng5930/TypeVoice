@@ -404,6 +404,13 @@ fn start_opts_from_settings(data_dir: &std::path::Path) -> Result<task_manager::
     })
 }
 
+fn recording_context_config_from_settings(
+    data_dir: &std::path::Path,
+) -> Result<context_capture::ContextConfig, String> {
+    let s = settings::load_settings_strict(data_dir).map_err(|e| e.to_string())?;
+    Ok(context_capture::config_from_settings(&s))
+}
+
 fn abort_pending_task_if_present(state: &tauri::State<'_, TaskManager>, task_id: &Option<String>) {
     if let Some(id) = task_id.as_deref() {
         state.abort_pending_task(id);
@@ -816,11 +823,8 @@ fn start_backend_recording(
     let resolved_input = cached_input.resolved.clone();
     let input_spec = resolved_input.spec.clone();
     let ffmpeg = pipeline::ffmpeg_cmd().map_err(|e| e.to_string())?;
-    let pre_captured_context = match start_opts_from_settings(&dir) {
-        Ok(opts) if opts.rewrite_enabled && opts.template_id.is_some() => {
-            Some(state.capture_recording_context_best_effort(&dir, &opts.context_cfg))
-        }
-        Ok(_) => None,
+    let pre_captured_context = match recording_context_config_from_settings(&dir) {
+        Ok(cfg) => Some(state.capture_recording_context_best_effort(&dir, &cfg)),
         Err(e) => {
             span.err("config", "E_SETTINGS_INVALID", &e, None);
             return Err(e);
@@ -1949,8 +1953,11 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_recorded_asset_to_start_opts, RecordedAsset};
+    use super::{
+        apply_recorded_asset_to_start_opts, recording_context_config_from_settings, RecordedAsset,
+    };
     use crate::context_pack::{ContextSnapshot, FocusedAppInfo};
+    use crate::settings;
     use crate::task_manager::StartOpts;
 
     #[test]
@@ -1998,5 +2005,23 @@ mod tests {
                 .and_then(|app| app.process_image.as_deref()),
             Some("notepad.exe")
         );
+    }
+
+    #[test]
+    fn recording_context_config_loads_without_rewrite_enabled() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let settings = settings::Settings {
+            rewrite_enabled: Some(false),
+            rewrite_template_id: None,
+            context_capture_mode: Some("full".to_string()),
+            context_include_visible_text: Some(true),
+            ..Default::default()
+        };
+        settings::save_settings(td.path(), &settings).expect("save settings");
+
+        let cfg = recording_context_config_from_settings(td.path()).expect("context cfg");
+
+        assert_eq!(cfg.rules.capture_mode, "full");
+        assert!(cfg.include_visible_text);
     }
 }

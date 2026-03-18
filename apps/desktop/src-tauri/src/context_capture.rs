@@ -162,6 +162,7 @@ pub fn config_from_settings(s: &settings::Settings) -> ContextConfig {
 struct PolicyResolution {
     app_rule: Option<String>,
     domain_rule: Option<String>,
+    allow_input_state: bool,
     allow_related_content: bool,
     allow_visible_text: bool,
 }
@@ -231,24 +232,45 @@ fn resolve_policy(
         None
     };
 
-    let default_allow = cfg.rules.capture_mode != "minimal";
-    let allow_related_content = if matches!(app_rule.as_deref(), Some("deny"))
-        || matches!(domain_rule.as_deref(), Some("deny"))
-    {
+    let denied = matches!(app_rule.as_deref(), Some("deny"))
+        || matches!(domain_rule.as_deref(), Some("deny"));
+    let allowed = matches!(app_rule.as_deref(), Some("allow"))
+        || matches!(domain_rule.as_deref(), Some("allow"));
+    let (default_allow_input_state, default_allow_related_content, default_allow_visible_text) =
+        match cfg.rules.capture_mode.as_str() {
+            "minimal" => (false, false, false),
+            "full" => (true, true, true),
+            _ => (true, true, false),
+        };
+
+    let allow_input_state = if denied {
         false
-    } else if matches!(app_rule.as_deref(), Some("allow"))
-        || matches!(domain_rule.as_deref(), Some("allow"))
-    {
+    } else if allowed {
         true
     } else {
-        default_allow
+        default_allow_input_state
+    };
+    let allow_related_content = if denied {
+        false
+    } else if allowed {
+        true
+    } else {
+        default_allow_related_content
+    };
+    let allow_visible_text = if denied {
+        false
+    } else if allowed {
+        true
+    } else {
+        default_allow_visible_text
     };
 
     PolicyResolution {
         app_rule,
         domain_rule,
+        allow_input_state,
         allow_related_content,
-        allow_visible_text: allow_related_content,
+        allow_visible_text,
     }
 }
 
@@ -592,7 +614,7 @@ impl ContextService {
             } else {
                 None
             },
-            input_state: if cfg.include_input_state {
+            input_state: if cfg.include_input_state && policy.allow_input_state {
                 captured.input_state
             } else {
                 None
@@ -611,6 +633,7 @@ impl ContextService {
                 capture_mode: cfg.rules.capture_mode.clone(),
                 app_rule: policy.app_rule.clone(),
                 domain_rule: policy.domain_rule.clone(),
+                allow_input_state: policy.allow_input_state,
                 allow_related_content: policy.allow_related_content,
                 allow_visible_text: policy.allow_visible_text,
             }),
@@ -680,6 +703,7 @@ mod tests {
 
         assert_eq!(policy.app_rule.as_deref(), Some("allow"));
         assert_eq!(policy.domain_rule.as_deref(), Some("deny"));
+        assert!(!policy.allow_input_state);
         assert!(!policy.allow_related_content);
         assert!(!policy.allow_visible_text);
     }
@@ -700,8 +724,33 @@ mod tests {
 
         assert_eq!(policy.app_rule.as_deref(), Some("deny"));
         assert_eq!(policy.domain_rule.as_deref(), Some("deny"));
+        assert!(!policy.allow_input_state);
         assert!(!policy.allow_related_content);
         assert!(!policy.allow_visible_text);
+    }
+
+    #[test]
+    fn resolve_policy_distinguishes_minimal_balanced_and_full() {
+        let mut minimal = ContextConfig::default();
+        minimal.rules.capture_mode = "minimal".to_string();
+        let minimal_policy = resolve_policy(&minimal, Some("notepad.exe"), None);
+        assert!(!minimal_policy.allow_input_state);
+        assert!(!minimal_policy.allow_related_content);
+        assert!(!minimal_policy.allow_visible_text);
+
+        let mut balanced = ContextConfig::default();
+        balanced.rules.capture_mode = "balanced".to_string();
+        let balanced_policy = resolve_policy(&balanced, Some("notepad.exe"), None);
+        assert!(balanced_policy.allow_input_state);
+        assert!(balanced_policy.allow_related_content);
+        assert!(!balanced_policy.allow_visible_text);
+
+        let mut full = ContextConfig::default();
+        full.rules.capture_mode = "full".to_string();
+        let full_policy = resolve_policy(&full, Some("notepad.exe"), None);
+        assert!(full_policy.allow_input_state);
+        assert!(full_policy.allow_related_content);
+        assert!(full_policy.allow_visible_text);
     }
 
     #[test]
@@ -727,6 +776,7 @@ mod tests {
                 capture_mode: "balanced".to_string(),
                 app_rule: None,
                 domain_rule: None,
+                allow_input_state: true,
                 allow_related_content: true,
                 allow_visible_text: true,
             }),
