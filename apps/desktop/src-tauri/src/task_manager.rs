@@ -368,6 +368,16 @@ impl TaskManager {
         self.ctx.take_hotkey_context_once(capture_id)
     }
 
+    pub fn capture_recording_context_best_effort(
+        &self,
+        data_dir: &Path,
+        cfg: &context_capture::ContextConfig,
+    ) -> context_pack::ContextSnapshot {
+        let capture_id = format!("recording-start-{}", Uuid::new_v4());
+        self.ctx
+            .capture_snapshot_best_effort_with_config(data_dir, &capture_id, cfg)
+    }
+
     pub fn last_external_hwnd_best_effort(&self) -> Option<isize> {
         self.ctx.last_external_hwnd_best_effort()
     }

@@ -640,6 +640,7 @@ fn collect_element_text(element: &UIElement, max_chars: usize) -> String {
 fn find_browser_url(automation: &UIAutomation, root: &UIElement) -> Option<String> {
     let condition = automation.create_true_condition().ok()?;
     let descendants = root.find_all(TreeScope::Descendants, &condition).ok()?;
+    let mut best_match: Option<(usize, String)> = None;
     for element in descendants {
         let role = match element.get_control_type() {
             Ok(v) => v,
@@ -648,20 +649,51 @@ fn find_browser_url(automation: &UIAutomation, root: &UIElement) -> Option<Strin
         if role != ControlType::Edit {
             continue;
         }
-        let name = element.get_name().unwrap_or_default().to_ascii_lowercase();
-        if !name.contains("address") && !name.contains("search") {
-            continue;
-        }
         let value = element
             .get_pattern::<UIValuePattern>()
             .ok()
             .and_then(|p| p.get_value().ok())
             .unwrap_or_default();
-        if let Some(normalized) = normalize_browser_url_candidate(&value) {
-            return Some(normalized);
+        let Some(normalized) = normalize_browser_url_candidate(&value) else {
+            continue;
+        };
+        let name = element.get_name().unwrap_or_default();
+        let automation_id = element.get_automation_id().unwrap_or_default();
+        let score = browser_url_field_score(&name, &automation_id);
+        match &best_match {
+            Some((best_score, _)) if *best_score >= score => {}
+            _ => best_match = Some((score, normalized)),
         }
     }
-    None
+    best_match.map(|(_, url)| url)
+}
+
+fn browser_url_field_score(name: &str, automation_id: &str) -> usize {
+    let normalized_name = name.to_lowercase();
+    let normalized_automation_id = automation_id.to_lowercase();
+    let mut score = 1usize;
+    for token in [
+        "address",
+        "search",
+        "url",
+        "\u{5730}\u{5740}",
+        "\u{7f51}\u{5740}",
+        "\u{641c}\u{7d22}",
+        "\u{4f4f}\u{6240}",
+        "\u{ad6c}\u{c18c}",
+        "\u{30a2}\u{30c9}\u{30ec}\u{30b9}",
+    ] {
+        if normalized_name.contains(token) || normalized_automation_id.contains(token) {
+            score += 4;
+        }
+    }
+    if normalized_automation_id.contains("address")
+        || normalized_automation_id.contains("search")
+        || normalized_automation_id.contains("omnibox")
+    {
+        score += 6;
+    }
+    score
 }
 
 fn normalize_browser_url_candidate(value: &str) -> Option<String> {
@@ -725,7 +757,9 @@ fn now_ms() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{input_context_from_value, normalize_browser_url_candidate};
+    use super::{
+        browser_url_field_score, input_context_from_value, normalize_browser_url_candidate,
+    };
 
     #[test]
     fn normalize_browser_url_candidate_accepts_scheme_less_host() {
@@ -738,6 +772,14 @@ mod tests {
     #[test]
     fn normalize_browser_url_candidate_rejects_search_text() {
         assert_eq!(normalize_browser_url_candidate("search query"), None);
+    }
+
+    #[test]
+    fn browser_url_field_score_recognizes_localized_address_bar_names() {
+        assert!(
+            browser_url_field_score("\u{5730}\u{5740}\u{548c}\u{641c}\u{7d22}\u{680f}", "")
+                > browser_url_field_score("message search", "")
+        );
     }
 
     #[test]

@@ -47,6 +47,7 @@ struct ActiveBackendRecording {
     child: std::process::Child,
     started_at: std::time::Instant,
     meter_join: Option<std::thread::JoinHandle<()>>,
+    pre_captured_context: Option<context_pack::ContextSnapshot>,
 }
 
 struct RecordedAsset {
@@ -54,6 +55,7 @@ struct RecordedAsset {
     output_path: std::path::PathBuf,
     record_elapsed_ms: u128,
     created_at: std::time::Instant,
+    pre_captured_context: Option<context_pack::ContextSnapshot>,
 }
 
 struct BackendRecordingInner {
@@ -587,6 +589,12 @@ fn sanitize_rewrite_glossary(glossary: Option<Vec<String>>) -> Vec<String> {
     out
 }
 
+fn apply_recorded_asset_to_start_opts(opts: &mut task_manager::StartOpts, asset: &RecordedAsset) {
+    opts.record_elapsed_ms = asset.record_elapsed_ms;
+    opts.record_label = "Record (backend)".to_string();
+    opts.pre_captured_context = asset.pre_captured_context.clone();
+}
+
 #[tauri::command]
 async fn start_task(
     app: tauri::AppHandle,
@@ -684,8 +692,7 @@ async fn start_task(
                     );
                 }
             };
-            opts.record_elapsed_ms = asset.record_elapsed_ms;
-            opts.record_label = "Record (backend)".to_string();
+            apply_recorded_asset_to_start_opts(&mut opts, &asset);
             if !asset.output_path.exists() {
                 span.err(
                     "io",
@@ -809,6 +816,16 @@ fn start_backend_recording(
     let resolved_input = cached_input.resolved.clone();
     let input_spec = resolved_input.spec.clone();
     let ffmpeg = pipeline::ffmpeg_cmd().map_err(|e| e.to_string())?;
+    let pre_captured_context = match start_opts_from_settings(&dir) {
+        Ok(opts) if opts.rewrite_enabled && opts.template_id.is_some() => {
+            Some(state.capture_recording_context_best_effort(&dir, &opts.context_cfg))
+        }
+        Ok(_) => None,
+        Err(e) => {
+            span.err("config", "E_SETTINGS_INVALID", &e, None);
+            return Err(e);
+        }
+    };
 
     let mut child = match std::process::Command::new(&ffmpeg)
         .args([
@@ -892,6 +909,7 @@ fn start_backend_recording(
         child,
         started_at: std::time::Instant::now(),
         meter_join: Some(meter_join),
+        pre_captured_context,
     });
 
     span.ok(Some(serde_json::json!({
@@ -1014,6 +1032,7 @@ fn stop_backend_recording(
                 output_path: active.output_path.clone(),
                 record_elapsed_ms: elapsed_ms,
                 created_at: std::time::Instant::now(),
+                pre_captured_context: active.pre_captured_context.clone(),
             },
         );
     }
@@ -1926,4 +1945,58 @@ pub fn run() {
         ])
         .run(ctx)
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{apply_recorded_asset_to_start_opts, RecordedAsset};
+    use crate::context_pack::{ContextSnapshot, FocusedAppInfo};
+    use crate::task_manager::StartOpts;
+
+    #[test]
+    fn apply_recorded_asset_to_start_opts_restores_frozen_context() {
+        let asset = RecordedAsset {
+            asset_id: "a".to_string(),
+            output_path: std::path::PathBuf::from("tmp.wav"),
+            record_elapsed_ms: 42,
+            created_at: std::time::Instant::now(),
+            pre_captured_context: Some(ContextSnapshot {
+                focused_app: Some(FocusedAppInfo {
+                    process_image: Some("notepad.exe".to_string()),
+                    window_title: Some("note".to_string()),
+                    url: None,
+                    is_browser: false,
+                    target_source: Some("foreground".to_string()),
+                }),
+                ..Default::default()
+            }),
+        };
+        let mut opts = StartOpts {
+            asr_provider: "local".to_string(),
+            remote_asr_url: String::new(),
+            remote_asr_model: None,
+            remote_asr_concurrency: 1,
+            rewrite_enabled: true,
+            template_id: Some("t".to_string()),
+            asr_preprocess: crate::pipeline::PreprocessConfig::default(),
+            rewrite_glossary: Vec::new(),
+            rewrite_include_glossary: true,
+            context_cfg: crate::context_capture::ContextConfig::default(),
+            pre_captured_context: None,
+            record_elapsed_ms: 0,
+            record_label: String::new(),
+        };
+
+        apply_recorded_asset_to_start_opts(&mut opts, &asset);
+
+        assert_eq!(opts.record_elapsed_ms, 42);
+        assert_eq!(opts.record_label, "Record (backend)");
+        assert_eq!(
+            opts.pre_captured_context
+                .as_ref()
+                .and_then(|ctx| ctx.focused_app.as_ref())
+                .and_then(|app| app.process_image.as_deref()),
+            Some("notepad.exe")
+        );
+    }
 }

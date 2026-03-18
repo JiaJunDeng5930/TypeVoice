@@ -105,8 +105,11 @@
 - [VERIFIED] 2026-03-18：已修复上下文策略三处回归：`deny` 规则优先于 `allow`，浏览器地址栏无 scheme 时仍可匹配 domain 规则，热键预采样上下文在 rewrite 阶段会保留原始 `policy_decision/capture_diag` 而非被运行时快照覆盖。
 - [VERIFIED] 2026-03-18：已补齐热键冻结上下文缺口：`capture_hotkey_context_now` 现在会在按键时刻同时冻结历史与剪贴板；当存在 `pre_captured_context` 时，运行时快照不再重新采样 `history/clipboard/focused_*` 字段。
 - [VERIFIED] 2026-03-18：Windows 文本上下文采集已修复两处回归：仅暴露 `UIValuePattern` 的可编辑控件也会产出 `input_state.full_text`；浏览器 URL 遍历遇到单个失效 descendant 不再提前返回 `None`。
+- [VERIFIED] 2026-03-18：已修复 hotkey/UI 两条上下文冻结回归：`capture_hotkey_context_now` 在前台为 TypeVoice 时会允许 last-external 回退；主 UI 录音在 `start_backend_recording` 时冻结上下文，并通过 `recording_asset` 传递到 `start_task`，不再在任务启动时重采样外部窗口。
+- [VERIFIED] 2026-03-18：已放宽浏览器地址栏识别为“URL 值 + 本地化名称/automation id 打分”模型，domain allow/deny 规则不再只依赖英文 `address/search` 标签；新增对应 Rust 单测。
 - [VERIFIED] 2026-03-18：本轮 Rust 本地回归通过 `apps/desktop/src-tauri cargo test -q`（41 passed）。
 - [VERIFIED] 2026-03-18：本轮 Rust 本地回归通过 `apps/desktop/src-tauri cargo test -q`（34 passed）；`apps/desktop npm run build` 未执行成功，原因是当前环境缺少前端依赖导致 `tsc` 不在 PATH，而非本轮代码编译错误。
+- [VERIFIED] 2026-03-18：本轮修复后 `apps/desktop/src-tauri cargo test -q` 通过（43 passed）；`apps/desktop cmd /d /c npm run build` 仍失败，原因是当前环境缺少前端依赖，`tsc` 不在 PATH。
 - [VERIFIED] 2026-03-18：提交 `fix(context): honor deny rules and frozen hotkey policy` 后，`apps/desktop/src-tauri cargo test -q` 通过（40 passed），`scripts/windows/windows_gate.ps1` 的 Windows compile gate 通过，但完整 gate 仍被既有环境问题阻断：FFmpeg 签名 key 导入失败、fixtures 下载 `zh_10s.ogg` 命中 Wikimedia 403、`npm ci` 触发 `@tauri-apps/cli-win32-x64-msvc/cli.win32-x64-msvc.node` 的 `EPERM unlink` 占用错误，导致后续 `tauri` 命令不可用。
 - [VERIFIED] 2026-03-18：本轮按文档执行 `scripts/windows/windows_gate.ps1` 时，Windows compile gate 通过，但后续 gate 未完整通过：FFmpeg 上游签名 key 导入失败、fixtures 下载 `zh_10s.ogg` 遇到 Wikimedia 403、`npm ci` 命中 `@esbuild/win32-x64/esbuild.exe` 的 `EPERM unlink` 占用错误，因此未形成完整 Windows 闭环通过结论。
 

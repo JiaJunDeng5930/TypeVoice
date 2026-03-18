@@ -415,7 +415,7 @@ impl ContextService {
 
         let captured_at_ms = now_ms();
         let mut g = self.inner.lock().unwrap();
-        let mut snapshot = self.capture_runtime_snapshot(&g.win, cfg, false);
+        let mut snapshot = self.capture_runtime_snapshot(&g.win, cfg, true);
         snapshot.recent_history =
             self.load_recent_history_best_effort(data_dir, None, cfg, captured_at_ms);
         snapshot.clipboard_text = self.load_clipboard_text_best_effort(&g.win, data_dir, None, cfg);
