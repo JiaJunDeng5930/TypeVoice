@@ -199,10 +199,10 @@ fn resolve_policy(
     let app_name = process_basename(process_image);
     let host = extract_hostname(url);
     let app_rule = if let Some(name) = app_name.as_deref() {
-        if cfg.rules.app_allowlist.iter().any(|v| v == name) {
-            Some("allow".to_string())
-        } else if cfg.rules.app_denylist.iter().any(|v| v == name) {
+        if cfg.rules.app_denylist.iter().any(|v| v == name) {
             Some("deny".to_string())
+        } else if cfg.rules.app_allowlist.iter().any(|v| v == name) {
+            Some("allow".to_string())
         } else {
             None
         }
@@ -212,18 +212,18 @@ fn resolve_policy(
     let domain_rule = if let Some(name) = host.as_deref() {
         if cfg
             .rules
-            .domain_allowlist
-            .iter()
-            .any(|v| name == v || name.ends_with(&format!(".{v}")))
-        {
-            Some("allow".to_string())
-        } else if cfg
-            .rules
             .domain_denylist
             .iter()
             .any(|v| name == v || name.ends_with(&format!(".{v}")))
         {
             Some("deny".to_string())
+        } else if cfg
+            .rules
+            .domain_allowlist
+            .iter()
+            .any(|v| name == v || name.ends_with(&format!(".{v}")))
+        {
+            Some("allow".to_string())
         } else {
             None
         }
@@ -250,6 +250,18 @@ fn resolve_policy(
         allow_related_content,
         allow_visible_text: allow_related_content,
     }
+}
+
+fn merge_runtime_snapshot(mut snap: ContextSnapshot, runtime: ContextSnapshot) -> ContextSnapshot {
+    snap.focused_app = runtime.focused_app;
+    snap.focused_window = runtime.focused_window;
+    snap.focused_element = runtime.focused_element;
+    snap.input_state = runtime.input_state;
+    snap.related_content = runtime.related_content;
+    snap.visible_text = runtime.visible_text;
+    snap.policy_decision = runtime.policy_decision;
+    snap.capture_diag = runtime.capture_diag;
+    snap
 }
 
 #[derive(Clone)]
@@ -506,7 +518,7 @@ impl ContextService {
         #[cfg(windows)]
         {
             let g = self.inner.lock().unwrap();
-            snap = self.capture_runtime_snapshot(&g.win, cfg, true);
+            snap = merge_runtime_snapshot(snap, self.capture_runtime_snapshot(&g.win, cfg, true));
             snap.clipboard_text =
                 self.load_clipboard_text_best_effort(&g.win, data_dir, Some(task_id), cfg);
         }
@@ -623,7 +635,13 @@ impl ContextService {
 
 #[cfg(test)]
 mod tests {
-    use super::{config_from_settings, extract_hostname, resolve_policy, ContextConfig};
+    use super::{
+        config_from_settings, extract_hostname, merge_runtime_snapshot, resolve_policy,
+        ContextConfig,
+    };
+    use crate::context_pack::{
+        ContextCaptureDiag, ContextPolicyDecision, ContextSnapshot, FocusedAppInfo, HistorySnippet,
+    };
     use crate::settings::Settings;
 
     #[test]
@@ -664,5 +682,71 @@ mod tests {
         assert_eq!(policy.domain_rule.as_deref(), Some("deny"));
         assert!(!policy.allow_related_content);
         assert!(!policy.allow_visible_text);
+    }
+
+    #[test]
+    fn resolve_policy_prioritizes_same_dimension_deny_over_allow() {
+        let mut cfg = ContextConfig::default();
+        cfg.rules.app_allowlist = vec!["chrome.exe".to_string()];
+        cfg.rules.app_denylist = vec!["chrome.exe".to_string()];
+        cfg.rules.domain_allowlist = vec!["example.com".to_string()];
+        cfg.rules.domain_denylist = vec!["example.com".to_string()];
+
+        let policy = resolve_policy(
+            &cfg,
+            Some(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+            Some("https://example.com/path"),
+        );
+
+        assert_eq!(policy.app_rule.as_deref(), Some("deny"));
+        assert_eq!(policy.domain_rule.as_deref(), Some("deny"));
+        assert!(!policy.allow_related_content);
+        assert!(!policy.allow_visible_text);
+    }
+
+    #[test]
+    fn merge_runtime_snapshot_preserves_preloaded_history() {
+        let snap = ContextSnapshot {
+            recent_history: vec![HistorySnippet {
+                created_at_ms: 1,
+                asr_text: "hello".to_string(),
+                final_text: "world".to_string(),
+                template_id: None,
+            }],
+            ..Default::default()
+        };
+        let runtime = ContextSnapshot {
+            focused_app: Some(FocusedAppInfo {
+                process_image: Some("notepad.exe".to_string()),
+                window_title: Some("note".to_string()),
+                url: None,
+                is_browser: false,
+                target_source: Some("foreground".to_string()),
+            }),
+            policy_decision: Some(ContextPolicyDecision {
+                capture_mode: "balanced".to_string(),
+                app_rule: None,
+                domain_rule: None,
+                allow_related_content: true,
+                allow_visible_text: true,
+            }),
+            capture_diag: Some(ContextCaptureDiag {
+                target_source: Some("foreground".to_string()),
+                target_age_ms: Some(0),
+                focus_stable: true,
+            }),
+            ..Default::default()
+        };
+
+        let merged = merge_runtime_snapshot(snap, runtime);
+
+        assert_eq!(merged.recent_history.len(), 1);
+        assert_eq!(
+            merged
+                .focused_app
+                .as_ref()
+                .and_then(|app| app.process_image.as_deref()),
+            Some("notepad.exe")
+        );
     }
 }
