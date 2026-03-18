@@ -9,6 +9,7 @@ use std::time::Duration;
 use uiautomation::patterns::{UITextPattern, UIValuePattern};
 use uiautomation::types::{ControlType, TextPatternRangeEndpoint, TreeScope};
 use uiautomation::{UIAutomation, UIElement};
+use url::Url;
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HWND};
 use windows_sys::Win32::System::Ole::CF_UNICODETEXT;
 use windows_sys::Win32::System::Threading::{
@@ -631,11 +632,32 @@ fn find_browser_url(automation: &UIAutomation, root: &UIElement) -> Option<Strin
             .ok()
             .and_then(|p| p.get_value().ok())
             .unwrap_or_default();
-        if value.starts_with("http://") || value.starts_with("https://") {
-            return Some(value);
+        if let Some(normalized) = normalize_browser_url_candidate(&value) {
+            return Some(normalized);
         }
     }
     None
+}
+
+fn normalize_browser_url_candidate(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if Url::parse(trimmed)
+        .ok()
+        .and_then(|url| url.host_str().map(|_| ()))
+        .is_some()
+    {
+        return Some(trimmed.to_string());
+    }
+    if trimmed.contains("://") || trimmed.contains(char::is_whitespace) {
+        return None;
+    }
+    let normalized = format!("https://{trimmed}");
+    Url::parse(&normalized)
+        .ok()
+        .and_then(|url| url.host_str().map(|_| normalized))
 }
 
 fn detect_browser(process_image: Option<&str>) -> bool {
@@ -674,6 +696,24 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_browser_url_candidate;
+
+    #[test]
+    fn normalize_browser_url_candidate_accepts_scheme_less_host() {
+        assert_eq!(
+            normalize_browser_url_candidate("mail.google.com/mail/u/0/#inbox"),
+            Some("https://mail.google.com/mail/u/0/#inbox".to_string())
+        );
+    }
+
+    #[test]
+    fn normalize_browser_url_candidate_rejects_search_text() {
+        assert_eq!(normalize_browser_url_candidate("search query"), None);
+    }
 }
 
 fn get_window_title_best_effort(hwnd: HWND) -> Option<String> {

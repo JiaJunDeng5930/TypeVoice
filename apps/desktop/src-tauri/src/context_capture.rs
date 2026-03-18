@@ -179,7 +179,14 @@ fn extract_hostname(url: Option<&str>) -> Option<String> {
     if raw.is_empty() {
         return None;
     }
-    Url::parse(raw)
+    let parsed = Url::parse(raw).or_else(|_| {
+        if raw.contains("://") {
+            Err(url::ParseError::RelativeUrlWithoutBase)
+        } else {
+            Url::parse(&format!("https://{raw}"))
+        }
+    });
+    parsed
         .ok()
         .and_then(|v| v.host_str().map(|h| h.to_ascii_lowercase()))
 }
@@ -225,14 +232,14 @@ fn resolve_policy(
     };
 
     let default_allow = cfg.rules.capture_mode != "minimal";
-    let allow_related_content = if matches!(app_rule.as_deref(), Some("allow"))
-        || matches!(domain_rule.as_deref(), Some("allow"))
-    {
-        true
-    } else if matches!(app_rule.as_deref(), Some("deny"))
+    let allow_related_content = if matches!(app_rule.as_deref(), Some("deny"))
         || matches!(domain_rule.as_deref(), Some("deny"))
     {
         false
+    } else if matches!(app_rule.as_deref(), Some("allow"))
+        || matches!(domain_rule.as_deref(), Some("allow"))
+    {
+        true
     } else {
         default_allow
     };
@@ -552,7 +559,7 @@ impl ContextService {
 
 #[cfg(test)]
 mod tests {
-    use super::config_from_settings;
+    use super::{config_from_settings, extract_hostname, resolve_policy, ContextConfig};
     use crate::settings::Settings;
 
     #[test]
@@ -567,5 +574,31 @@ mod tests {
 
         assert_eq!(cfg.budget.max_chars_related_before, 111);
         assert_eq!(cfg.budget.max_chars_related_after, 37);
+    }
+
+    #[test]
+    fn extract_hostname_accepts_scheme_less_browser_values() {
+        assert_eq!(
+            extract_hostname(Some("mail.google.com/mail/u/0/#inbox")),
+            Some("mail.google.com".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_policy_prioritizes_deny_over_allow() {
+        let mut cfg = ContextConfig::default();
+        cfg.rules.app_allowlist = vec!["chrome.exe".to_string()];
+        cfg.rules.domain_denylist = vec!["mail.google.com".to_string()];
+
+        let policy = resolve_policy(
+            &cfg,
+            Some(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+            Some("https://mail.google.com/mail/u/0/#inbox"),
+        );
+
+        assert_eq!(policy.app_rule.as_deref(), Some("allow"));
+        assert_eq!(policy.domain_rule.as_deref(), Some("deny"));
+        assert!(!policy.allow_related_content);
+        assert!(!policy.allow_visible_text);
     }
 }

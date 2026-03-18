@@ -155,6 +155,53 @@ fn rewrite_entered(opts: &StartOpts) -> bool {
     opts.rewrite_enabled && opts.template_id.is_some()
 }
 
+fn runtime_context_capture_config(
+    ctx_cfg: &context_capture::ContextConfig,
+    has_pre_captured_context: bool,
+) -> context_capture::ContextConfig {
+    let mut cfg = ctx_cfg.clone();
+    if has_pre_captured_context {
+        cfg.include_focused_app_meta = false;
+        cfg.include_prev_window_meta = false;
+        cfg.include_focused_element_meta = false;
+        cfg.include_input_state = false;
+        cfg.include_related_content = false;
+        cfg.include_visible_text = false;
+    }
+    cfg
+}
+
+fn merge_pre_captured_context(
+    ctx_cfg: &context_capture::ContextConfig,
+    ctx_snap: &mut context_pack::ContextSnapshot,
+    pre: context_pack::ContextSnapshot,
+) {
+    if ctx_cfg.include_focused_app_meta {
+        ctx_snap.focused_app = pre.focused_app;
+    }
+    if ctx_cfg.include_prev_window_meta {
+        ctx_snap.focused_window = pre.focused_window;
+    }
+    if ctx_cfg.include_focused_element_meta {
+        ctx_snap.focused_element = pre.focused_element;
+    }
+    if ctx_cfg.include_input_state {
+        ctx_snap.input_state = pre.input_state;
+    }
+    if ctx_cfg.include_related_content {
+        ctx_snap.related_content = pre.related_content;
+    }
+    if ctx_cfg.include_visible_text {
+        ctx_snap.visible_text = pre.visible_text;
+    }
+    if pre.policy_decision.is_some() {
+        ctx_snap.policy_decision = pre.policy_decision;
+    }
+    if pre.capture_diag.is_some() {
+        ctx_snap.capture_diag = pre.capture_diag;
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskEvent {
     pub task_id: String,
@@ -573,7 +620,8 @@ impl TaskManager {
         let get_template = self.deps.get_template;
         let history_append = self.deps.history_append;
         let ctx_cfg = opts.context_cfg.clone();
-        let capture_ctx_cfg = ctx_cfg.clone();
+        let capture_ctx_cfg =
+            runtime_context_capture_config(&ctx_cfg, opts.pre_captured_context.is_some());
         let mut ctx_snap = if opts.rewrite_enabled {
             self.ctx
                 .capture_snapshot_best_effort_with_config(&data_dir, &task_id, &capture_ctx_cfg)
@@ -581,30 +629,7 @@ impl TaskManager {
             context_pack::ContextSnapshot::default()
         };
         if let Some(pre) = opts.pre_captured_context.clone() {
-            if ctx_cfg.include_focused_app_meta {
-                ctx_snap.focused_app = pre.focused_app;
-            }
-            if ctx_cfg.include_prev_window_meta {
-                ctx_snap.focused_window = pre.focused_window;
-            }
-            if ctx_cfg.include_focused_element_meta {
-                ctx_snap.focused_element = pre.focused_element;
-            }
-            if ctx_cfg.include_input_state {
-                ctx_snap.input_state = pre.input_state;
-            }
-            if ctx_cfg.include_related_content {
-                ctx_snap.related_content = pre.related_content;
-            }
-            if ctx_cfg.include_visible_text {
-                ctx_snap.visible_text = pre.visible_text;
-            }
-            if ctx_snap.policy_decision.is_none() {
-                ctx_snap.policy_decision = pre.policy_decision;
-            }
-            if ctx_snap.capture_diag.is_none() {
-                ctx_snap.capture_diag = pre.capture_diag;
-            }
+            merge_pre_captured_context(&ctx_cfg, &mut ctx_snap, pre);
             crate::obs::event(
                 &data_dir,
                 Some(&task_id),
@@ -1307,8 +1332,15 @@ fn kill_pid(pid: u32) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{internal_failure_event, rewrite_entered, StartOpts};
-    use crate::{context_capture, pipeline};
+    use super::{
+        internal_failure_event, merge_pre_captured_context, rewrite_entered,
+        runtime_context_capture_config, StartOpts,
+    };
+    use crate::{
+        context_capture,
+        context_pack::{ContextCaptureDiag, ContextPolicyDecision, ContextSnapshot},
+        pipeline,
+    };
 
     #[test]
     fn internal_failure_event_has_error_code_and_terminal_status() {
@@ -1352,5 +1384,72 @@ mod tests {
         opts.rewrite_enabled = true;
         opts.template_id = None;
         assert!(!rewrite_entered(&opts));
+    }
+
+    #[test]
+    fn runtime_context_capture_config_skips_frozen_fields_when_pre_captured_exists() {
+        let cfg = context_capture::ContextConfig::default();
+        let runtime_cfg = runtime_context_capture_config(&cfg, true);
+
+        assert!(!runtime_cfg.include_focused_app_meta);
+        assert!(!runtime_cfg.include_prev_window_meta);
+        assert!(!runtime_cfg.include_focused_element_meta);
+        assert!(!runtime_cfg.include_input_state);
+        assert!(!runtime_cfg.include_related_content);
+        assert!(!runtime_cfg.include_visible_text);
+        assert!(runtime_cfg.include_history);
+        assert!(runtime_cfg.include_clipboard);
+    }
+
+    #[test]
+    fn merge_pre_captured_context_overrides_policy_and_diag() {
+        let cfg = context_capture::ContextConfig::default();
+        let mut runtime = ContextSnapshot {
+            policy_decision: Some(ContextPolicyDecision {
+                capture_mode: "balanced".to_string(),
+                app_rule: Some("allow".to_string()),
+                domain_rule: None,
+                allow_related_content: true,
+                allow_visible_text: true,
+            }),
+            capture_diag: Some(ContextCaptureDiag {
+                target_source: Some("foreground".to_string()),
+                target_age_ms: Some(0),
+                focus_stable: true,
+            }),
+            ..Default::default()
+        };
+        let pre = ContextSnapshot {
+            policy_decision: Some(ContextPolicyDecision {
+                capture_mode: "minimal".to_string(),
+                app_rule: None,
+                domain_rule: Some("deny".to_string()),
+                allow_related_content: false,
+                allow_visible_text: false,
+            }),
+            capture_diag: Some(ContextCaptureDiag {
+                target_source: Some("last_external".to_string()),
+                target_age_ms: Some(140),
+                focus_stable: false,
+            }),
+            ..Default::default()
+        };
+
+        merge_pre_captured_context(&cfg, &mut runtime, pre);
+
+        assert_eq!(
+            runtime
+                .policy_decision
+                .as_ref()
+                .and_then(|v| v.domain_rule.as_deref()),
+            Some("deny")
+        );
+        assert_eq!(
+            runtime
+                .capture_diag
+                .as_ref()
+                .and_then(|v| v.target_source.as_deref()),
+            Some("last_external")
+        );
     }
 }
