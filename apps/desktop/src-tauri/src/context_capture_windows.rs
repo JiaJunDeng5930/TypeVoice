@@ -445,7 +445,16 @@ fn describe_element(element: &UIElement) -> FocusedElementInfo {
 }
 
 fn extract_input_state(element: &UIElement, max_chars: usize) -> Option<InputContext> {
-    let text_pattern = element.get_pattern::<UITextPattern>().ok()?;
+    let text_pattern = match element.get_pattern::<UITextPattern>() {
+        Ok(v) => v,
+        Err(_) => {
+            let value = element
+                .get_pattern::<UIValuePattern>()
+                .ok()
+                .and_then(|p| p.get_value().ok())?;
+            return input_context_from_value(value, max_chars);
+        }
+    };
     let document = text_pattern.get_document_range().ok()?;
     let full_text = document
         .get_text(max_chars as i32)
@@ -511,6 +520,19 @@ fn extract_input_state(element: &UIElement, max_chars: usize) -> Option<InputCon
         selection_end,
         before_text,
         after_text,
+        full_text,
+    })
+}
+
+fn input_context_from_value(value: String, max_chars: usize) -> Option<InputContext> {
+    let full_text = non_empty_trimmed(truncate_chars(value.trim(), max_chars));
+    full_text.as_ref()?;
+    Some(InputContext {
+        selection_text: None,
+        selection_start: None,
+        selection_end: None,
+        before_text: None,
+        after_text: None,
         full_text,
     })
 }
@@ -619,7 +641,10 @@ fn find_browser_url(automation: &UIAutomation, root: &UIElement) -> Option<Strin
     let condition = automation.create_true_condition().ok()?;
     let descendants = root.find_all(TreeScope::Descendants, &condition).ok()?;
     for element in descendants {
-        let role = element.get_control_type().ok()?;
+        let role = match element.get_control_type() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
         if role != ControlType::Edit {
             continue;
         }
@@ -700,7 +725,7 @@ fn now_ms() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_browser_url_candidate;
+    use super::{input_context_from_value, normalize_browser_url_candidate};
 
     #[test]
     fn normalize_browser_url_candidate_accepts_scheme_less_host() {
@@ -713,6 +738,15 @@ mod tests {
     #[test]
     fn normalize_browser_url_candidate_rejects_search_text() {
         assert_eq!(normalize_browser_url_candidate("search query"), None);
+    }
+
+    #[test]
+    fn input_context_from_value_keeps_full_text_for_value_only_controls() {
+        let ctx = input_context_from_value(" hello world ".to_string(), 5).unwrap();
+        assert_eq!(ctx.full_text.as_deref(), Some("hello"));
+        assert_eq!(ctx.selection_text, None);
+        assert_eq!(ctx.before_text, None);
+        assert_eq!(ctx.after_text, None);
     }
 }
 

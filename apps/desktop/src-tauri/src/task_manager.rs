@@ -161,6 +161,8 @@ fn runtime_context_capture_config(
 ) -> context_capture::ContextConfig {
     let mut cfg = ctx_cfg.clone();
     if has_pre_captured_context {
+        cfg.include_history = false;
+        cfg.include_clipboard = false;
         cfg.include_focused_app_meta = false;
         cfg.include_prev_window_meta = false;
         cfg.include_focused_element_meta = false;
@@ -176,6 +178,12 @@ fn merge_pre_captured_context(
     ctx_snap: &mut context_pack::ContextSnapshot,
     pre: context_pack::ContextSnapshot,
 ) {
+    if ctx_cfg.include_history {
+        ctx_snap.recent_history = pre.recent_history;
+    }
+    if ctx_cfg.include_clipboard {
+        ctx_snap.clipboard_text = pre.clipboard_text;
+    }
     if ctx_cfg.include_focused_app_meta {
         ctx_snap.focused_app = pre.focused_app;
     }
@@ -1391,20 +1399,22 @@ mod tests {
         let cfg = context_capture::ContextConfig::default();
         let runtime_cfg = runtime_context_capture_config(&cfg, true);
 
+        assert!(!runtime_cfg.include_history);
+        assert!(!runtime_cfg.include_clipboard);
         assert!(!runtime_cfg.include_focused_app_meta);
         assert!(!runtime_cfg.include_prev_window_meta);
         assert!(!runtime_cfg.include_focused_element_meta);
         assert!(!runtime_cfg.include_input_state);
         assert!(!runtime_cfg.include_related_content);
         assert!(!runtime_cfg.include_visible_text);
-        assert!(runtime_cfg.include_history);
-        assert!(runtime_cfg.include_clipboard);
     }
 
     #[test]
     fn merge_pre_captured_context_overrides_policy_and_diag() {
         let cfg = context_capture::ContextConfig::default();
         let mut runtime = ContextSnapshot {
+            recent_history: vec![],
+            clipboard_text: Some("runtime".to_string()),
             policy_decision: Some(ContextPolicyDecision {
                 capture_mode: "balanced".to_string(),
                 app_rule: Some("allow".to_string()),
@@ -1420,6 +1430,13 @@ mod tests {
             ..Default::default()
         };
         let pre = ContextSnapshot {
+            recent_history: vec![crate::context_pack::HistorySnippet {
+                created_at_ms: 1,
+                asr_text: "a".to_string(),
+                final_text: "b".to_string(),
+                template_id: None,
+            }],
+            clipboard_text: Some("frozen".to_string()),
             policy_decision: Some(ContextPolicyDecision {
                 capture_mode: "minimal".to_string(),
                 app_rule: None,
@@ -1437,6 +1454,8 @@ mod tests {
 
         merge_pre_captured_context(&cfg, &mut runtime, pre);
 
+        assert_eq!(runtime.recent_history.len(), 1);
+        assert_eq!(runtime.clipboard_text.as_deref(), Some("frozen"));
         assert_eq!(
             runtime
                 .policy_decision

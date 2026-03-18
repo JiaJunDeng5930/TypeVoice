@@ -296,6 +296,102 @@ impl ContextService {
         }
     }
 
+    fn load_recent_history_best_effort(
+        &self,
+        data_dir: &Path,
+        task_id: Option<&str>,
+        cfg: &ContextConfig,
+        captured_at_ms: i64,
+    ) -> Vec<HistorySnippet> {
+        if !cfg.include_history || cfg.budget.max_history_items == 0 {
+            return Vec::new();
+        }
+
+        let db = data_dir.join("history.sqlite3");
+        let span = Span::start(
+            data_dir,
+            task_id,
+            "ContextCapture",
+            "CTX.history.list",
+            Some(serde_json::json!({
+                "limit": (cfg.budget.max_history_items as i64).max(1),
+                "before_ms": captured_at_ms,
+            })),
+        );
+        match history::list(
+            &db,
+            (cfg.budget.max_history_items as i64).max(1),
+            Some(captured_at_ms),
+        ) {
+            Ok(mut rows) => {
+                let min_ms = captured_at_ms.saturating_sub(cfg.budget.history_window_ms);
+                rows.retain(|h| h.created_at_ms >= min_ms);
+                let history: Vec<HistorySnippet> = rows
+                    .into_iter()
+                    .map(|h| HistorySnippet {
+                        created_at_ms: h.created_at_ms,
+                        asr_text: h.asr_text,
+                        final_text: h.final_text,
+                        template_id: h.template_id,
+                    })
+                    .collect();
+                span.ok(Some(serde_json::json!({
+                    "items": history.len(),
+                    "min_ms": min_ms,
+                })));
+                history
+            }
+            Err(e) => {
+                span.err("io", "E_HISTORY_LIST", &e.to_string(), None);
+                Vec::new()
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    fn load_clipboard_text_best_effort(
+        &self,
+        win: &crate::context_capture_windows::WindowsContext,
+        data_dir: &Path,
+        task_id: Option<&str>,
+        cfg: &ContextConfig,
+    ) -> Option<String> {
+        if !cfg.include_clipboard {
+            return None;
+        }
+
+        let span = Span::start(
+            data_dir,
+            task_id,
+            "ContextCapture",
+            "CTX.clipboard.read",
+            None,
+        );
+        let clip = win.read_clipboard_text_diag_best_effort();
+        match clip.diag.status.as_str() {
+            "ok" => span.ok(Some(serde_json::json!({
+                "bytes": clip.text.as_deref().map(|s| s.len()).unwrap_or(0)
+            }))),
+            "skipped" => span.skipped(
+                clip.diag.note.as_deref().unwrap_or("skipped"),
+                Some(serde_json::json!({
+                    "step": clip.diag.step,
+                    "last_error": clip.diag.last_error,
+                })),
+            ),
+            _ => span.err(
+                "winapi",
+                "E_CLIPBOARD",
+                clip.diag.note.as_deref().unwrap_or("clipboard read failed"),
+                Some(serde_json::json!({
+                    "step": clip.diag.step,
+                    "last_error": clip.diag.last_error,
+                })),
+            ),
+        }
+        clip.text
+    }
+
     #[cfg(windows)]
     pub fn capture_hotkey_context_now(
         &self,
@@ -317,8 +413,12 @@ impl ContextService {
             })),
         );
 
+        let captured_at_ms = now_ms();
         let mut g = self.inner.lock().unwrap();
-        let snapshot = self.capture_runtime_snapshot(&g.win, cfg, false);
+        let mut snapshot = self.capture_runtime_snapshot(&g.win, cfg, false);
+        snapshot.recent_history =
+            self.load_recent_history_best_effort(data_dir, None, cfg, captured_at_ms);
+        snapshot.clipboard_text = self.load_clipboard_text_best_effort(&g.win, data_dir, None, cfg);
         let capture_id = Uuid::new_v4().to_string();
         g.hotkey_capture_registry.insert(
             capture_id.clone(),
@@ -400,51 +500,15 @@ impl ContextService {
 
         let mut snap = ContextSnapshot::default();
 
-        if cfg.include_history && cfg.budget.max_history_items > 0 {
-            let db = data_dir.join("history.sqlite3");
-            let before = Some(captured_at_ms);
-            let span = Span::start(
-                data_dir,
-                Some(task_id),
-                "ContextCapture",
-                "CTX.history.list",
-                Some(serde_json::json!({
-                    "limit": (cfg.budget.max_history_items as i64).max(1),
-                    "before_ms": before,
-                })),
-            );
-            match history::list(&db, (cfg.budget.max_history_items as i64).max(1), before) {
-                Ok(mut rows) => {
-                    let min_ms = captured_at_ms.saturating_sub(cfg.budget.history_window_ms);
-                    rows.retain(|h| h.created_at_ms >= min_ms);
-                    snap.recent_history = rows
-                        .into_iter()
-                        .map(|h| HistorySnippet {
-                            created_at_ms: h.created_at_ms,
-                            asr_text: h.asr_text,
-                            final_text: h.final_text,
-                            template_id: h.template_id,
-                        })
-                        .collect();
-                    span.ok(Some(serde_json::json!({
-                        "items": snap.recent_history.len(),
-                        "min_ms": min_ms,
-                    })));
-                }
-                Err(e) => {
-                    span.err("io", "E_HISTORY_LIST", &e.to_string(), None);
-                }
-            }
-        }
+        snap.recent_history =
+            self.load_recent_history_best_effort(data_dir, Some(task_id), cfg, captured_at_ms);
 
         #[cfg(windows)]
         {
             let g = self.inner.lock().unwrap();
             snap = self.capture_runtime_snapshot(&g.win, cfg, true);
-            if cfg.include_clipboard {
-                let clip = g.win.read_clipboard_text_diag_best_effort();
-                snap.clipboard_text = clip.text;
-            }
+            snap.clipboard_text =
+                self.load_clipboard_text_best_effort(&g.win, data_dir, Some(task_id), cfg);
         }
 
         obs::event(
