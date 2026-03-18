@@ -1,28 +1,28 @@
 #![cfg(windows)]
 
-use std::ffi::c_void;
-use std::mem::size_of;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
 use std::time::Duration;
 
-use serde::Serialize;
-use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HWND, RECT};
-use windows_sys::Win32::Graphics::Gdi::{
-    CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits,
-    ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, RGBQUAD,
-};
-use windows_sys::Win32::Storage::Xps::PrintWindow;
+use uiautomation::patterns::{UITextPattern, UIValuePattern};
+use uiautomation::types::{ControlType, TextPatternRangeEndpoint, TreeScope};
+use uiautomation::{UIAutomation, UIElement};
+use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HWND};
 use windows_sys::Win32::System::Ole::CF_UNICODETEXT;
 use windows_sys::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
-    GetWindowThreadProcessId, IsWindow,
+    GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindow,
 };
+
+use crate::context_pack::{
+    ContextCaptureDiag, FocusedAppInfo, FocusedElementInfo, FocusedWindowInfo, InputContext,
+    RelatedContent,
+};
+use crate::context_capture::ContextConfig;
 
 #[derive(Debug, Clone)]
 pub struct WindowInfo {
@@ -30,57 +30,7 @@ pub struct WindowInfo {
     pub process_image: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-pub struct ForegroundNowCapture {
-    pub window: WindowInfo,
-    pub screenshot: ScreenshotRaw,
-    pub pid: u32,
-    pub hwnd: isize,
-}
-
-#[derive(Debug, Clone)]
-pub struct ForegroundNowCaptureResult {
-    pub capture: Option<ForegroundNowCapture>,
-    pub error: Option<ScreenshotDiagError>,
-}
-
-#[derive(Clone)]
-pub struct ScreenshotRaw {
-    pub png_bytes: Vec<u8>,
-    pub width: u32,
-    pub height: u32,
-}
-
-impl std::fmt::Debug for ScreenshotRaw {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Avoid dumping raw pixels into logs accidentally.
-        f.debug_struct("ScreenshotRaw")
-            .field("png_bytes_len", &self.png_bytes.len())
-            .field("width", &self.width)
-            .field("height", &self.height)
-            .finish()
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ScreenshotDiagError {
-    pub step: String,
-    pub api: String,
-    pub api_ret: String,
-    pub last_error: u32,
-    pub note: Option<String>,
-    pub window_w: u32,
-    pub window_h: u32,
-    pub max_side: u32,
-}
-
-#[derive(Debug, Clone)]
-pub struct ScreenshotDiagResult {
-    pub raw: Option<ScreenshotRaw>,
-    pub error: Option<ScreenshotDiagError>,
-}
-
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ClipboardDiag {
     pub status: String, // ok|skipped|err
     pub step: Option<String>,
@@ -92,6 +42,17 @@ pub struct ClipboardDiag {
 pub struct ClipboardRead {
     pub text: Option<String>,
     pub diag: ClipboardDiag,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ForegroundTextContext {
+    pub focused_app: Option<FocusedAppInfo>,
+    pub focused_window: Option<FocusedWindowInfo>,
+    pub focused_element: Option<FocusedElementInfo>,
+    pub input_state: Option<InputContext>,
+    pub related_content: Option<RelatedContent>,
+    pub visible_text: Option<String>,
+    pub capture_diag: Option<ContextCaptureDiag>,
 }
 
 #[derive(Clone)]
@@ -118,7 +79,7 @@ impl WindowsContext {
             return None;
         }
         Some(WindowInfo {
-            title: get_window_title_best_effort(hwnd),
+            title: snap.title.or_else(|| get_window_title_best_effort(hwnd)),
             process_image: snap
                 .process_image
                 .or_else(|| get_process_image_best_effort(snap.pid)),
@@ -135,12 +96,15 @@ impl WindowsContext {
         Some(hwnd)
     }
 
+    pub fn last_external_age_ms_best_effort(&self) -> Option<i64> {
+        self.tracker.ensure_started();
+        let snap = self.tracker.last_external_snapshot();
+        snap.seen_at_ms.map(|seen| now_ms().saturating_sub(seen))
+    }
+
     pub fn foreground_window_info_best_effort(&self) -> Option<WindowInfo> {
         let hwnd = unsafe { GetForegroundWindow() };
-        if hwnd.is_null() {
-            return None;
-        }
-        if unsafe { IsWindow(hwnd) } == 0 {
+        if hwnd.is_null() || unsafe { IsWindow(hwnd) } == 0 {
             return None;
         }
         let mut pid: u32 = 0;
@@ -152,49 +116,6 @@ impl WindowsContext {
             title: get_window_title_best_effort(hwnd),
             process_image: get_process_image_best_effort(pid),
         })
-    }
-
-    pub fn capture_last_external_window_png_best_effort(
-        &self,
-        max_side: u32,
-    ) -> Option<ScreenshotRaw> {
-        self.capture_last_external_window_png_diag_best_effort(max_side)
-            .raw
-    }
-
-    pub fn capture_last_external_window_png_diag_best_effort(
-        &self,
-        max_side: u32,
-    ) -> ScreenshotDiagResult {
-        self.tracker.ensure_started();
-        let snap = self.tracker.last_external_snapshot();
-        let Some(hwnd_i) = snap.hwnd else {
-            return ScreenshotDiagResult {
-                raw: None,
-                error: None,
-            };
-        };
-        let hwnd = hwnd_i as HWND;
-        if unsafe { IsWindow(hwnd) } == 0 {
-            return ScreenshotDiagResult {
-                raw: None,
-                error: None,
-            };
-        }
-        match capture_window_png_diagnose(hwnd, max_side) {
-            Ok(raw) => ScreenshotDiagResult {
-                raw: Some(raw),
-                error: None,
-            },
-            Err(e) => ScreenshotDiagResult {
-                raw: None,
-                error: Some(e),
-            },
-        }
-    }
-
-    pub fn read_clipboard_text_best_effort(&self) -> Option<String> {
-        self.read_clipboard_text_diag_best_effort().text
     }
 
     pub fn read_clipboard_text_diag_best_effort(&self) -> ClipboardRead {
@@ -229,89 +150,160 @@ impl WindowsContext {
         }
     }
 
-    pub fn capture_foreground_window_now_diag_best_effort(
+    pub fn capture_foreground_text_context_best_effort(
         &self,
-        max_side: u32,
-    ) -> ForegroundNowCaptureResult {
+        cfg: &ContextConfig,
+    ) -> ForegroundTextContext {
         let hwnd = unsafe { GetForegroundWindow() };
-        if hwnd.is_null() {
-            return ForegroundNowCaptureResult {
-                capture: None,
-                error: Some(ScreenshotDiagError {
-                    step: "foreground_window".to_string(),
-                    api: "GetForegroundWindow".to_string(),
-                    api_ret: "NULL".to_string(),
-                    last_error: last_error_u32(),
-                    note: Some("no foreground window".to_string()),
-                    window_w: 0,
-                    window_h: 0,
-                    max_side,
+        if hwnd.is_null() || unsafe { IsWindow(hwnd) } == 0 {
+            return ForegroundTextContext {
+                capture_diag: Some(ContextCaptureDiag {
+                    target_source: Some("foreground".to_string()),
+                    target_age_ms: Some(0),
+                    focus_stable: false,
                 }),
-            };
-        }
-        if unsafe { IsWindow(hwnd) } == 0 {
-            return ForegroundNowCaptureResult {
-                capture: None,
-                error: Some(ScreenshotDiagError {
-                    step: "is_window".to_string(),
-                    api: "IsWindow".to_string(),
-                    api_ret: "0".to_string(),
-                    last_error: last_error_u32(),
-                    note: Some("foreground hwnd is invalid".to_string()),
-                    window_w: 0,
-                    window_h: 0,
-                    max_side,
-                }),
+                ..Default::default()
             };
         }
 
         let mut pid: u32 = 0;
         unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
-        if pid == 0 {
-            return ForegroundNowCaptureResult {
-                capture: None,
-                error: Some(ScreenshotDiagError {
-                    step: "foreground_pid".to_string(),
-                    api: "GetWindowThreadProcessId".to_string(),
-                    api_ret: "pid=0".to_string(),
-                    last_error: last_error_u32(),
-                    note: Some("foreground pid is zero".to_string()),
-                    window_w: 0,
-                    window_h: 0,
-                    max_side,
-                }),
-            };
+        self.capture_window_context_best_effort(hwnd, pid, "foreground", Some(0), true, cfg)
+    }
+
+    pub fn capture_last_external_text_context_best_effort(
+        &self,
+        cfg: &ContextConfig,
+        max_age_ms: i64,
+    ) -> Option<ForegroundTextContext> {
+        self.tracker.ensure_started();
+        let snap = self.tracker.last_external_snapshot();
+        let hwnd = snap.hwnd? as HWND;
+        let age_ms = snap
+            .seen_at_ms
+            .map(|seen| now_ms().saturating_sub(seen))
+            .unwrap_or(i64::MAX);
+        if age_ms > max_age_ms || unsafe { IsWindow(hwnd) } == 0 {
+            return None;
+        }
+        Some(self.capture_window_context_best_effort(
+            hwnd,
+            snap.pid,
+            "last_external",
+            Some(age_ms),
+            false,
+            cfg,
+        ))
+    }
+
+    fn capture_window_context_best_effort(
+        &self,
+        hwnd: HWND,
+        pid: u32,
+        target_source: &str,
+        target_age_ms: Option<i64>,
+        allow_focus_context: bool,
+        cfg: &ContextConfig,
+    ) -> ForegroundTextContext {
+        let title = get_window_title_best_effort(hwnd);
+        let process_image = if pid != 0 {
+            get_process_image_best_effort(pid)
+        } else {
+            None
+        };
+        let mut out = ForegroundTextContext {
+            focused_app: Some(FocusedAppInfo {
+                process_image: process_image.clone(),
+                window_title: title.clone(),
+                url: None,
+                is_browser: detect_browser(process_image.as_deref()),
+                target_source: Some(target_source.to_string()),
+            }),
+            focused_window: if cfg.include_prev_window_meta {
+                Some(FocusedWindowInfo {
+                    title: title.clone(),
+                    class_name: None,
+                })
+            } else {
+                None
+            },
+            capture_diag: Some(ContextCaptureDiag {
+                target_source: Some(target_source.to_string()),
+                target_age_ms,
+                focus_stable: false,
+            }),
+            ..Default::default()
+        };
+
+        let automation = match UIAutomation::new() {
+            Ok(v) => v,
+            Err(_) => return out,
+        };
+        let root = match automation.element_from_handle((hwnd as isize).into()) {
+            Ok(v) => v,
+            Err(_) => return out,
+        };
+
+        if out.focused_app.as_ref().is_some_and(|app| app.is_browser) {
+            if let Some(url) = find_browser_url(&automation, &root) {
+                if let Some(app) = out.focused_app.as_mut() {
+                    app.url = Some(url);
+                }
+            }
         }
 
-        let info = WindowInfo {
-            title: get_window_title_best_effort(hwnd),
-            process_image: get_process_image_best_effort(pid),
-        };
-        match capture_window_png_diagnose(hwnd, max_side) {
-            Ok(raw) => ForegroundNowCaptureResult {
-                capture: Some(ForegroundNowCapture {
-                    window: info,
-                    screenshot: raw,
-                    pid,
-                    hwnd: hwnd as isize,
-                }),
-                error: None,
-            },
-            Err(e) => ForegroundNowCaptureResult {
-                capture: None,
-                error: Some(e),
-            },
+        if cfg.include_visible_text {
+            out.visible_text = collect_visible_text(&automation, &root, cfg.budget.max_chars_visible_text);
         }
+
+        if !allow_focus_context {
+            return out;
+        }
+
+        let (focus_stable, focused) = stable_focused_element(&automation);
+        if let Some(diag) = out.capture_diag.as_mut() {
+            diag.focus_stable = focus_stable;
+        }
+        let Some(element) = focused else {
+            return out;
+        };
+        if element.get_process_id().ok().filter(|v| *v == pid).is_none() {
+            return out;
+        }
+
+        let element_info = describe_element(&element);
+        let editable = element_info.editable;
+        let element_info_for_output = element_info.clone();
+
+        if cfg.include_focused_element_meta {
+            out.focused_element = Some(element_info_for_output);
+        }
+        if !editable {
+            return out;
+        }
+
+        if cfg.include_input_state {
+            out.input_state = extract_input_state(&element, cfg.budget.max_chars_input);
+        }
+        if cfg.include_related_content {
+            out.related_content = extract_related_content(
+                &automation,
+                &root,
+                &element,
+                cfg.budget.max_chars_related_side,
+            );
+        }
+        out
     }
 }
 
 #[derive(Debug, Clone)]
 struct ExternalSnapshot {
-    // HWND is a raw pointer type and is not Send/Sync. Store it as an integer so that
-    // the tracker can live inside Tauri managed state (which requires Send + Sync).
     hwnd: Option<isize>,
     pid: u32,
     process_image: Option<String>,
+    title: Option<String>,
+    seen_at_ms: Option<i64>,
 }
 
 #[derive(Clone)]
@@ -328,6 +320,8 @@ impl ForegroundTracker {
                 hwnd: None,
                 pid: 0,
                 process_image: None,
+                title: None,
+                seen_at_ms: None,
             })),
         }
     }
@@ -354,11 +348,12 @@ impl ForegroundTracker {
                     let mut pid: u32 = 0;
                     unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
                     if pid != 0 && pid != this_pid {
-                        let img = get_process_image_best_effort(pid);
                         let mut g = last_external.lock().unwrap();
                         g.hwnd = Some(hwnd as isize);
                         g.pid = pid;
-                        g.process_image = img;
+                        g.process_image = get_process_image_best_effort(pid);
+                        g.title = get_window_title_best_effort(hwnd);
+                        g.seen_at_ms = Some(now_ms());
                     }
                 }
                 std::thread::sleep(Duration::from_millis(80));
@@ -369,6 +364,276 @@ impl ForegroundTracker {
     fn last_external_snapshot(&self) -> ExternalSnapshot {
         self.last_external.lock().unwrap().clone()
     }
+}
+
+fn stable_focused_element(automation: &UIAutomation) -> (bool, Option<UIElement>) {
+    let mut last_key: Option<String> = None;
+    let mut last_element: Option<UIElement> = None;
+    for _ in 0..4 {
+        let element = match automation.get_focused_element() {
+            Ok(v) => v,
+            Err(_) => return (false, last_element),
+        };
+        let runtime_id = element
+            .get_runtime_id()
+            .map(|v| v.into_iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","))
+            .unwrap_or_default();
+        let control = element
+            .get_control_type()
+            .map(|v| format!("{v:?}"))
+            .unwrap_or_default();
+        let bounds = element
+            .get_bounding_rectangle()
+            .map(|v| format!("{v:?}"))
+            .unwrap_or_default();
+        let key = format!("{runtime_id}|{control}|{bounds}");
+        if last_key.as_deref() == Some(key.as_str()) {
+            return (true, Some(element));
+        }
+        last_key = Some(key);
+        last_element = Some(element);
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    (false, last_element)
+}
+
+fn describe_element(element: &UIElement) -> FocusedElementInfo {
+    let role = element.get_control_type().ok().map(|v| format!("{v:?}"));
+    let editable = role
+        .as_deref()
+        .map(|v| v == "Edit" || v == "Document")
+        .unwrap_or(false)
+        || element.get_pattern::<UITextPattern>().is_ok()
+        || element
+            .get_pattern::<UIValuePattern>()
+            .ok()
+            .and_then(|p| p.is_readonly().ok())
+            .map(|v| !v)
+            .unwrap_or(false);
+
+    FocusedElementInfo {
+        role,
+        name: element.get_name().ok().filter(|v| !v.trim().is_empty()),
+        class_name: element
+            .get_classname()
+            .ok()
+            .filter(|v| !v.trim().is_empty()),
+        automation_id: element
+            .get_automation_id()
+            .ok()
+            .filter(|v| !v.trim().is_empty()),
+        editable,
+        has_keyboard_focus: element.has_keyboard_focus().unwrap_or(false),
+    }
+}
+
+fn extract_input_state(element: &UIElement, max_chars: usize) -> Option<InputContext> {
+    let text_pattern = element.get_pattern::<UITextPattern>().ok()?;
+    let document = text_pattern.get_document_range().ok()?;
+    let full_text = document.get_text(max_chars as i32).ok().filter(|v| !v.trim().is_empty());
+
+    let mut selection_text = None;
+    let mut selection_start = None;
+    let mut selection_end = None;
+    if let Ok(mut selections) = text_pattern.get_selection() {
+        if let Some(selection) = selections.pop() {
+            selection_text = selection
+                .get_text(max_chars as i32)
+                .ok()
+                .filter(|v| !v.trim().is_empty());
+            selection_start = document
+                .compare_endpoints(TextPatternRangeEndpoint::Start, &selection, TextPatternRangeEndpoint::Start)
+                .ok();
+            selection_end = document
+                .compare_endpoints(TextPatternRangeEndpoint::Start, &selection, TextPatternRangeEndpoint::End)
+                .ok();
+        }
+    }
+
+    let (before_text, after_text) = if let Ok((_, caret)) = text_pattern.get_caret_range() {
+        let before = document.clone();
+        let after = document.clone();
+        let _ = before.move_endpoint_by_range(
+            TextPatternRangeEndpoint::End,
+            &caret,
+            TextPatternRangeEndpoint::Start,
+        );
+        let _ = after.move_endpoint_by_range(
+            TextPatternRangeEndpoint::Start,
+            &caret,
+            TextPatternRangeEndpoint::End,
+        );
+        (
+            before.get_text(max_chars as i32).ok().filter(|v| !v.trim().is_empty()),
+            after.get_text(max_chars as i32).ok().filter(|v| !v.trim().is_empty()),
+        )
+    } else {
+        (None, None)
+    };
+
+    Some(InputContext {
+        selection_text,
+        selection_start,
+        selection_end,
+        before_text,
+        after_text,
+        full_text,
+    })
+}
+
+fn extract_related_content(
+    automation: &UIAutomation,
+    _window_root: &UIElement,
+    focused: &UIElement,
+    max_chars: usize,
+) -> Option<RelatedContent> {
+    let walker = automation.create_tree_walker().ok()?;
+    let parent = walker.get_parent(focused).ok()?;
+    let siblings = walker.get_children(&parent)?;
+    let mut before = String::new();
+    let mut after = String::new();
+    let mut seen_focus = false;
+    for sibling in siblings {
+        let is_focus = automation.compare_elements(&sibling, focused).unwrap_or(false);
+        if is_focus {
+            seen_focus = true;
+            continue;
+        }
+        let text = collect_element_text(&sibling, max_chars / 2);
+        if text.is_empty() {
+            continue;
+        }
+        if seen_focus {
+            if !after.is_empty() {
+                after.push('\n');
+            }
+            after.push_str(&text);
+        } else {
+            if !before.is_empty() {
+                before.push('\n');
+            }
+            before.push_str(&text);
+        }
+    }
+    if before.trim().is_empty() && after.trim().is_empty() {
+        return None;
+    }
+    Some(RelatedContent {
+        before_text: non_empty_trimmed(before),
+        after_text: non_empty_trimmed(after),
+    })
+}
+
+fn collect_visible_text(
+    automation: &UIAutomation,
+    root: &UIElement,
+    max_chars: usize,
+) -> Option<String> {
+    let condition = automation.create_true_condition().ok()?;
+    let descendants = root.find_all(TreeScope::Descendants, &condition).ok()?;
+    let mut out = String::new();
+    for element in descendants {
+        if out.chars().count() >= max_chars {
+            break;
+        }
+        if element.is_offscreen().unwrap_or(false) {
+            continue;
+        }
+        let text = collect_element_text(&element, 240);
+        if text.is_empty() {
+            continue;
+        }
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(&text);
+    }
+    non_empty_trimmed(truncate_chars(&out, max_chars))
+}
+
+fn collect_element_text(element: &UIElement, max_chars: usize) -> String {
+    let mut candidates = Vec::new();
+    if let Ok(name) = element.get_name() {
+        if !name.trim().is_empty() {
+            candidates.push(name);
+        }
+    }
+    if let Ok(value_pattern) = element.get_pattern::<UIValuePattern>() {
+        if let Ok(value) = value_pattern.get_value() {
+            if !value.trim().is_empty() {
+                candidates.push(value);
+            }
+        }
+    }
+    for item in candidates {
+        let trimmed = truncate_chars(item.trim(), max_chars);
+        if !trimmed.is_empty() {
+            return trimmed;
+        }
+    }
+    String::new()
+}
+
+fn find_browser_url(automation: &UIAutomation, root: &UIElement) -> Option<String> {
+    let condition = automation.create_true_condition().ok()?;
+    let descendants = root.find_all(TreeScope::Descendants, &condition).ok()?;
+    for element in descendants {
+        let role = element.get_control_type().ok()?;
+        if role != ControlType::Edit {
+            continue;
+        }
+        let name = element.get_name().unwrap_or_default().to_ascii_lowercase();
+        if !name.contains("address") && !name.contains("search") {
+            continue;
+        }
+        let value = element
+            .get_pattern::<UIValuePattern>()
+            .ok()
+            .and_then(|p| p.get_value().ok())
+            .unwrap_or_default();
+        if value.starts_with("http://") || value.starts_with("https://") {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn detect_browser(process_image: Option<&str>) -> bool {
+    process_basename(process_image)
+        .map(|name| matches!(name.as_str(), "chrome.exe" | "msedge.exe" | "firefox.exe"))
+        .unwrap_or(false)
+}
+
+fn process_basename(process_image: Option<&str>) -> Option<String> {
+    let raw = process_image?.replace('/', "\\");
+    raw.rsplit('\\')
+        .next()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| !v.is_empty())
+}
+
+fn non_empty_trimmed(s: String) -> Option<String> {
+    let trimmed = s.trim().to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+fn truncate_chars(s: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    s.chars().take(max_chars).collect()
+}
+
+fn now_ms() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 fn get_window_title_best_effort(hwnd: HWND) -> Option<String> {
@@ -401,380 +666,6 @@ fn get_process_image_best_effort(pid: u32) -> Option<String> {
         buf.truncate(size as usize);
         Some(String::from_utf16_lossy(&buf).trim().to_string())
     }
-}
-
-fn last_error_u32() -> u32 {
-    unsafe { GetLastError() }
-}
-
-fn screenshot_err(
-    step: &str,
-    api: &str,
-    api_ret: String,
-    note: Option<String>,
-    window_w: u32,
-    window_h: u32,
-    max_side: u32,
-) -> ScreenshotDiagError {
-    ScreenshotDiagError {
-        step: step.to_string(),
-        api: api.to_string(),
-        api_ret,
-        last_error: last_error_u32(),
-        note,
-        window_w,
-        window_h,
-        max_side,
-    }
-}
-
-fn capture_window_png_diagnose(
-    hwnd: HWND,
-    max_side: u32,
-) -> Result<ScreenshotRaw, ScreenshotDiagError> {
-    let mut rect = RECT {
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
-    };
-    let ok = unsafe { GetWindowRect(hwnd, &mut rect) };
-    if ok == 0 {
-        return Err(screenshot_err(
-            "get_window_rect",
-            "GetWindowRect",
-            "0".to_string(),
-            None,
-            0,
-            0,
-            max_side,
-        ));
-    }
-    let w = (rect.right - rect.left).max(0) as u32;
-    let h = (rect.bottom - rect.top).max(0) as u32;
-    if w == 0 || h == 0 {
-        // Not a WinAPI failure; still record as a diagnosable step.
-        return Err(ScreenshotDiagError {
-            step: "window_size".to_string(),
-            api: "GetWindowRect".to_string(),
-            api_ret: format!("w={w} h={h}"),
-            last_error: 0,
-            note: Some("window has zero size".to_string()),
-            window_w: w,
-            window_h: h,
-            max_side,
-        });
-    }
-
-    // Create a memory DC + bitmap and use PrintWindow.
-    unsafe {
-        let screen_dc = GetDC(std::ptr::null_mut());
-        if screen_dc.is_null() {
-            return Err(screenshot_err(
-                "get_dc",
-                "GetDC",
-                "NULL".to_string(),
-                None,
-                w,
-                h,
-                max_side,
-            ));
-        }
-
-        let mem_dc = CreateCompatibleDC(screen_dc);
-        if mem_dc.is_null() {
-            ReleaseDC(std::ptr::null_mut(), screen_dc);
-            return Err(screenshot_err(
-                "create_compatible_dc",
-                "CreateCompatibleDC",
-                "NULL".to_string(),
-                None,
-                w,
-                h,
-                max_side,
-            ));
-        }
-
-        let bmp = CreateCompatibleBitmap(screen_dc, w as i32, h as i32);
-        if bmp.is_null() {
-            DeleteDC(mem_dc);
-            ReleaseDC(std::ptr::null_mut(), screen_dc);
-            return Err(screenshot_err(
-                "create_compatible_bitmap",
-                "CreateCompatibleBitmap",
-                "NULL".to_string(),
-                None,
-                w,
-                h,
-                max_side,
-            ));
-        }
-
-        let old = SelectObject(mem_dc, bmp as _);
-        let hgdi_error = (-1isize) as *mut c_void;
-        if old.is_null() || old == hgdi_error {
-            let _ = DeleteObject(bmp as _);
-            let _ = DeleteDC(mem_dc);
-            let _ = ReleaseDC(std::ptr::null_mut(), screen_dc);
-            return Err(screenshot_err(
-                "select_object",
-                "SelectObject",
-                format!("{old:?}"),
-                Some("SelectObject failed".to_string()),
-                w,
-                h,
-                max_side,
-            ));
-        }
-        let pw_ok = PrintWindow(hwnd, mem_dc, 0);
-        ReleaseDC(std::ptr::null_mut(), screen_dc);
-
-        if pw_ok == 0 {
-            let _ = SelectObject(mem_dc, old);
-            let _ = DeleteObject(bmp as _);
-            let _ = DeleteDC(mem_dc);
-            return Err(screenshot_err(
-                "print_window",
-                "PrintWindow",
-                "0".to_string(),
-                None,
-                w,
-                h,
-                max_side,
-            ));
-        }
-
-        let (out_w, out_h) = clamp_size(w, h, max_side);
-        let mut rgba = vec![0u8; (out_w as usize) * (out_h as usize) * 4];
-
-        // Read raw BGRA pixels first, then resize/convert in one pass.
-        let mut src_bgra = vec![0u8; (w as usize) * (h as usize) * 4];
-        let mut bi = BITMAPINFO {
-            bmiHeader: BITMAPINFOHEADER {
-                biSize: size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: w as i32,
-                // Negative height requests a top-down DIB (no vertical flip needed).
-                biHeight: -(h as i32),
-                biPlanes: 1,
-                biBitCount: 32,
-                biCompression: BI_RGB as u32,
-                biSizeImage: 0,
-                biXPelsPerMeter: 0,
-                biYPelsPerMeter: 0,
-                biClrUsed: 0,
-                biClrImportant: 0,
-            },
-            bmiColors: [RGBQUAD {
-                rgbBlue: 0,
-                rgbGreen: 0,
-                rgbRed: 0,
-                rgbReserved: 0,
-            }; 1],
-        };
-
-        let got = GetDIBits(
-            mem_dc,
-            bmp,
-            0,
-            h as u32,
-            src_bgra.as_mut_ptr() as *mut c_void,
-            &mut bi,
-            DIB_RGB_COLORS,
-        );
-        let _ = SelectObject(mem_dc, old);
-        let _ = DeleteObject(bmp as _);
-        let _ = DeleteDC(mem_dc);
-        if got == 0 {
-            return Err(screenshot_err(
-                "get_dibits",
-                "GetDIBits",
-                "0".to_string(),
-                None,
-                w,
-                h,
-                max_side,
-            ));
-        }
-
-        if is_effectively_black_bgra(&src_bgra) {
-            return Err(ScreenshotDiagError {
-                step: "validate_pixels".to_string(),
-                api: "pixel_check".to_string(),
-                api_ret: "all_black".to_string(),
-                last_error: 0,
-                note: Some("captured frame is effectively black".to_string()),
-                window_w: w,
-                window_h: h,
-                max_side,
-            });
-        }
-
-        resize_convert_bgra_to_rgba(&src_bgra, w, h, &mut rgba, out_w, out_h);
-        let png_bytes =
-            encode_png_rgba(&rgba, out_w, out_h).ok_or_else(|| ScreenshotDiagError {
-                step: "encode_png".to_string(),
-                api: "png::Encoder".to_string(),
-                api_ret: "None".to_string(),
-                last_error: 0,
-                note: Some("encode_png_rgba returned None".to_string()),
-                window_w: w,
-                window_h: h,
-                max_side,
-            })?;
-        Ok(ScreenshotRaw {
-            png_bytes,
-            width: out_w,
-            height: out_h,
-        })
-    }
-}
-
-fn is_effectively_black_bgra(src_bgra: &[u8]) -> bool {
-    if src_bgra.len() < 4 {
-        return true;
-    }
-    let px_count = src_bgra.len() / 4;
-    let stride = (px_count / 4096).max(1);
-    let mut sampled = 0usize;
-    let mut bright = 0usize;
-    let mut i = 0usize;
-    while i < px_count {
-        let idx = i * 4;
-        let b = src_bgra[idx] as f32;
-        let g = src_bgra[idx + 1] as f32;
-        let r = src_bgra[idx + 2] as f32;
-        let y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        sampled += 1;
-        if y > 20.0 {
-            bright += 1;
-        }
-        i += stride;
-    }
-    bright * 1000 <= sampled
-}
-
-fn clamp_size(w: u32, h: u32, max_side: u32) -> (u32, u32) {
-    if max_side == 0 {
-        return (w, h);
-    }
-    let m = w.max(h);
-    if m <= max_side {
-        return (w, h);
-    }
-    let scale = max_side as f64 / (m as f64);
-    let nw = ((w as f64) * scale).round().max(1.0) as u32;
-    let nh = ((h as f64) * scale).round().max(1.0) as u32;
-    (nw, nh)
-}
-
-fn resize_convert_bgra_to_rgba(
-    src_bgra: &[u8],
-    src_w: u32,
-    src_h: u32,
-    dst_rgba: &mut [u8],
-    dst_w: u32,
-    dst_h: u32,
-) {
-    if src_w == dst_w && src_h == dst_h {
-        // Fast path: just convert BGRA -> RGBA.
-        for y in 0..dst_h {
-            for x in 0..dst_w {
-                let sidx = ((y * src_w + x) as usize) * 4;
-                let didx = ((y * dst_w + x) as usize) * 4;
-                let b = src_bgra.get(sidx).copied().unwrap_or(0);
-                let g = src_bgra.get(sidx + 1).copied().unwrap_or(0);
-                let r = src_bgra.get(sidx + 2).copied().unwrap_or(0);
-                let a = src_bgra.get(sidx + 3).copied().unwrap_or(255);
-                dst_rgba[didx] = r;
-                dst_rgba[didx + 1] = g;
-                dst_rgba[didx + 2] = b;
-                dst_rgba[didx + 3] = a;
-            }
-        }
-        return;
-    }
-
-    // Bilinear resize + BGRA -> RGBA conversion.
-    // This improves readability for downscaled UI screenshots compared to nearest-neighbor.
-    let src_w_f = (src_w as f32).max(1.0);
-    let src_h_f = (src_h as f32).max(1.0);
-    let dst_w_f = (dst_w as f32).max(1.0);
-    let dst_h_f = (dst_h as f32).max(1.0);
-
-    for y in 0..dst_h {
-        // Center-sampling mapping (reduces aliasing compared to edge mapping).
-        let fy = ((y as f32) + 0.5) * (src_h_f / dst_h_f) - 0.5;
-        let fy = fy.clamp(0.0, src_h_f - 1.0);
-        let y0 = fy.floor() as u32;
-        let y1 = (y0 + 1).min(src_h.saturating_sub(1));
-        let wy = fy - (y0 as f32);
-
-        for x in 0..dst_w {
-            let fx = ((x as f32) + 0.5) * (src_w_f / dst_w_f) - 0.5;
-            let fx = fx.clamp(0.0, src_w_f - 1.0);
-            let x0 = fx.floor() as u32;
-            let x1 = (x0 + 1).min(src_w.saturating_sub(1));
-            let wx = fx - (x0 as f32);
-
-            let p00 = ((y0 * src_w + x0) as usize) * 4;
-            let p10 = ((y0 * src_w + x1) as usize) * 4;
-            let p01 = ((y1 * src_w + x0) as usize) * 4;
-            let p11 = ((y1 * src_w + x1) as usize) * 4;
-
-            let b00 = src_bgra.get(p00).copied().unwrap_or(0) as f32;
-            let g00 = src_bgra.get(p00 + 1).copied().unwrap_or(0) as f32;
-            let r00 = src_bgra.get(p00 + 2).copied().unwrap_or(0) as f32;
-            let a00 = src_bgra.get(p00 + 3).copied().unwrap_or(255) as f32;
-
-            let b10 = src_bgra.get(p10).copied().unwrap_or(0) as f32;
-            let g10 = src_bgra.get(p10 + 1).copied().unwrap_or(0) as f32;
-            let r10 = src_bgra.get(p10 + 2).copied().unwrap_or(0) as f32;
-            let a10 = src_bgra.get(p10 + 3).copied().unwrap_or(255) as f32;
-
-            let b01 = src_bgra.get(p01).copied().unwrap_or(0) as f32;
-            let g01 = src_bgra.get(p01 + 1).copied().unwrap_or(0) as f32;
-            let r01 = src_bgra.get(p01 + 2).copied().unwrap_or(0) as f32;
-            let a01 = src_bgra.get(p01 + 3).copied().unwrap_or(255) as f32;
-
-            let b11 = src_bgra.get(p11).copied().unwrap_or(0) as f32;
-            let g11 = src_bgra.get(p11 + 1).copied().unwrap_or(0) as f32;
-            let r11 = src_bgra.get(p11 + 2).copied().unwrap_or(0) as f32;
-            let a11 = src_bgra.get(p11 + 3).copied().unwrap_or(255) as f32;
-
-            let b0 = b00 * (1.0 - wx) + b10 * wx;
-            let g0 = g00 * (1.0 - wx) + g10 * wx;
-            let r0 = r00 * (1.0 - wx) + r10 * wx;
-            let a0 = a00 * (1.0 - wx) + a10 * wx;
-
-            let b1 = b01 * (1.0 - wx) + b11 * wx;
-            let g1 = g01 * (1.0 - wx) + g11 * wx;
-            let r1 = r01 * (1.0 - wx) + r11 * wx;
-            let a1 = a01 * (1.0 - wx) + a11 * wx;
-
-            let b = b0 * (1.0 - wy) + b1 * wy;
-            let g = g0 * (1.0 - wy) + g1 * wy;
-            let r = r0 * (1.0 - wy) + r1 * wy;
-            let a = a0 * (1.0 - wy) + a1 * wy;
-
-            let didx = ((y * dst_w + x) as usize) * 4;
-            dst_rgba[didx] = r.round().clamp(0.0, 255.0) as u8;
-            dst_rgba[didx + 1] = g.round().clamp(0.0, 255.0) as u8;
-            dst_rgba[didx + 2] = b.round().clamp(0.0, 255.0) as u8;
-            dst_rgba[didx + 3] = a.round().clamp(0.0, 255.0) as u8;
-        }
-    }
-}
-
-fn encode_png_rgba(rgba: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
-    let mut out = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut out, w, h);
-        enc.set_color(png::ColorType::Rgba);
-        enc.set_depth(png::BitDepth::Eight);
-        let mut writer = enc.write_header().ok()?;
-        writer.write_image_data(rgba).ok()?;
-    }
-    Some(out)
 }
 
 #[derive(Debug, Clone)]
@@ -820,7 +711,6 @@ fn read_clipboard_text_diagnose() -> Result<Option<String>, ClipboardDiagError> 
             });
         }
 
-        // Find NUL terminator.
         let mut len = 0usize;
         loop {
             let v = *ptr.add(len);
@@ -828,7 +718,6 @@ fn read_clipboard_text_diagnose() -> Result<Option<String>, ClipboardDiagError> 
                 break;
             }
             len += 1;
-            // guard against absurd clipboard sizes
             if len > 200_000 {
                 break;
             }

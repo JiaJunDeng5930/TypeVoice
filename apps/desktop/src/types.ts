@@ -64,13 +64,25 @@ export type Settings = {
   auto_paste_enabled?: boolean | null;
   rewrite_include_glossary?: boolean | null;
 
+  context_capture_mode?: string | null;
   context_include_history?: boolean | null;
   context_history_n?: number | null;
   context_history_window_ms?: number | null;
+  context_input_max_chars?: number | null;
+  context_related_before_chars?: number | null;
+  context_related_after_chars?: number | null;
+  context_visible_text_max_chars?: number | null;
   context_include_clipboard?: boolean | null;
-  context_include_prev_window_screenshot?: boolean | null;
   context_include_prev_window_meta?: boolean | null;
-  llm_supports_vision?: boolean | null;
+  context_include_focused_app_meta?: boolean | null;
+  context_include_focused_element_meta?: boolean | null;
+  context_include_input_state?: boolean | null;
+  context_include_related_content?: boolean | null;
+  context_include_visible_text?: boolean | null;
+  context_app_allowlist?: string[] | null;
+  context_app_denylist?: string[] | null;
+  context_domain_allowlist?: string[] | null;
+  context_domain_denylist?: string[] | null;
 
   hotkeys_enabled?: boolean | null;
   hotkey_ptt?: string | null;

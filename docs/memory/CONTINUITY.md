@@ -96,6 +96,11 @@
 - [VERIFIED] 2026-02-27：误在 WSL 路径执行 `scripts/windows/windows_gate.ps1`，导致仓库 `.venv/pyvenv.cfg` 被改写为 Windows 解释器（`C:\\Python312`）。已执行 `/usr/bin/python3 -m venv --upgrade .venv` 原地修复，并验证 `./.venv/bin/python -m pytest tests -m quick -x` 通过（3 passed）。
 - [VERIFIED] 2026-02-27：Windows 工作区 `D:\\Projects\\TypeVoice` 已同步到最新提交 `4f08a50`（与 Linux 工作区一致）；随后执行 `scripts/windows/run-latest.ps1 -RepoRoot D:\\Projects\\TypeVoice`，编译通过并成功拉起 `typevoice-desktop.exe`（PID `31584`，StartTime `2026-02-27 14:52:50`，日志 `D:\\Projects\\TypeVoice\\tmp\\typevoice-logs\\tauri-latest-run.txt`）。
 - [VERIFIED] 2026-02-27：录音输入诊断日志已增强：`CMD.start_backend_recording` 现在记录 `record_input_spec`（实际传给 ffmpeg 的 dshow 输入）、`record_input_resolved_by`（匹配来源）与 `record_input_resolution_log`（每一步条件判断、失败原因与回退原因）。
+- [VERIFIED] 2026-03-18：上下文采集链路已切换为文本结构模型：`ContextSnapshot` 改为焦点应用/窗口、焦点元素、输入状态、相关文本、可见文本、历史、剪贴板、策略与采集诊断；窗口截图字段已移除。
+- [VERIFIED] 2026-03-18：Windows 上下文采集已接入 UI Automation 文本读取入口，并在前台目标为 TypeVoice 时优先退回最近 5 秒内的最后一个外部窗口元信息。
+- [VERIFIED] 2026-03-18：设置链路已扩展为可配置上下文模式、文本预算与 app/domain 规则；`SettingsScreen` 不再暴露 screenshot/vision 开关。
+- [VERIFIED] 2026-03-18：本轮本地回归已通过 `apps/desktop npm run build` 与 `apps/desktop/src-tauri cargo test -q`。
+- [VERIFIED] 2026-03-18：仓库根 Python 测试未执行，原因是当前工作区不存在项目级 `.venv/`；失败属于环境缺失而非代码回归。
 
 ### 当前工作集
 

@@ -1541,40 +1541,50 @@ fn update_settings(
 ) -> Result<Settings, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let patch_summary = serde_json::json!({
-        "asr_model": patch.asr_model.is_some(),
-        "asr_provider": patch.asr_provider.is_some(),
-        "remote_asr_url": patch.remote_asr_url.is_some(),
-        "remote_asr_model": patch.remote_asr_model.is_some(),
-        "remote_asr_concurrency": patch.remote_asr_concurrency.is_some(),
-        "llm_base_url": patch.llm_base_url.is_some(),
-        "llm_model": patch.llm_model.is_some(),
-        "llm_reasoning_effort": patch.llm_reasoning_effort.is_some(),
-        "record_input_strategy": patch.record_input_strategy.is_some(),
-        "record_follow_default_role": patch.record_follow_default_role.is_some(),
-        "record_fixed_endpoint_id": patch.record_fixed_endpoint_id.is_some(),
-        "record_fixed_friendly_name": patch.record_fixed_friendly_name.is_some(),
-        "rewrite_enabled": patch.rewrite_enabled.is_some(),
-        "rewrite_template_id": patch.rewrite_template_id.is_some(),
-        "rewrite_glossary": patch.rewrite_glossary.is_some(),
-        "auto_paste_enabled": patch.auto_paste_enabled.is_some(),
-        "rewrite_include_glossary": patch.rewrite_include_glossary.is_some(),
-        "context_include_history": patch.context_include_history.is_some(),
-        "context_history_n": patch.context_history_n.is_some(),
-        "context_history_window_ms": patch.context_history_window_ms.is_some(),
-        "context_include_clipboard": patch.context_include_clipboard.is_some(),
-        "context_include_prev_window_meta": patch.context_include_prev_window_meta.is_some(),
-        "context_include_prev_window_screenshot": patch.context_include_prev_window_screenshot.is_some(),
-        "llm_supports_vision": patch.llm_supports_vision.is_some(),
-        "hotkeys_enabled": patch.hotkeys_enabled.is_some(),
-        "hotkey_ptt": patch.hotkey_ptt.is_some(),
-        "hotkey_toggle": patch.hotkey_toggle.is_some(),
-        "hotkeys_show_overlay": patch.hotkeys_show_overlay.is_some(),
-        "asr_preprocess_silence_trim_enabled": patch.asr_preprocess_silence_trim_enabled.is_some(),
-        "asr_preprocess_silence_threshold_db": patch
-            .asr_preprocess_silence_threshold_db
-            .is_some(),
-        "asr_preprocess_silence_start_ms": patch.asr_preprocess_silence_start_ms.is_some(),
-        "asr_preprocess_silence_end_ms": patch.asr_preprocess_silence_end_ms.is_some(),
+        "asr": patch.asr_model.is_some()
+            || patch.asr_provider.is_some()
+            || patch.remote_asr_url.is_some()
+            || patch.remote_asr_model.is_some()
+            || patch.remote_asr_concurrency.is_some(),
+        "llm": patch.llm_base_url.is_some()
+            || patch.llm_model.is_some()
+            || patch.llm_reasoning_effort.is_some()
+            || patch.rewrite_enabled.is_some()
+            || patch.rewrite_template_id.is_some()
+            || patch.rewrite_glossary.is_some()
+            || patch.rewrite_include_glossary.is_some(),
+        "recording": patch.record_input_strategy.is_some()
+            || patch.record_follow_default_role.is_some()
+            || patch.record_fixed_endpoint_id.is_some()
+            || patch.record_fixed_friendly_name.is_some()
+            || patch.asr_preprocess_silence_trim_enabled.is_some()
+            || patch.asr_preprocess_silence_threshold_db.is_some()
+            || patch.asr_preprocess_silence_start_ms.is_some()
+            || patch.asr_preprocess_silence_end_ms.is_some(),
+        "context": patch.context_capture_mode.is_some()
+            || patch.context_include_history.is_some()
+            || patch.context_history_n.is_some()
+            || patch.context_history_window_ms.is_some()
+            || patch.context_input_max_chars.is_some()
+            || patch.context_related_before_chars.is_some()
+            || patch.context_related_after_chars.is_some()
+            || patch.context_visible_text_max_chars.is_some()
+            || patch.context_include_clipboard.is_some()
+            || patch.context_include_prev_window_meta.is_some()
+            || patch.context_include_focused_app_meta.is_some()
+            || patch.context_include_focused_element_meta.is_some()
+            || patch.context_include_input_state.is_some()
+            || patch.context_include_related_content.is_some()
+            || patch.context_include_visible_text.is_some()
+            || patch.context_app_allowlist.is_some()
+            || patch.context_app_denylist.is_some()
+            || patch.context_domain_allowlist.is_some()
+            || patch.context_domain_denylist.is_some(),
+        "hotkeys": patch.hotkeys_enabled.is_some()
+            || patch.hotkey_ptt.is_some()
+            || patch.hotkey_toggle.is_some()
+            || patch.hotkeys_show_overlay.is_some(),
+        "export": patch.auto_paste_enabled.is_some(),
     });
     let span = cmd_span(&dir, None, "CMD.update_settings", Some(patch_summary));
     let cur = match settings::load_settings_strict(&dir) {

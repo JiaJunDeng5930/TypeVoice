@@ -2,25 +2,52 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::context_pack::{ContextBudget, ContextSnapshot, HistorySnippet};
+use crate::context_pack::{
+    ContextBudget, ContextCaptureDiag, ContextPolicyDecision, ContextSnapshot, FocusedWindowInfo,
+    HistorySnippet,
+};
 use crate::{history, settings};
 use crate::{obs, obs::Span};
 #[cfg(windows)]
-use anyhow::{anyhow, Result};
+use anyhow::Result;
+#[cfg(windows)]
+use url::Url;
 #[cfg(windows)]
 use uuid::Uuid;
 
-#[cfg(windows)]
-use crate::obs::debug;
+#[derive(Debug, Clone)]
+pub struct ContextRules {
+    pub capture_mode: String,
+    pub app_allowlist: Vec<String>,
+    pub app_denylist: Vec<String>,
+    pub domain_allowlist: Vec<String>,
+    pub domain_denylist: Vec<String>,
+}
+
+impl Default for ContextRules {
+    fn default() -> Self {
+        Self {
+            capture_mode: "balanced".to_string(),
+            app_allowlist: Vec::new(),
+            app_denylist: Vec::new(),
+            domain_allowlist: Vec::new(),
+            domain_denylist: Vec::new(),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ContextConfig {
     pub include_history: bool,
     pub include_clipboard: bool,
     pub include_prev_window_meta: bool,
-    pub include_prev_window_screenshot: bool,
+    pub include_focused_app_meta: bool,
+    pub include_focused_element_meta: bool,
+    pub include_input_state: bool,
+    pub include_related_content: bool,
+    pub include_visible_text: bool,
     pub budget: ContextBudget,
-    pub llm_supports_vision: bool,
+    pub rules: ContextRules,
 }
 
 impl Default for ContextConfig {
@@ -29,9 +56,13 @@ impl Default for ContextConfig {
             include_history: true,
             include_clipboard: true,
             include_prev_window_meta: true,
-            include_prev_window_screenshot: true,
+            include_focused_app_meta: true,
+            include_focused_element_meta: true,
+            include_input_state: true,
+            include_related_content: true,
+            include_visible_text: true,
             budget: ContextBudget::default(),
-            llm_supports_vision: true,
+            rules: ContextRules::default(),
         }
     }
 }
@@ -44,23 +75,48 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+fn normalize_rules(values: &Option<Vec<String>>) -> Vec<String> {
+    values
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| !v.is_empty())
+        .collect()
+}
+
 pub fn config_from_settings(s: &settings::Settings) -> ContextConfig {
     let mut cfg = ContextConfig::default();
 
     if let Some(v) = s.context_include_clipboard {
         cfg.include_clipboard = v;
     }
-    if let Some(v) = s.context_include_prev_window_screenshot {
-        cfg.include_prev_window_screenshot = v;
-    }
     if let Some(v) = s.context_include_prev_window_meta {
         cfg.include_prev_window_meta = v;
+    }
+    if let Some(v) = s.context_include_focused_app_meta {
+        cfg.include_focused_app_meta = v;
+    }
+    if let Some(v) = s.context_include_focused_element_meta {
+        cfg.include_focused_element_meta = v;
+    }
+    if let Some(v) = s.context_include_input_state {
+        cfg.include_input_state = v;
+    }
+    if let Some(v) = s.context_include_related_content {
+        cfg.include_related_content = v;
+    }
+    if let Some(v) = s.context_include_visible_text {
+        cfg.include_visible_text = v;
     }
     if let Some(v) = s.context_include_history {
         cfg.include_history = v;
     }
-    if let Some(v) = s.llm_supports_vision {
-        cfg.llm_supports_vision = v;
+    if let Some(v) = s.context_capture_mode.as_deref() {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            cfg.rules.capture_mode = trimmed.to_ascii_lowercase();
+        }
     }
 
     if let Some(n) = s.context_history_n {
@@ -73,19 +129,114 @@ pub fn config_from_settings(s: &settings::Settings) -> ContextConfig {
             cfg.budget.history_window_ms = ms;
         }
     }
+    if let Some(v) = s.context_input_max_chars {
+        if v > 0 {
+            cfg.budget.max_chars_input = v as usize;
+        }
+    }
+    if let Some(v) = s.context_related_before_chars {
+        if v > 0 {
+            cfg.budget.max_chars_related_side = v as usize;
+        }
+    }
+    if let Some(v) = s.context_visible_text_max_chars {
+        if v > 0 {
+            cfg.budget.max_chars_visible_text = v as usize;
+        }
+    }
+
+    cfg.rules.app_allowlist = normalize_rules(&s.context_app_allowlist);
+    cfg.rules.app_denylist = normalize_rules(&s.context_app_denylist);
+    cfg.rules.domain_allowlist = normalize_rules(&s.context_domain_allowlist);
+    cfg.rules.domain_denylist = normalize_rules(&s.context_domain_denylist);
+
     cfg
 }
 
-#[cfg(windows)]
-fn env_u32(key: &str, default: u32) -> u32 {
-    match std::env::var(key) {
-        Ok(v) => v
-            .trim()
-            .parse::<u32>()
-            .ok()
-            .filter(|n| *n > 0)
-            .unwrap_or(default),
-        Err(_) => default,
+#[derive(Debug, Clone)]
+struct PolicyResolution {
+    app_rule: Option<String>,
+    domain_rule: Option<String>,
+    allow_related_content: bool,
+    allow_visible_text: bool,
+}
+
+fn process_basename(process_image: Option<&str>) -> Option<String> {
+    let raw = process_image?.replace('/', "\\");
+    raw.rsplit('\\')
+        .next()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| !v.is_empty())
+}
+
+fn extract_hostname(url: Option<&str>) -> Option<String> {
+    let raw = url?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    Url::parse(raw)
+        .ok()
+        .and_then(|v| v.host_str().map(|h| h.to_ascii_lowercase()))
+}
+
+fn resolve_policy(
+    cfg: &ContextConfig,
+    process_image: Option<&str>,
+    url: Option<&str>,
+) -> PolicyResolution {
+    let app_name = process_basename(process_image);
+    let host = extract_hostname(url);
+    let app_rule = if let Some(name) = app_name.as_deref() {
+        if cfg.rules.app_allowlist.iter().any(|v| v == name) {
+            Some("allow".to_string())
+        } else if cfg.rules.app_denylist.iter().any(|v| v == name) {
+            Some("deny".to_string())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let domain_rule = if let Some(name) = host.as_deref() {
+        if cfg
+            .rules
+            .domain_allowlist
+            .iter()
+            .any(|v| name == v || name.ends_with(&format!(".{v}")))
+        {
+            Some("allow".to_string())
+        } else if cfg
+            .rules
+            .domain_denylist
+            .iter()
+            .any(|v| name == v || name.ends_with(&format!(".{v}")))
+        {
+            Some("deny".to_string())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let default_allow = cfg.rules.capture_mode != "minimal";
+    let allow_related_content = if matches!(app_rule.as_deref(), Some("allow"))
+        || matches!(domain_rule.as_deref(), Some("allow"))
+    {
+        true
+    } else if matches!(app_rule.as_deref(), Some("deny"))
+        || matches!(domain_rule.as_deref(), Some("deny"))
+    {
+        false
+    } else {
+        default_allow
+    };
+
+    PolicyResolution {
+        app_rule,
+        domain_rule,
+        allow_related_content,
+        allow_visible_text: allow_related_content,
     }
 }
 
@@ -139,119 +290,33 @@ impl ContextService {
         data_dir: &Path,
         cfg: &ContextConfig,
     ) -> Result<String> {
-        let max_side = env_u32("TYPEVOICE_CONTEXT_SCREENSHOT_MAX_SIDE", 1600);
         let span = Span::start(
             data_dir,
             None,
             "ContextCapture",
             "CTX.hotkey_capture_now",
             Some(serde_json::json!({
-                "max_side": max_side,
                 "include_prev_window_meta": cfg.include_prev_window_meta,
-                "include_prev_window_screenshot": cfg.include_prev_window_screenshot,
+                "include_focused_app_meta": cfg.include_focused_app_meta,
+                "include_focused_element_meta": cfg.include_focused_element_meta,
+                "include_input_state": cfg.include_input_state,
+                "include_related_content": cfg.include_related_content,
+                "include_visible_text": cfg.include_visible_text,
             })),
         );
 
-        if !cfg.include_prev_window_screenshot {
-            let mut g = self.inner.lock().unwrap();
-            let mut snapshot = ContextSnapshot {
-                recent_history: vec![],
-                clipboard_text: None,
-                prev_window: None,
-                screenshot: None,
-            };
-            if cfg.include_prev_window_meta {
-                if let Some(info) = g.win.foreground_window_info_best_effort() {
-                    snapshot.prev_window = Some(crate::context_pack::PrevWindowInfo {
-                        title: info.title,
-                        process_image: info.process_image,
-                    });
-                }
-            }
-            let capture_id = Uuid::new_v4().to_string();
-            g.hotkey_capture_registry
-                .insert(capture_id.clone(), StoredHotkeyCapture { snapshot });
-
-            span.ok(Some(serde_json::json!({
-                "capture_id": capture_id,
-                "has_title": g.hotkey_capture_registry.get(&capture_id).and_then(|v| v.snapshot.prev_window.as_ref()).and_then(|w| w.title.as_ref()).is_some(),
-                "has_process": g.hotkey_capture_registry.get(&capture_id).and_then(|v| v.snapshot.prev_window.as_ref()).and_then(|w| w.process_image.as_ref()).is_some(),
-                "screenshot_disabled": true,
-            })));
-            return Ok(capture_id);
-        }
-
         let mut g = self.inner.lock().unwrap();
-        let cap = g
-            .win
-            .capture_foreground_window_now_diag_best_effort(max_side);
-        let cap = match cap.capture {
-            Some(v) => v,
-            None => {
-                let err =
-                    cap.error
-                        .unwrap_or(crate::context_capture_windows::ScreenshotDiagError {
-                            step: "unknown".to_string(),
-                            api: "unknown".to_string(),
-                            api_ret: "none".to_string(),
-                            last_error: 0,
-                            note: Some("unknown capture failure".to_string()),
-                            window_w: 0,
-                            window_h: 0,
-                            max_side,
-                        });
-                span.err(
-                    "winapi",
-                    "E_HOTKEY_CAPTURE",
-                    err.note.as_deref().unwrap_or("hotkey capture failed"),
-                    Some(serde_json::json!({
-                        "step": err.step,
-                        "api": err.api,
-                        "api_ret": err.api_ret,
-                        "last_error": err.last_error,
-                        "window_w": err.window_w,
-                        "window_h": err.window_h,
-                        "max_side": err.max_side,
-                    })),
-                );
-                return Err(anyhow!(
-                    "E_HOTKEY_CAPTURE: {}",
-                    err.note.unwrap_or_else(|| "capture failed".to_string())
-                ));
-            }
-        };
-
-        let sha = crate::context_pack::sha256_hex(&cap.screenshot.png_bytes);
-        let snapshot = ContextSnapshot {
-            recent_history: vec![],
-            clipboard_text: None,
-            prev_window: if cfg.include_prev_window_meta {
-                Some(crate::context_pack::PrevWindowInfo {
-                    title: cap.window.title,
-                    process_image: cap.window.process_image,
-                })
-            } else {
-                None
-            },
-            screenshot: Some(crate::context_pack::ScreenshotPng {
-                png_bytes: cap.screenshot.png_bytes,
-                width: cap.screenshot.width,
-                height: cap.screenshot.height,
-                sha256_hex: sha,
-            }),
-        };
+        let snapshot = self.capture_runtime_snapshot(&g.win, cfg, false);
         let capture_id = Uuid::new_v4().to_string();
         g.hotkey_capture_registry
-            .insert(capture_id.clone(), StoredHotkeyCapture { snapshot });
+            .insert(capture_id.clone(), StoredHotkeyCapture { snapshot: snapshot.clone() });
 
         span.ok(Some(serde_json::json!({
             "capture_id": capture_id,
-            "hwnd": cap.hwnd,
-            "pid": cap.pid,
-            "has_title": g.hotkey_capture_registry.get(&capture_id).and_then(|v| v.snapshot.prev_window.as_ref()).and_then(|w| w.title.as_ref()).is_some(),
-            "has_process": g.hotkey_capture_registry.get(&capture_id).and_then(|v| v.snapshot.prev_window.as_ref()).and_then(|w| w.process_image.as_ref()).is_some(),
-            "w": g.hotkey_capture_registry.get(&capture_id).and_then(|v| v.snapshot.screenshot.as_ref()).map(|s| s.width).unwrap_or(0),
-            "h": g.hotkey_capture_registry.get(&capture_id).and_then(|v| v.snapshot.screenshot.as_ref()).map(|s| s.height).unwrap_or(0),
+            "has_focused_app": snapshot.focused_app.is_some(),
+            "has_focused_element": snapshot.focused_element.is_some(),
+            "has_input_state": snapshot.input_state.is_some(),
+            "has_visible_text": snapshot.visible_text.is_some(),
         })));
         Ok(capture_id)
     }
@@ -308,10 +373,12 @@ impl ContextService {
                 "include_history": cfg.include_history,
                 "include_clipboard": cfg.include_clipboard,
                 "include_prev_window_meta": cfg.include_prev_window_meta,
-                "include_prev_window_screenshot": cfg.include_prev_window_screenshot,
-                "max_history_items": cfg.budget.max_history_items,
-                "history_window_ms": cfg.budget.history_window_ms,
-                "llm_supports_vision": cfg.llm_supports_vision,
+                "include_focused_app_meta": cfg.include_focused_app_meta,
+                "include_focused_element_meta": cfg.include_focused_element_meta,
+                "include_input_state": cfg.include_input_state,
+                "include_related_content": cfg.include_related_content,
+                "include_visible_text": cfg.include_visible_text,
+                "capture_mode": cfg.rules.capture_mode,
             })),
         );
 
@@ -349,167 +416,21 @@ impl ContextService {
                     })));
                 }
                 Err(e) => {
-                    span.err(
-                        "io",
-                        "E_HISTORY_LIST",
-                        &e.to_string(),
-                        Some(serde_json::json!({
-                            "db": "history.sqlite3",
-                        })),
-                    );
-                    // best-effort: ignore history failures.
+                    span.err("io", "E_HISTORY_LIST", &e.to_string(), None);
                 }
             }
         }
 
-        if cfg.include_clipboard {
-            #[cfg(windows)]
-            {
-                let g = self.inner.lock().unwrap();
-                let span = Span::start(
-                    data_dir,
-                    Some(task_id),
-                    "ContextCapture",
-                    "CTX.clipboard.read",
-                    None,
-                );
-                let r = g.win.read_clipboard_text_diag_best_effort();
-                snap.clipboard_text = r.text;
-                match r.diag.status.as_str() {
-                    "ok" => span.ok(Some(serde_json::json!({"bytes": snap.clipboard_text.as_deref().map(|s| s.len()).unwrap_or(0)}))),
-                    "skipped" => span.skipped(
-                        r.diag.note.as_deref().unwrap_or("skipped"),
-                        Some(serde_json::json!({"step": r.diag.step, "last_error": r.diag.last_error})),
-                    ),
-                    _ => span.err(
-                        "winapi",
-                        "E_CLIPBOARD",
-                        r.diag.note.as_deref().unwrap_or("clipboard read failed"),
-                        Some(serde_json::json!({"step": r.diag.step, "last_error": r.diag.last_error})),
-                    ),
-                }
+        #[cfg(windows)]
+        {
+            let g = self.inner.lock().unwrap();
+            snap = self.capture_runtime_snapshot(&g.win, cfg, true);
+            if cfg.include_clipboard {
+                let clip = g.win.read_clipboard_text_diag_best_effort();
+                snap.clipboard_text = clip.text;
             }
         }
 
-        if cfg.include_prev_window_meta {
-            #[cfg(windows)]
-            {
-                let g = self.inner.lock().unwrap();
-                let info_span = Span::start(
-                    data_dir,
-                    Some(task_id),
-                    "ContextCapture",
-                    "CTX.prev_window.info",
-                    None,
-                );
-                if let Some(info) = g.win.foreground_window_info_best_effort() {
-                    snap.prev_window = Some(crate::context_pack::PrevWindowInfo {
-                        title: info.title,
-                        process_image: info.process_image,
-                    });
-                    info_span.ok(Some(serde_json::json!({
-                        "has_title": snap.prev_window.as_ref().and_then(|w| w.title.as_ref()).is_some(),
-                        "has_process": snap.prev_window.as_ref().and_then(|w| w.process_image.as_ref()).is_some(),
-                    })));
-                } else {
-                    info_span.skipped("no_last_external_window", None);
-                }
-            }
-        }
-
-        if cfg.include_prev_window_screenshot {
-            #[cfg(windows)]
-            {
-                let g = self.inner.lock().unwrap();
-                let shot_span = Span::start(
-                    data_dir,
-                    Some(task_id),
-                    "ContextCapture",
-                    "CTX.prev_window.screenshot",
-                    {
-                        let max_side = env_u32("TYPEVOICE_CONTEXT_SCREENSHOT_MAX_SIDE", 1600);
-                        Some(serde_json::json!({"max_side": max_side}))
-                    },
-                );
-                let max_side = env_u32("TYPEVOICE_CONTEXT_SCREENSHOT_MAX_SIDE", 1600);
-                let sc = g
-                    .win
-                    .capture_foreground_window_now_diag_best_effort(max_side);
-                let capture = sc.capture;
-                let error = sc.error;
-                if let Some(raw_capture) = capture {
-                    let sha = crate::context_pack::sha256_hex(&raw_capture.screenshot.png_bytes);
-                    snap.screenshot = Some(crate::context_pack::ScreenshotPng {
-                        width: raw_capture.screenshot.width,
-                        height: raw_capture.screenshot.height,
-                        sha256_hex: sha,
-                        png_bytes: raw_capture.screenshot.png_bytes,
-                    });
-                    if cfg.include_prev_window_meta {
-                        snap.prev_window = Some(crate::context_pack::PrevWindowInfo {
-                            title: raw_capture.window.title,
-                            process_image: raw_capture.window.process_image,
-                        });
-                    }
-                    shot_span.ok(Some(serde_json::json!({
-                        "w": snap.screenshot.as_ref().unwrap().width,
-                        "h": snap.screenshot.as_ref().unwrap().height,
-                        "bytes": snap.screenshot.as_ref().unwrap().png_bytes.len(),
-                        "sha256": snap.screenshot.as_ref().unwrap().sha256_hex,
-                        "max_side": max_side,
-                    })));
-
-                    // Optional debug artifact: persist the screenshot PNG for manual inspection.
-                    // This is OFF by default because screenshots are sensitive.
-                    if debug::verbose_enabled() && debug::include_screenshots() {
-                        if let Some(sc) = snap.screenshot.as_ref() {
-                            if let Some(info) = debug::write_payload_binary_no_truncate_best_effort(
-                                data_dir,
-                                task_id,
-                                "prev_window.png",
-                                sc.png_bytes.clone(),
-                            ) {
-                                debug::emit_debug_event_best_effort(
-                                    data_dir,
-                                    "debug_prev_window_png",
-                                    task_id,
-                                    &info,
-                                    Some(format!(
-                                        "w={} h={} bytes={} sha256={}",
-                                        sc.width,
-                                        sc.height,
-                                        sc.png_bytes.len(),
-                                        sc.sha256_hex
-                                    )),
-                                );
-                            }
-                        }
-                    }
-                } else if let Some(err) = error {
-                    shot_span.err(
-                        "winapi",
-                        "E_SCREENSHOT",
-                        &err.note
-                            .clone()
-                            .unwrap_or_else(|| "screenshot failed".to_string()),
-                        Some(serde_json::json!({
-                            "step": err.step,
-                            "api": err.api,
-                            "api_ret": err.api_ret,
-                            "last_error": err.last_error,
-                            "window_w": err.window_w,
-                            "window_h": err.window_h,
-                            "max_side": err.max_side,
-                        })),
-                    );
-                } else {
-                    shot_span.skipped("no_window_or_invalid", None);
-                }
-            }
-        }
-
-        // Mark the overall span as ok (it may contain inner errs/skips).
-        // Note: we intentionally do not fail the pipeline based on context capture.
         obs::event(
             data_dir,
             Some(task_id),
@@ -519,12 +440,102 @@ impl ContextService {
             Some(serde_json::json!({
                 "history_items": snap.recent_history.len(),
                 "clipboard_bytes": snap.clipboard_text.as_deref().map(|s| s.len()).unwrap_or(0),
-                "has_prev_window": snap.prev_window.is_some(),
-                "has_screenshot": snap.screenshot.is_some(),
+                "has_focused_app": snap.focused_app.is_some(),
+                "has_focused_element": snap.focused_element.is_some(),
+                "has_input_state": snap.input_state.is_some(),
+                "has_visible_text": snap.visible_text.is_some(),
             })),
         );
         _span_all.ok(None);
 
+        snap
+    }
+
+    #[cfg(windows)]
+    fn capture_runtime_snapshot(
+        &self,
+        win: &crate::context_capture_windows::WindowsContext,
+        cfg: &ContextConfig,
+        allow_last_external: bool,
+    ) -> ContextSnapshot {
+        let mut captured = win.capture_foreground_text_context_best_effort(cfg);
+        let self_process = process_basename(
+            captured
+                .focused_app
+                .as_ref()
+                .and_then(|v| v.process_image.as_deref()),
+        );
+        if allow_last_external && matches!(self_process.as_deref(), Some("typevoice-desktop.exe")) {
+            if let Some(last_external) = win.capture_last_external_text_context_best_effort(cfg, 5_000)
+            {
+                captured = last_external;
+            }
+        }
+
+        let policy = resolve_policy(
+            cfg,
+            captured
+                .focused_app
+                .as_ref()
+                .and_then(|v| v.process_image.as_deref()),
+            captured.focused_app.as_ref().and_then(|v| v.url.as_deref()),
+        );
+
+        let mut snap = ContextSnapshot {
+            recent_history: Vec::new(),
+            clipboard_text: None,
+            focused_app: if cfg.include_focused_app_meta {
+                captured.focused_app
+            } else {
+                None
+            },
+            focused_window: if cfg.include_prev_window_meta {
+                captured.focused_window
+            } else {
+                None
+            },
+            focused_element: if cfg.include_focused_element_meta {
+                captured.focused_element
+            } else {
+                None
+            },
+            input_state: if cfg.include_input_state {
+                captured.input_state
+            } else {
+                None
+            },
+            related_content: if cfg.include_related_content && policy.allow_related_content {
+                captured.related_content
+            } else {
+                None
+            },
+            visible_text: if cfg.include_visible_text && policy.allow_visible_text {
+                captured.visible_text
+            } else {
+                None
+            },
+            policy_decision: Some(ContextPolicyDecision {
+                capture_mode: cfg.rules.capture_mode.clone(),
+                app_rule: policy.app_rule.clone(),
+                domain_rule: policy.domain_rule.clone(),
+                allow_related_content: policy.allow_related_content,
+                allow_visible_text: policy.allow_visible_text,
+            }),
+            capture_diag: captured.capture_diag.or_else(|| {
+                Some(ContextCaptureDiag {
+                    target_source: Some("foreground".to_string()),
+                    target_age_ms: Some(0),
+                    focus_stable: false,
+                })
+            }),
+        };
+
+        if snap.focused_window.is_none() {
+            snap.focused_window = snap.focused_app.as_ref().map(|app| FocusedWindowInfo {
+                title: app.window_title.clone(),
+                class_name: None,
+            });
+        }
         snap
     }
 }

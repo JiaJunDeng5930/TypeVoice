@@ -1,6 +1,3 @@
-#[cfg(windows)]
-use sha2::{Digest, Sha256};
-
 #[derive(Debug, Clone)]
 pub struct HistorySnippet {
     pub created_at_ms: i64,
@@ -10,25 +7,74 @@ pub struct HistorySnippet {
 }
 
 #[derive(Debug, Clone)]
-pub struct PrevWindowInfo {
-    pub title: Option<String>,
+pub struct FocusedAppInfo {
     pub process_image: Option<String>,
+    pub window_title: Option<String>,
+    pub url: Option<String>,
+    pub is_browser: bool,
+    pub target_source: Option<String>,
 }
 
 #[derive(Debug, Clone)]
-pub struct ScreenshotPng {
-    pub png_bytes: Vec<u8>,
-    pub width: u32,
-    pub height: u32,
-    pub sha256_hex: String,
+pub struct FocusedWindowInfo {
+    pub title: Option<String>,
+    pub class_name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FocusedElementInfo {
+    pub role: Option<String>,
+    pub name: Option<String>,
+    pub class_name: Option<String>,
+    pub automation_id: Option<String>,
+    pub editable: bool,
+    pub has_keyboard_focus: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct InputContext {
+    pub selection_text: Option<String>,
+    pub selection_start: Option<i32>,
+    pub selection_end: Option<i32>,
+    pub before_text: Option<String>,
+    pub after_text: Option<String>,
+    pub full_text: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RelatedContent {
+    pub before_text: Option<String>,
+    pub after_text: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ContextPolicyDecision {
+    pub capture_mode: String,
+    pub app_rule: Option<String>,
+    pub domain_rule: Option<String>,
+    pub allow_related_content: bool,
+    pub allow_visible_text: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ContextCaptureDiag {
+    pub target_source: Option<String>,
+    pub target_age_ms: Option<i64>,
+    pub focus_stable: bool,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct ContextSnapshot {
     pub recent_history: Vec<HistorySnippet>,
     pub clipboard_text: Option<String>,
-    pub prev_window: Option<PrevWindowInfo>,
-    pub screenshot: Option<ScreenshotPng>,
+    pub focused_app: Option<FocusedAppInfo>,
+    pub focused_window: Option<FocusedWindowInfo>,
+    pub focused_element: Option<FocusedElementInfo>,
+    pub input_state: Option<InputContext>,
+    pub related_content: Option<RelatedContent>,
+    pub visible_text: Option<String>,
+    pub policy_decision: Option<ContextPolicyDecision>,
+    pub capture_diag: Option<ContextCaptureDiag>,
 }
 
 #[derive(Debug, Clone)]
@@ -37,6 +83,9 @@ pub struct ContextBudget {
     pub history_window_ms: i64,
     pub max_chars_per_history_item: usize,
     pub max_chars_clipboard: usize,
+    pub max_chars_input: usize,
+    pub max_chars_related_side: usize,
+    pub max_chars_visible_text: usize,
     pub max_total_context_chars: usize,
 }
 
@@ -47,7 +96,10 @@ impl Default for ContextBudget {
             history_window_ms: 30 * 60 * 1000, // 30min
             max_chars_per_history_item: 600,
             max_chars_clipboard: 800,
-            max_total_context_chars: 3000,
+            max_chars_input: 4_096,
+            max_chars_related_side: 1_200,
+            max_chars_visible_text: 4_000,
+            max_total_context_chars: 6_000,
         }
     }
 }
@@ -55,7 +107,6 @@ impl Default for ContextBudget {
 #[derive(Debug, Clone)]
 pub struct PreparedContext {
     pub user_text: String,
-    pub screenshot: Option<ScreenshotPng>,
 }
 
 fn clamp_chars(s: &str, max_chars: usize) -> String {
@@ -80,10 +131,7 @@ fn clamp_chars(s: &str, max_chars: usize) -> String {
 }
 
 fn push_with_budget(dst: &mut String, s: &str, remaining: &mut usize) {
-    if *remaining == 0 {
-        return;
-    }
-    if s.is_empty() {
+    if *remaining == 0 || s.is_empty() {
         return;
     }
     let mut took = 0usize;
@@ -97,25 +145,189 @@ fn push_with_budget(dst: &mut String, s: &str, remaining: &mut usize) {
     *remaining = remaining.saturating_sub(took);
 }
 
+fn push_section(
+    context_out: &mut String,
+    title: &str,
+    body: &str,
+    remaining: &mut usize,
+    trailing_newline: bool,
+) {
+    let trimmed = body.trim();
+    if trimmed.is_empty() || *remaining == 0 {
+        return;
+    }
+    push_with_budget(context_out, title, remaining);
+    push_with_budget(context_out, "\n", remaining);
+    push_with_budget(context_out, trimmed, remaining);
+    push_with_budget(context_out, "\n", remaining);
+    if trailing_newline {
+        push_with_budget(context_out, "\n", remaining);
+    }
+}
+
 pub fn prepare(asr_text: &str, snap: &ContextSnapshot, budget: &ContextBudget) -> PreparedContext {
     let mut out = String::new();
     let mut context_out = String::new();
     let mut remaining = budget.max_total_context_chars;
 
-    // Always include transcript first; we do not apply context budget to transcript itself.
     out.push_str("### TRANSCRIPT\n");
     out.push_str(asr_text.trim());
     out.push_str("\n\n");
 
-    // Recent history
+    if let Some(app) = &snap.focused_app {
+        let mut body = String::new();
+        if let Some(v) = app.window_title.as_deref() {
+            body.push_str("title=");
+            body.push_str(&clamp_chars(v, 200));
+            body.push('\n');
+        }
+        if let Some(v) = app.process_image.as_deref() {
+            body.push_str("process=");
+            body.push_str(&clamp_chars(v, 260));
+            body.push('\n');
+        }
+        if let Some(v) = app.url.as_deref() {
+            body.push_str("url=");
+            body.push_str(&clamp_chars(v, 300));
+            body.push('\n');
+        }
+        body.push_str("is_browser=");
+        body.push_str(if app.is_browser { "true" } else { "false" });
+        body.push('\n');
+        if let Some(v) = app.target_source.as_deref() {
+            body.push_str("target_source=");
+            body.push_str(&clamp_chars(v, 80));
+            body.push('\n');
+        }
+        push_section(&mut context_out, "#### FOCUSED APP", &body, &mut remaining, true);
+    }
+
+    if let Some(window) = &snap.focused_window {
+        let mut body = String::new();
+        if let Some(v) = window.title.as_deref() {
+            body.push_str("title=");
+            body.push_str(&clamp_chars(v, 200));
+            body.push('\n');
+        }
+        if let Some(v) = window.class_name.as_deref() {
+            body.push_str("class=");
+            body.push_str(&clamp_chars(v, 160));
+            body.push('\n');
+        }
+        push_section(&mut context_out, "#### FOCUSED WINDOW", &body, &mut remaining, true);
+    }
+
+    if let Some(element) = &snap.focused_element {
+        let mut body = String::new();
+        if let Some(v) = element.role.as_deref() {
+            body.push_str("role=");
+            body.push_str(&clamp_chars(v, 80));
+            body.push('\n');
+        }
+        if let Some(v) = element.name.as_deref() {
+            body.push_str("name=");
+            body.push_str(&clamp_chars(v, 200));
+            body.push('\n');
+        }
+        if let Some(v) = element.class_name.as_deref() {
+            body.push_str("class=");
+            body.push_str(&clamp_chars(v, 160));
+            body.push('\n');
+        }
+        if let Some(v) = element.automation_id.as_deref() {
+            body.push_str("automation_id=");
+            body.push_str(&clamp_chars(v, 120));
+            body.push('\n');
+        }
+        body.push_str("editable=");
+        body.push_str(if element.editable { "true" } else { "false" });
+        body.push('\n');
+        body.push_str("has_keyboard_focus=");
+        body.push_str(if element.has_keyboard_focus {
+            "true"
+        } else {
+            "false"
+        });
+        body.push('\n');
+        push_section(
+            &mut context_out,
+            "#### FOCUSED ELEMENT",
+            &body,
+            &mut remaining,
+            true,
+        );
+    }
+
+    if let Some(input) = &snap.input_state {
+        let mut body = String::new();
+        if let Some(v) = input.selection_start {
+            body.push_str("selection_start=");
+            body.push_str(&v.to_string());
+            body.push('\n');
+        }
+        if let Some(v) = input.selection_end {
+            body.push_str("selection_end=");
+            body.push_str(&v.to_string());
+            body.push('\n');
+        }
+        if let Some(v) = input.selection_text.as_deref() {
+            body.push_str("selection_text=\n");
+            body.push_str(&clamp_chars(v, budget.max_chars_input));
+            body.push('\n');
+        }
+        if let Some(v) = input.before_text.as_deref() {
+            body.push_str("before_text=\n");
+            body.push_str(&clamp_chars(v, budget.max_chars_input));
+            body.push('\n');
+        }
+        if let Some(v) = input.after_text.as_deref() {
+            body.push_str("after_text=\n");
+            body.push_str(&clamp_chars(v, budget.max_chars_input));
+            body.push('\n');
+        }
+        if let Some(v) = input.full_text.as_deref() {
+            body.push_str("full_text=\n");
+            body.push_str(&clamp_chars(v, budget.max_chars_input));
+            body.push('\n');
+        }
+        push_section(&mut context_out, "#### INPUT STATE", &body, &mut remaining, true);
+    }
+
+    if let Some(related) = &snap.related_content {
+        let mut body = String::new();
+        if let Some(v) = related.before_text.as_deref() {
+            body.push_str("before=\n");
+            body.push_str(&clamp_chars(v, budget.max_chars_related_side));
+            body.push('\n');
+        }
+        if let Some(v) = related.after_text.as_deref() {
+            body.push_str("after=\n");
+            body.push_str(&clamp_chars(v, budget.max_chars_related_side));
+            body.push('\n');
+        }
+        push_section(
+            &mut context_out,
+            "#### RELATED CONTENT",
+            &body,
+            &mut remaining,
+            true,
+        );
+    }
+
+    if let Some(v) = snap.visible_text.as_deref() {
+        let body = clamp_chars(v, budget.max_chars_visible_text);
+        push_section(
+            &mut context_out,
+            "#### VISIBLE WINDOW TEXT",
+            &body,
+            &mut remaining,
+            true,
+        );
+    }
+
     if !snap.recent_history.is_empty() && budget.max_history_items > 0 && remaining > 0 {
-        context_out.push_str("#### RECENT HISTORY\n");
-        let mut used_items = 0usize;
+        let mut body = String::new();
         for h in snap.recent_history.iter().take(budget.max_history_items) {
-            if remaining == 0 {
-                break;
-            }
-            used_items += 1;
             let txt = if !h.final_text.trim().is_empty() {
                 &h.final_text
             } else {
@@ -129,68 +341,88 @@ pub fn prepare(asr_text: &str, snap: &ContextSnapshot, budget: &ContextBudget) -
                 Some(tid) => format!("- [t={} template={}] ", h.created_at_ms, tid),
                 None => format!("- [t={}] ", h.created_at_ms),
             };
-            push_with_budget(&mut context_out, &meta, &mut remaining);
-            push_with_budget(&mut context_out, &clipped, &mut remaining);
-            push_with_budget(&mut context_out, "\n", &mut remaining);
+            body.push_str(&meta);
+            body.push_str(&clipped);
+            body.push('\n');
         }
-        if used_items > 0 {
-            push_with_budget(&mut context_out, "\n", &mut remaining);
-        }
+        push_section(
+            &mut context_out,
+            "#### RECENT HISTORY",
+            &body,
+            &mut remaining,
+            true,
+        );
     }
 
-    // Clipboard
     if let Some(cb) = snap.clipboard_text.as_deref() {
-        if remaining > 0 {
-            let clipped = clamp_chars(cb, budget.max_chars_clipboard);
-            if !clipped.is_empty() {
-                context_out.push_str("#### CLIPBOARD\n");
-                push_with_budget(&mut context_out, &clipped, &mut remaining);
-                push_with_budget(&mut context_out, "\n\n", &mut remaining);
-            }
-        }
+        let body = clamp_chars(cb, budget.max_chars_clipboard);
+        push_section(&mut context_out, "#### CLIPBOARD", &body, &mut remaining, true);
     }
 
-    // Previous window meta
-    if let Some(w) = &snap.prev_window {
-        if remaining > 0 {
-            context_out.push_str("#### PREVIOUS WINDOW\n");
-            if let Some(t) = w.title.as_deref() {
-                let v = clamp_chars(t, 200);
-                if !v.is_empty() {
-                    push_with_budget(&mut context_out, "title=", &mut remaining);
-                    push_with_budget(&mut context_out, &v, &mut remaining);
-                    push_with_budget(&mut context_out, "\n", &mut remaining);
-                }
-            }
-            if let Some(p) = w.process_image.as_deref() {
-                let v = clamp_chars(p, 260);
-                if !v.is_empty() {
-                    push_with_budget(&mut context_out, "process=", &mut remaining);
-                    push_with_budget(&mut context_out, &v, &mut remaining);
-                    push_with_budget(&mut context_out, "\n", &mut remaining);
-                }
-            }
-            push_with_budget(&mut context_out, "\n", &mut remaining);
+    if let Some(policy) = &snap.policy_decision {
+        let mut body = String::new();
+        body.push_str("capture_mode=");
+        body.push_str(&clamp_chars(&policy.capture_mode, 32));
+        body.push('\n');
+        if let Some(v) = policy.app_rule.as_deref() {
+            body.push_str("app_rule=");
+            body.push_str(&clamp_chars(v, 32));
+            body.push('\n');
         }
+        if let Some(v) = policy.domain_rule.as_deref() {
+            body.push_str("domain_rule=");
+            body.push_str(&clamp_chars(v, 64));
+            body.push('\n');
+        }
+        body.push_str("allow_related_content=");
+        body.push_str(if policy.allow_related_content {
+            "true"
+        } else {
+            "false"
+        });
+        body.push('\n');
+        body.push_str("allow_visible_text=");
+        body.push_str(if policy.allow_visible_text {
+            "true"
+        } else {
+            "false"
+        });
+        body.push('\n');
+        push_section(&mut context_out, "#### POLICY", &body, &mut remaining, true);
+    }
+
+    if let Some(diag) = &snap.capture_diag {
+        let mut body = String::new();
+        if let Some(v) = diag.target_source.as_deref() {
+            body.push_str("target_source=");
+            body.push_str(&clamp_chars(v, 80));
+            body.push('\n');
+        }
+        if let Some(v) = diag.target_age_ms {
+            body.push_str("target_age_ms=");
+            body.push_str(&v.to_string());
+            body.push('\n');
+        }
+        body.push_str("focus_stable=");
+        body.push_str(if diag.focus_stable { "true" } else { "false" });
+        body.push('\n');
+        push_section(
+            &mut context_out,
+            "#### CAPTURE DIAG",
+            &body,
+            &mut remaining,
+            false,
+        );
     }
 
     if !context_out.trim().is_empty() {
         out.push_str("### CONTEXT\n");
-        out.push_str(&context_out);
+        out.push_str(context_out.trim_end());
     }
 
     PreparedContext {
         user_text: out.trim_end().to_string(),
-        screenshot: snap.screenshot.clone(),
     }
-}
-
-#[cfg(windows)]
-pub fn sha256_hex(bytes: &[u8]) -> String {
-    let mut h = Sha256::new();
-    h.update(bytes);
-    let d = h.finalize();
-    hex::encode(d)
 }
 
 #[cfg(test)]
@@ -215,19 +447,63 @@ mod tests {
                 },
             ],
             clipboard_text: Some(" clip ".to_string()),
-            prev_window: Some(PrevWindowInfo {
-                title: Some("win".to_string()),
+            focused_app: Some(FocusedAppInfo {
                 process_image: Some("p.exe".to_string()),
+                window_title: Some("win".to_string()),
+                url: Some("https://example.com".to_string()),
+                is_browser: true,
+                target_source: Some("foreground".to_string()),
             }),
-            screenshot: None,
+            focused_window: Some(FocusedWindowInfo {
+                title: Some("win".to_string()),
+                class_name: Some("Chrome_WidgetWin_1".to_string()),
+            }),
+            focused_element: Some(FocusedElementInfo {
+                role: Some("Edit".to_string()),
+                name: Some("message".to_string()),
+                class_name: Some("Chrome_RenderWidgetHostHWND".to_string()),
+                automation_id: Some("compose".to_string()),
+                editable: true,
+                has_keyboard_focus: true,
+            }),
+            input_state: Some(InputContext {
+                selection_text: Some("clip".to_string()),
+                selection_start: Some(1),
+                selection_end: Some(5),
+                before_text: Some("before".to_string()),
+                after_text: Some("after".to_string()),
+                full_text: Some("before clip after".to_string()),
+            }),
+            related_content: Some(RelatedContent {
+                before_text: Some("related before".to_string()),
+                after_text: Some("related after".to_string()),
+            }),
+            visible_text: Some("visible text".to_string()),
+            policy_decision: Some(ContextPolicyDecision {
+                capture_mode: "balanced".to_string(),
+                app_rule: Some("allow".to_string()),
+                domain_rule: None,
+                allow_related_content: true,
+                allow_visible_text: true,
+            }),
+            capture_diag: Some(ContextCaptureDiag {
+                target_source: Some("foreground".to_string()),
+                target_age_ms: Some(12),
+                focus_stable: true,
+            }),
         };
         let mut budget = ContextBudget::default();
-        budget.max_total_context_chars = 50;
+        budget.max_total_context_chars = 1_200;
         let out = prepare(" TRANSCRIPT ", &snap, &budget);
         assert!(out.user_text.contains("### TRANSCRIPT"));
         assert!(out.user_text.contains("TRANSCRIPT"));
+        assert!(out.user_text.contains("FOCUSED APP"));
+        assert!(out.user_text.contains("FOCUSED ELEMENT"));
+        assert!(out.user_text.contains("INPUT STATE"));
+        assert!(out.user_text.contains("RELATED CONTENT"));
+        assert!(out.user_text.contains("VISIBLE WINDOW TEXT"));
         assert!(out.user_text.contains("RECENT HISTORY"));
         assert!(out.user_text.contains("CLIPBOARD"));
-        assert!(out.user_text.contains("PREVIOUS WINDOW"));
+        assert!(out.user_text.contains("POLICY"));
     }
 }

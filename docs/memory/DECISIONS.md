@@ -51,6 +51,12 @@
 - 依据：窗口在长按/多阶段时会变化，晚采样会导致上下文与真实意图不一致。
 - 执行：`task_id` 在热键按下事件时产生并在 `start_task(req)` 阶段强制携带；`TaskManager` 以 `task_id` 作为唯一生命周期主键消费预采样上下文。
 
+## 改写上下文改为文本-only
+
+- 决策：移除窗口截图、vision 开关和多模态 LLM 请求；改写上下文固定为文本结构。
+- 依据：用户明确要求直接去掉截图功能，并保持上下文能力全部可设置。
+- 执行：删除 `context_include_prev_window_screenshot`、`llm_supports_vision`、`ContextSnapshot.screenshot` 与 LLM `ImageUrl` 分支；上下文由焦点应用/元素、输入状态、相关文本、可见文本、历史和剪贴板组成。
+
 ## 热键预采样上下文生命周期清理
 
 - 决策：将原 `recording_session_id` 生命周期并入 `task_id`，上下文清理从“独立会话清理”收敛为“单任务清理”。

@@ -47,6 +47,12 @@ const RECORD_DEFAULT_ROLES: PixelSelectOption[] = [
   { value: "console", label: "console (eConsole)" },
 ];
 
+const CONTEXT_CAPTURE_MODES: PixelSelectOption[] = [
+  { value: "minimal", label: "minimal" },
+  { value: "balanced", label: "balanced" },
+  { value: "full", label: "full" },
+];
+
 type RecordingHotkey = "ptt" | "toggle";
 
 type HotkeyAvailability = {
@@ -125,11 +131,25 @@ export function SettingsScreen({
   const [hotkeyToggle, setHotkeyToggle] = useState("F10");
   const [recordingHotkey, setRecordingHotkey] = useState<RecordingHotkey | null>(null);
   const [hotkeysShowOverlay, setHotkeysShowOverlay] = useState(true);
+  const [contextCaptureMode, setContextCaptureMode] = useState("balanced");
   const [contextIncludeHistory, setContextIncludeHistory] = useState(true);
   const [contextIncludeClipboard, setContextIncludeClipboard] = useState(true);
   const [contextIncludePrevWindowMeta, setContextIncludePrevWindowMeta] = useState(true);
-  const [contextIncludePrevWindowScreenshot, setContextIncludePrevWindowScreenshot] =
-    useState(true);
+  const [contextIncludeFocusedAppMeta, setContextIncludeFocusedAppMeta] = useState(true);
+  const [contextIncludeFocusedElementMeta, setContextIncludeFocusedElementMeta] = useState(true);
+  const [contextIncludeInputState, setContextIncludeInputState] = useState(true);
+  const [contextIncludeRelatedContent, setContextIncludeRelatedContent] = useState(true);
+  const [contextIncludeVisibleText, setContextIncludeVisibleText] = useState(true);
+  const [contextHistoryN, setContextHistoryN] = useState("3");
+  const [contextHistoryWindowMs, setContextHistoryWindowMs] = useState("1800000");
+  const [contextInputMaxChars, setContextInputMaxChars] = useState("4096");
+  const [contextRelatedBeforeChars, setContextRelatedBeforeChars] = useState("1200");
+  const [contextRelatedAfterChars, setContextRelatedAfterChars] = useState("1200");
+  const [contextVisibleTextMaxChars, setContextVisibleTextMaxChars] = useState("4000");
+  const [contextAppAllowlistDraft, setContextAppAllowlistDraft] = useState("");
+  const [contextAppDenylistDraft, setContextAppDenylistDraft] = useState("");
+  const [contextDomainAllowlistDraft, setContextDomainAllowlistDraft] = useState("");
+  const [contextDomainDenylistDraft, setContextDomainDenylistDraft] = useState("");
   const [rewriteIncludeGlossary, setRewriteIncludeGlossary] = useState(true);
 
   const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
@@ -208,12 +228,25 @@ export function SettingsScreen({
     setHotkeyToggle(settings.hotkey_toggle ?? "");
     setHotkeysShowOverlay(settings.hotkeys_show_overlay);
 
+    setContextCaptureMode(settings.context_capture_mode ?? "balanced");
     setContextIncludeHistory(settings.context_include_history ?? true);
     setContextIncludeClipboard(settings.context_include_clipboard ?? true);
     setContextIncludePrevWindowMeta(settings.context_include_prev_window_meta ?? true);
-    setContextIncludePrevWindowScreenshot(
-      settings.context_include_prev_window_screenshot ?? true,
-    );
+    setContextIncludeFocusedAppMeta(settings.context_include_focused_app_meta ?? true);
+    setContextIncludeFocusedElementMeta(settings.context_include_focused_element_meta ?? true);
+    setContextIncludeInputState(settings.context_include_input_state ?? true);
+    setContextIncludeRelatedContent(settings.context_include_related_content ?? true);
+    setContextIncludeVisibleText(settings.context_include_visible_text ?? true);
+    setContextHistoryN(String(settings.context_history_n ?? 3));
+    setContextHistoryWindowMs(String(settings.context_history_window_ms ?? 1800000));
+    setContextInputMaxChars(String(settings.context_input_max_chars ?? 4096));
+    setContextRelatedBeforeChars(String(settings.context_related_before_chars ?? 1200));
+    setContextRelatedAfterChars(String(settings.context_related_after_chars ?? 1200));
+    setContextVisibleTextMaxChars(String(settings.context_visible_text_max_chars ?? 4000));
+    setContextAppAllowlistDraft((settings.context_app_allowlist ?? []).join("\n"));
+    setContextAppDenylistDraft((settings.context_app_denylist ?? []).join("\n"));
+    setContextDomainAllowlistDraft((settings.context_domain_allowlist ?? []).join("\n"));
+    setContextDomainDenylistDraft((settings.context_domain_denylist ?? []).join("\n"));
   }, [settings, pushToast]);
 
   useEffect(() => {
@@ -460,12 +493,49 @@ export function SettingsScreen({
   }
 
   async function saveContextConfig() {
+    const historyN = Number(contextHistoryN);
+    const historyWindowMs = Number(contextHistoryWindowMs);
+    const inputMaxChars = Number(contextInputMaxChars);
+    const relatedBefore = Number(contextRelatedBeforeChars);
+    const relatedAfter = Number(contextRelatedAfterChars);
+    const visibleMaxChars = Number(contextVisibleTextMaxChars);
+    const parseList = (value: string) =>
+      value
+        .split("\n")
+        .map((x) => x.trim())
+        .filter((x) => x.length > 0);
+    if (
+      !Number.isFinite(historyN) ||
+      !Number.isFinite(historyWindowMs) ||
+      !Number.isFinite(inputMaxChars) ||
+      !Number.isFinite(relatedBefore) ||
+      !Number.isFinite(relatedAfter) ||
+      !Number.isFinite(visibleMaxChars)
+    ) {
+      pushToast("INVALID CONTEXT INPUT", "danger");
+      return;
+    }
     try {
       await savePatch({
+        context_capture_mode: contextCaptureMode,
         context_include_history: contextIncludeHistory,
         context_include_clipboard: contextIncludeClipboard,
         context_include_prev_window_meta: contextIncludePrevWindowMeta,
-        context_include_prev_window_screenshot: contextIncludePrevWindowScreenshot,
+        context_include_focused_app_meta: contextIncludeFocusedAppMeta,
+        context_include_focused_element_meta: contextIncludeFocusedElementMeta,
+        context_include_input_state: contextIncludeInputState,
+        context_include_related_content: contextIncludeRelatedContent,
+        context_include_visible_text: contextIncludeVisibleText,
+        context_history_n: Math.max(1, Math.round(historyN)),
+        context_history_window_ms: Math.max(1, Math.round(historyWindowMs)),
+        context_input_max_chars: Math.max(1, Math.round(inputMaxChars)),
+        context_related_before_chars: Math.max(1, Math.round(relatedBefore)),
+        context_related_after_chars: Math.max(1, Math.round(relatedAfter)),
+        context_visible_text_max_chars: Math.max(1, Math.round(visibleMaxChars)),
+        context_app_allowlist: parseList(contextAppAllowlistDraft),
+        context_app_denylist: parseList(contextAppDenylistDraft),
+        context_domain_allowlist: parseList(contextDomainAllowlistDraft),
+        context_domain_denylist: parseList(contextDomainDenylistDraft),
       });
       pushToast("SAVED", "ok");
     } catch {
@@ -935,6 +1005,11 @@ export function SettingsScreen({
       <div className="card">
         <div className="sectionTitle">REWRITE CONTEXT SWITCH</div>
         <div className="stack">
+          <PixelSelect
+            value={contextCaptureMode}
+            onChange={setContextCaptureMode}
+            options={CONTEXT_CAPTURE_MODES}
+          />
           <div className="row" style={{ justifyContent: "space-between" }}>
             <div className="muted">Context 历史片段</div>
             <PixelToggle
@@ -960,13 +1035,117 @@ export function SettingsScreen({
             />
           </div>
           <div className="row" style={{ justifyContent: "space-between" }}>
-            <div className="muted">Window 截图</div>
+            <div className="muted">Focused app 元信息</div>
             <PixelToggle
-              value={contextIncludePrevWindowScreenshot}
-              onChange={setContextIncludePrevWindowScreenshot}
-              label="prev window screenshot"
+              value={contextIncludeFocusedAppMeta}
+              onChange={setContextIncludeFocusedAppMeta}
+              label="focused app meta"
             />
           </div>
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <div className="muted">Focused element 元信息</div>
+            <PixelToggle
+              value={contextIncludeFocusedElementMeta}
+              onChange={setContextIncludeFocusedElementMeta}
+              label="focused element meta"
+            />
+          </div>
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <div className="muted">Input state</div>
+            <PixelToggle
+              value={contextIncludeInputState}
+              onChange={setContextIncludeInputState}
+              label="input state"
+            />
+          </div>
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <div className="muted">Related content</div>
+            <PixelToggle
+              value={contextIncludeRelatedContent}
+              onChange={setContextIncludeRelatedContent}
+              label="related content"
+            />
+          </div>
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <div className="muted">Visible window text</div>
+            <PixelToggle
+              value={contextIncludeVisibleText}
+              onChange={setContextIncludeVisibleText}
+              label="visible text"
+            />
+          </div>
+          <div className="row">
+            <div className="muted">History n</div>
+            <PixelInput value={contextHistoryN} onChange={setContextHistoryN} placeholder="3" />
+          </div>
+          <div className="row">
+            <div className="muted">History window (ms)</div>
+            <PixelInput
+              value={contextHistoryWindowMs}
+              onChange={setContextHistoryWindowMs}
+              placeholder="1800000"
+            />
+          </div>
+          <div className="row">
+            <div className="muted">Input max chars</div>
+            <PixelInput
+              value={contextInputMaxChars}
+              onChange={setContextInputMaxChars}
+              placeholder="4096"
+            />
+          </div>
+          <div className="row">
+            <div className="muted">Related before chars</div>
+            <PixelInput
+              value={contextRelatedBeforeChars}
+              onChange={setContextRelatedBeforeChars}
+              placeholder="1200"
+            />
+          </div>
+          <div className="row">
+            <div className="muted">Related after chars</div>
+            <PixelInput
+              value={contextRelatedAfterChars}
+              onChange={setContextRelatedAfterChars}
+              placeholder="1200"
+            />
+          </div>
+          <div className="row">
+            <div className="muted">Visible text chars</div>
+            <PixelInput
+              value={contextVisibleTextMaxChars}
+              onChange={setContextVisibleTextMaxChars}
+              placeholder="4000"
+            />
+          </div>
+          <div className="muted">App allowlist: one executable name per line.</div>
+          <PixelTextarea
+            value={contextAppAllowlistDraft}
+            onChange={setContextAppAllowlistDraft}
+            placeholder={"notepad.exe\nchrome.exe"}
+            rows={4}
+          />
+          <div className="muted">App denylist: one executable name per line.</div>
+          <PixelTextarea
+            value={contextAppDenylistDraft}
+            onChange={setContextAppDenylistDraft}
+            placeholder={"secret.exe"}
+            rows={4}
+          />
+          <div className="muted">Domain allowlist: one host suffix per line.</div>
+          <PixelTextarea
+            value={contextDomainAllowlistDraft}
+            onChange={setContextDomainAllowlistDraft}
+            placeholder={"example.com"}
+            rows={4}
+          />
+          <div className="muted">Domain denylist: one host suffix per line.</div>
+          <PixelTextarea
+            value={contextDomainDenylistDraft}
+            onChange={setContextDomainDenylistDraft}
+            placeholder={"private.example"}
+            rows={4}
+          />
           <div className="row" style={{ justifyContent: "flex-end" }}>
             <PixelButton onClick={saveContextConfig} tone="accent">
               SAVE

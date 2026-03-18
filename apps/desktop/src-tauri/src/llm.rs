@@ -1,5 +1,4 @@
 use anyhow::{anyhow, Result};
-use base64::Engine;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
@@ -42,19 +41,6 @@ struct Message {
 #[serde(untagged)]
 enum MessageContent {
     Text(String),
-    Parts(Vec<ContentPart>),
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum ContentPart {
-    Text { text: String },
-    ImageUrl { image_url: ImageUrl },
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct ImageUrl {
-    url: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -76,8 +62,11 @@ struct ChoiceMessage {
 pub struct RewriteContextPolicy {
     pub include_history: bool,
     pub include_clipboard: bool,
-    pub include_prev_window_meta: bool,
-    pub include_prev_window_screenshot: bool,
+    pub include_focused_app_meta: bool,
+    pub include_focused_element_meta: bool,
+    pub include_input_state: bool,
+    pub include_related_content: bool,
+    pub include_visible_text: bool,
     pub include_glossary: bool,
 }
 
@@ -86,8 +75,11 @@ impl Default for RewriteContextPolicy {
         Self {
             include_history: false,
             include_clipboard: false,
-            include_prev_window_meta: false,
-            include_prev_window_screenshot: false,
+            include_focused_app_meta: false,
+            include_focused_element_meta: false,
+            include_input_state: false,
+            include_related_content: false,
+            include_visible_text: false,
             include_glossary: false,
         }
     }
@@ -270,7 +262,6 @@ pub async fn rewrite_with_context(
         "LLM.rewrite",
         Some(serde_json::json!({
             "has_context": ctx.is_some(),
-            "has_screenshot": ctx.and_then(|c| c.screenshot.as_ref()).is_some(),
             "policy": policy,
         })),
     );
@@ -460,12 +451,6 @@ pub async fn rewrite_with_context(
 fn user_content_shape(content: &MessageContent) -> (&'static str, bool) {
     match content {
         MessageContent::Text(_) => ("text", false),
-        MessageContent::Parts(parts) => {
-            let has_image_url = parts
-                .iter()
-                .any(|p| matches!(p, ContentPart::ImageUrl { .. }));
-            ("parts", has_image_url)
-        }
     }
 }
 
@@ -500,11 +485,14 @@ fn bool_text(v: bool) -> &'static str {
 
 fn policy_to_markdown(policy: &RewriteContextPolicy) -> String {
     format!(
-        "### CONTEXT_POLICY\n- history: {}\n- clipboard: {}\n- prev_window_meta: {}\n- prev_window_screenshot: {}\n- glossary: {}\n",
+        "### CONTEXT_POLICY\n- history: {}\n- clipboard: {}\n- focused_app_meta: {}\n- focused_element_meta: {}\n- input_state: {}\n- related_content: {}\n- visible_text: {}\n- glossary: {}\n",
         bool_text(policy.include_history),
         bool_text(policy.include_clipboard),
-        bool_text(policy.include_prev_window_meta),
-        bool_text(policy.include_prev_window_screenshot),
+        bool_text(policy.include_focused_app_meta),
+        bool_text(policy.include_focused_element_meta),
+        bool_text(policy.include_input_state),
+        bool_text(policy.include_related_content),
+        bool_text(policy.include_visible_text),
         bool_text(policy.include_glossary),
     )
 }
@@ -539,8 +527,11 @@ fn build_rewrite_user_text(
 
     let include_context_sections = policy.include_history
         || policy.include_clipboard
-        || policy.include_prev_window_meta
-        || policy.include_prev_window_screenshot;
+        || policy.include_focused_app_meta
+        || policy.include_focused_element_meta
+        || policy.include_input_state
+        || policy.include_related_content
+        || policy.include_visible_text;
     if include_context_sections {
         if let Some(c) = ctx {
             let context_block = extract_prepared_context_block(c);
@@ -562,50 +553,19 @@ fn build_user_content(
 ) -> (MessageContent, MessageContent) {
     let send_text = build_rewrite_user_text(asr_text, ctx, rewrite_glossary, policy);
     let debug_text = send_text.clone();
-
-    let Some(sc) = ctx.and_then(|c| {
-        if policy.include_prev_window_screenshot {
-            c.screenshot.as_ref()
-        } else {
-            None
-        }
-    }) else {
-        return (
-            MessageContent::Text(send_text),
-            MessageContent::Text(debug_text),
-        );
-    };
-
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&sc.png_bytes);
-    let url_send = format!("data:image/png;base64,{}", b64);
-    let url_debug = format!(
-        "data:image/png;base64,<redacted sha256={} bytes={} w={} h={}>",
-        sc.sha256_hex,
-        sc.png_bytes.len(),
-        sc.width,
-        sc.height
-    );
-
     (
-        MessageContent::Parts(vec![
-            ContentPart::Text { text: send_text },
-            ContentPart::ImageUrl {
-                image_url: ImageUrl { url: url_send },
-            },
-        ]),
-        MessageContent::Parts(vec![
-            ContentPart::Text { text: debug_text },
-            ContentPart::ImageUrl {
-                image_url: ImageUrl { url: url_debug },
-            },
-        ]),
+        MessageContent::Text(send_text),
+        MessageContent::Text(debug_text),
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::api_key_status;
-    use super::normalize_base_url;
+    use super::{
+        api_key_status, build_rewrite_user_text, build_user_content, normalize_base_url,
+        MessageContent, RewriteContextPolicy,
+    };
+    use crate::context_pack::PreparedContext;
 
     #[test]
     fn normalize_base_url_handles_empty_and_endpoint_suffix() {
@@ -631,5 +591,49 @@ mod tests {
         assert!(st.configured);
         assert_eq!(st.source, "env");
         std::env::remove_var("TYPEVOICE_LLM_API_KEY");
+    }
+
+    #[test]
+    fn build_rewrite_user_text_is_text_only_and_has_no_screenshot_policy() {
+        let prepared = PreparedContext {
+            user_text: "### TRANSCRIPT\nhello\n\n### CONTEXT\nbody".to_string(),
+        };
+        let policy = RewriteContextPolicy {
+            include_history: true,
+            include_clipboard: true,
+            include_focused_app_meta: true,
+            include_focused_element_meta: true,
+            include_input_state: true,
+            include_related_content: true,
+            include_visible_text: true,
+            include_glossary: false,
+        };
+        let text = build_rewrite_user_text("hello", Some(&prepared), &[], &policy);
+        assert!(text.contains("focused_app_meta: enabled"));
+        assert!(text.contains("focused_element_meta: enabled"));
+        assert!(text.contains("input_state: enabled"));
+        assert!(text.contains("related_content: enabled"));
+        assert!(text.contains("visible_text: enabled"));
+        assert!(!text.contains("screenshot"));
+    }
+
+    #[test]
+    fn build_user_content_never_emits_image_parts() {
+        let ctx = PreparedContext {
+            user_text: "### TRANSCRIPT\nhello\n\n### CONTEXT\nbody".to_string(),
+        };
+        let policy = RewriteContextPolicy {
+            include_history: false,
+            include_clipboard: false,
+            include_focused_app_meta: true,
+            include_focused_element_meta: false,
+            include_input_state: false,
+            include_related_content: false,
+            include_visible_text: false,
+            include_glossary: false,
+        };
+        let (send, debug) = build_user_content("hello", Some(&ctx), &[], &policy);
+        assert!(matches!(send, MessageContent::Text(_)));
+        assert!(matches!(debug, MessageContent::Text(_)));
     }
 }

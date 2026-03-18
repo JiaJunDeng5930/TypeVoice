@@ -46,14 +46,26 @@ pub struct Settings {
     pub auto_paste_enabled: Option<bool>,
 
     // Context settings (for LLM rewrite)
+    pub context_capture_mode: Option<String>, // minimal|balanced|full
     pub context_include_prev_window_meta: Option<bool>,
+    pub context_include_focused_app_meta: Option<bool>,
+    pub context_include_focused_element_meta: Option<bool>,
+    pub context_include_input_state: Option<bool>,
+    pub context_include_related_content: Option<bool>,
+    pub context_include_visible_text: Option<bool>,
     pub context_include_history: Option<bool>,
     pub context_history_n: Option<i64>,
     pub context_history_window_ms: Option<i64>,
+    pub context_input_max_chars: Option<i64>,
+    pub context_related_before_chars: Option<i64>,
+    pub context_related_after_chars: Option<i64>,
+    pub context_visible_text_max_chars: Option<i64>,
     pub context_include_clipboard: Option<bool>,
-    pub context_include_prev_window_screenshot: Option<bool>,
+    pub context_app_allowlist: Option<Vec<String>>,
+    pub context_app_denylist: Option<Vec<String>>,
+    pub context_domain_allowlist: Option<Vec<String>>,
+    pub context_domain_denylist: Option<Vec<String>>,
     pub rewrite_include_glossary: Option<bool>,
-    pub llm_supports_vision: Option<bool>,
 
     // Hotkeys / overlay (post-MVP)
     pub hotkeys_enabled: Option<bool>,
@@ -90,14 +102,26 @@ pub struct SettingsPatch {
     pub rewrite_glossary: Option<Option<Vec<String>>>,
     pub auto_paste_enabled: Option<Option<bool>>,
 
+    pub context_capture_mode: Option<Option<String>>,
     pub context_include_history: Option<Option<bool>>,
     pub context_history_n: Option<Option<i64>>,
     pub context_history_window_ms: Option<Option<i64>>,
+    pub context_input_max_chars: Option<Option<i64>>,
+    pub context_related_before_chars: Option<Option<i64>>,
+    pub context_related_after_chars: Option<Option<i64>>,
+    pub context_visible_text_max_chars: Option<Option<i64>>,
     pub context_include_clipboard: Option<Option<bool>>,
-    pub context_include_prev_window_screenshot: Option<Option<bool>>,
     pub context_include_prev_window_meta: Option<Option<bool>>,
+    pub context_include_focused_app_meta: Option<Option<bool>>,
+    pub context_include_focused_element_meta: Option<Option<bool>>,
+    pub context_include_input_state: Option<Option<bool>>,
+    pub context_include_related_content: Option<Option<bool>>,
+    pub context_include_visible_text: Option<Option<bool>>,
+    pub context_app_allowlist: Option<Option<Vec<String>>>,
+    pub context_app_denylist: Option<Option<Vec<String>>>,
+    pub context_domain_allowlist: Option<Option<Vec<String>>>,
+    pub context_domain_denylist: Option<Option<Vec<String>>>,
     pub rewrite_include_glossary: Option<Option<bool>>,
-    pub llm_supports_vision: Option<Option<bool>>,
 
     pub hotkeys_enabled: Option<Option<bool>>,
     pub hotkey_ptt: Option<Option<String>>,
@@ -169,6 +193,9 @@ pub fn apply_patch(mut s: Settings, p: SettingsPatch) -> Settings {
     if let Some(v) = p.auto_paste_enabled {
         s.auto_paste_enabled = v;
     }
+    if let Some(v) = p.context_capture_mode {
+        s.context_capture_mode = v;
+    }
     if let Some(v) = p.context_include_history {
         s.context_include_history = v;
     }
@@ -178,20 +205,53 @@ pub fn apply_patch(mut s: Settings, p: SettingsPatch) -> Settings {
     if let Some(v) = p.context_history_window_ms {
         s.context_history_window_ms = v;
     }
+    if let Some(v) = p.context_input_max_chars {
+        s.context_input_max_chars = v;
+    }
+    if let Some(v) = p.context_related_before_chars {
+        s.context_related_before_chars = v;
+    }
+    if let Some(v) = p.context_related_after_chars {
+        s.context_related_after_chars = v;
+    }
+    if let Some(v) = p.context_visible_text_max_chars {
+        s.context_visible_text_max_chars = v;
+    }
     if let Some(v) = p.context_include_clipboard {
         s.context_include_clipboard = v;
-    }
-    if let Some(v) = p.context_include_prev_window_screenshot {
-        s.context_include_prev_window_screenshot = v;
     }
     if let Some(v) = p.context_include_prev_window_meta {
         s.context_include_prev_window_meta = v;
     }
+    if let Some(v) = p.context_include_focused_app_meta {
+        s.context_include_focused_app_meta = v;
+    }
+    if let Some(v) = p.context_include_focused_element_meta {
+        s.context_include_focused_element_meta = v;
+    }
+    if let Some(v) = p.context_include_input_state {
+        s.context_include_input_state = v;
+    }
+    if let Some(v) = p.context_include_related_content {
+        s.context_include_related_content = v;
+    }
+    if let Some(v) = p.context_include_visible_text {
+        s.context_include_visible_text = v;
+    }
+    if let Some(v) = p.context_app_allowlist {
+        s.context_app_allowlist = v;
+    }
+    if let Some(v) = p.context_app_denylist {
+        s.context_app_denylist = v;
+    }
+    if let Some(v) = p.context_domain_allowlist {
+        s.context_domain_allowlist = v;
+    }
+    if let Some(v) = p.context_domain_denylist {
+        s.context_domain_denylist = v;
+    }
     if let Some(v) = p.rewrite_include_glossary {
         s.rewrite_include_glossary = v;
-    }
-    if let Some(v) = p.llm_supports_vision {
-        s.llm_supports_vision = v;
     }
     if let Some(v) = p.hotkeys_enabled {
         s.hotkeys_enabled = v;
@@ -391,14 +451,26 @@ mod tests {
             rewrite_template_id: Some("t1".to_string()),
             rewrite_glossary: None,
             auto_paste_enabled: Some(true),
+            context_capture_mode: Some("balanced".to_string()),
             context_include_history: None,
             context_history_n: None,
             context_history_window_ms: None,
+            context_input_max_chars: None,
+            context_related_before_chars: None,
+            context_related_after_chars: None,
+            context_visible_text_max_chars: None,
             context_include_prev_window_meta: None,
+            context_include_focused_app_meta: None,
+            context_include_focused_element_meta: None,
+            context_include_input_state: None,
+            context_include_related_content: None,
+            context_include_visible_text: None,
             context_include_clipboard: None,
-            context_include_prev_window_screenshot: None,
+            context_app_allowlist: None,
+            context_app_denylist: None,
+            context_domain_allowlist: None,
+            context_domain_denylist: None,
             rewrite_include_glossary: None,
-            llm_supports_vision: None,
             hotkeys_enabled: None,
             hotkey_ptt: None,
             hotkey_toggle: None,
@@ -415,8 +487,22 @@ mod tests {
             llm_reasoning_effort: Some(None),
             rewrite_enabled: Some(Some(true)),
             rewrite_template_id: Some(None),
+            context_capture_mode: Some(Some("full".to_string())),
             context_history_n: Some(Some(5)),
+            context_input_max_chars: Some(Some(4096)),
+            context_related_before_chars: Some(Some(900)),
+            context_related_after_chars: Some(Some(1100)),
+            context_visible_text_max_chars: Some(Some(2048)),
             context_include_prev_window_meta: Some(Some(true)),
+            context_include_focused_app_meta: Some(Some(true)),
+            context_include_focused_element_meta: Some(Some(true)),
+            context_include_input_state: Some(Some(true)),
+            context_include_related_content: Some(Some(true)),
+            context_include_visible_text: Some(Some(true)),
+            context_app_allowlist: Some(Some(vec!["notepad.exe".to_string()])),
+            context_app_denylist: Some(Some(vec!["secret.exe".to_string()])),
+            context_domain_allowlist: Some(Some(vec!["example.com".to_string()])),
+            context_domain_denylist: Some(Some(vec!["deny.example".to_string()])),
             rewrite_include_glossary: Some(Some(false)),
             auto_paste_enabled: Some(Some(false)),
             ..Default::default()
@@ -438,8 +524,34 @@ mod tests {
         assert_eq!(next.rewrite_template_id, None);
         assert_eq!(next.rewrite_glossary.as_deref(), None);
         assert_eq!(next.auto_paste_enabled, Some(false));
+        assert_eq!(next.context_capture_mode.as_deref(), Some("full"));
         assert_eq!(next.context_history_n, Some(5));
+        assert_eq!(next.context_input_max_chars, Some(4096));
+        assert_eq!(next.context_related_before_chars, Some(900));
+        assert_eq!(next.context_related_after_chars, Some(1100));
+        assert_eq!(next.context_visible_text_max_chars, Some(2048));
         assert_eq!(next.context_include_prev_window_meta, Some(true));
+        assert_eq!(next.context_include_focused_app_meta, Some(true));
+        assert_eq!(next.context_include_focused_element_meta, Some(true));
+        assert_eq!(next.context_include_input_state, Some(true));
+        assert_eq!(next.context_include_related_content, Some(true));
+        assert_eq!(next.context_include_visible_text, Some(true));
+        assert_eq!(
+            next.context_app_allowlist.as_deref(),
+            Some(&["notepad.exe".to_string()][..])
+        );
+        assert_eq!(
+            next.context_app_denylist.as_deref(),
+            Some(&["secret.exe".to_string()][..])
+        );
+        assert_eq!(
+            next.context_domain_allowlist.as_deref(),
+            Some(&["example.com".to_string()][..])
+        );
+        assert_eq!(
+            next.context_domain_denylist.as_deref(),
+            Some(&["deny.example".to_string()][..])
+        );
         assert_eq!(next.rewrite_include_glossary, Some(false));
     }
 

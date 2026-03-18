@@ -573,11 +573,7 @@ impl TaskManager {
         let get_template = self.deps.get_template;
         let history_append = self.deps.history_append;
         let ctx_cfg = opts.context_cfg.clone();
-        let mut capture_ctx_cfg = ctx_cfg.clone();
-        if opts.pre_captured_context.is_some() {
-            capture_ctx_cfg.include_prev_window_screenshot = false;
-            capture_ctx_cfg.include_prev_window_meta = false;
-        }
+        let capture_ctx_cfg = ctx_cfg.clone();
         let mut ctx_snap = if opts.rewrite_enabled {
             self.ctx
                 .capture_snapshot_best_effort_with_config(&data_dir, &task_id, &capture_ctx_cfg)
@@ -585,11 +581,29 @@ impl TaskManager {
             context_pack::ContextSnapshot::default()
         };
         if let Some(pre) = opts.pre_captured_context.clone() {
-            if ctx_cfg.include_prev_window_meta {
-                ctx_snap.prev_window = pre.prev_window;
+            if ctx_cfg.include_focused_app_meta {
+                ctx_snap.focused_app = pre.focused_app;
             }
-            if ctx_cfg.include_prev_window_screenshot {
-                ctx_snap.screenshot = pre.screenshot;
+            if ctx_cfg.include_prev_window_meta {
+                ctx_snap.focused_window = pre.focused_window;
+            }
+            if ctx_cfg.include_focused_element_meta {
+                ctx_snap.focused_element = pre.focused_element;
+            }
+            if ctx_cfg.include_input_state {
+                ctx_snap.input_state = pre.input_state;
+            }
+            if ctx_cfg.include_related_content {
+                ctx_snap.related_content = pre.related_content;
+            }
+            if ctx_cfg.include_visible_text {
+                ctx_snap.visible_text = pre.visible_text;
+            }
+            if ctx_snap.policy_decision.is_none() {
+                ctx_snap.policy_decision = pre.policy_decision;
+            }
+            if ctx_snap.capture_diag.is_none() {
+                ctx_snap.capture_diag = pre.capture_diag;
             }
             crate::obs::event(
                 &data_dir,
@@ -598,8 +612,9 @@ impl TaskManager {
                 "CTX.hotkey_capture_injected",
                 "ok",
                 Some(serde_json::json!({
-                    "has_prev_window": ctx_snap.prev_window.is_some(),
-                    "has_screenshot": ctx_snap.screenshot.is_some(),
+                    "has_focused_app": ctx_snap.focused_app.is_some(),
+                    "has_focused_element": ctx_snap.focused_element.is_some(),
+                    "has_input_state": ctx_snap.input_state.is_some(),
                 })),
             );
         }
@@ -610,14 +625,23 @@ impl TaskManager {
         if !ctx_cfg.include_clipboard {
             ctx_snap.clipboard_text = None;
         }
+        if !ctx_cfg.include_focused_app_meta {
+            ctx_snap.focused_app = None;
+        }
         if !ctx_cfg.include_prev_window_meta {
-            ctx_snap.prev_window = None;
+            ctx_snap.focused_window = None;
         }
-        if !ctx_cfg.include_prev_window_screenshot {
-            ctx_snap.screenshot = None;
+        if !ctx_cfg.include_focused_element_meta {
+            ctx_snap.focused_element = None;
         }
-        if !ctx_cfg.llm_supports_vision {
-            ctx_snap.screenshot = None;
+        if !ctx_cfg.include_input_state {
+            ctx_snap.input_state = None;
+        }
+        if !ctx_cfg.include_related_content {
+            ctx_snap.related_content = None;
+        }
+        if !ctx_cfg.include_visible_text {
+            ctx_snap.visible_text = None;
         }
         crate::obs::event(
             &data_dir,
@@ -634,7 +658,11 @@ impl TaskManager {
                     "template_id": opts.template_id.as_deref(),
                     "rewrite_include_glossary": opts.rewrite_include_glossary,
                     "context_include_prev_window_meta": ctx_cfg.include_prev_window_meta,
-                "context_include_prev_window_screenshot": ctx_cfg.include_prev_window_screenshot,
+                "context_include_focused_app_meta": ctx_cfg.include_focused_app_meta,
+                "context_include_focused_element_meta": ctx_cfg.include_focused_element_meta,
+                "context_include_input_state": ctx_cfg.include_input_state,
+                "context_include_related_content": ctx_cfg.include_related_content,
+                "context_include_visible_text": ctx_cfg.include_visible_text,
                 "context_include_history": ctx_cfg.include_history,
                 "context_include_clipboard": ctx_cfg.include_clipboard,
                 "asr_preprocess_silence_trim_enabled": opts.asr_preprocess.silence_trim_enabled,
@@ -949,16 +977,15 @@ impl TaskManager {
                     }
                 };
                 if let Some(tpl) = tpl {
-                    let mut prepared = context_pack::prepare(&asr_text, &ctx_snap, &ctx_cfg.budget);
-                    if !ctx_cfg.include_prev_window_screenshot {
-                        prepared.screenshot = None;
-                    }
+                    let prepared = context_pack::prepare(&asr_text, &ctx_snap, &ctx_cfg.budget);
                     let rewrite_ctx_policy = llm::RewriteContextPolicy {
                         include_history: ctx_cfg.include_history,
                         include_clipboard: ctx_cfg.include_clipboard,
-                        include_prev_window_meta: ctx_cfg.include_prev_window_meta,
-                        include_prev_window_screenshot: ctx_cfg.include_prev_window_screenshot
-                            && prepared.screenshot.is_some(),
+                        include_focused_app_meta: ctx_cfg.include_focused_app_meta,
+                        include_focused_element_meta: ctx_cfg.include_focused_element_meta,
+                        include_input_state: ctx_cfg.include_input_state,
+                        include_related_content: ctx_cfg.include_related_content,
+                        include_visible_text: ctx_cfg.include_visible_text,
                         include_glossary: opts.rewrite_include_glossary,
                     };
                     let rewrite_glossary: &[String] = if opts.rewrite_include_glossary {
