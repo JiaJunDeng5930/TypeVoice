@@ -274,6 +274,22 @@ fn resolve_policy(
     }
 }
 
+fn metadata_probe_config(cfg: &ContextConfig) -> ContextConfig {
+    let mut probe = cfg.clone();
+    probe.include_input_state = false;
+    probe.include_related_content = false;
+    probe.include_visible_text = false;
+    probe
+}
+
+fn policy_capture_config(cfg: &ContextConfig, policy: &PolicyResolution) -> ContextConfig {
+    let mut effective = cfg.clone();
+    effective.include_input_state &= policy.allow_input_state;
+    effective.include_related_content &= policy.allow_related_content;
+    effective.include_visible_text &= policy.allow_visible_text;
+    effective
+}
+
 fn merge_runtime_snapshot(mut snap: ContextSnapshot, runtime: ContextSnapshot) -> ContextSnapshot {
     snap.focused_app = runtime.focused_app;
     snap.focused_window = runtime.focused_window;
@@ -572,7 +588,8 @@ impl ContextService {
         cfg: &ContextConfig,
         allow_last_external: bool,
     ) -> ContextSnapshot {
-        let mut captured = win.capture_foreground_text_context_best_effort(cfg);
+        let probe_cfg = metadata_probe_config(cfg);
+        let mut captured = win.capture_foreground_text_context_best_effort(&probe_cfg);
         let self_process = process_basename(
             captured
                 .focused_app
@@ -595,6 +612,25 @@ impl ContextService {
                 .and_then(|v| v.process_image.as_deref()),
             captured.focused_app.as_ref().and_then(|v| v.url.as_deref()),
         );
+        let effective_cfg = policy_capture_config(cfg, &policy);
+        if effective_cfg.include_input_state
+            || effective_cfg.include_related_content
+            || effective_cfg.include_visible_text
+        {
+            let target_source = captured
+                .capture_diag
+                .as_ref()
+                .and_then(|diag| diag.target_source.as_deref());
+            let recaptured = match target_source {
+                Some("last_external") => {
+                    win.capture_last_external_text_context_best_effort(&effective_cfg, 5_000)
+                }
+                _ => Some(win.capture_foreground_text_context_best_effort(&effective_cfg)),
+            };
+            if let Some(with_text) = recaptured {
+                captured = with_text;
+            }
+        }
 
         let mut snap = ContextSnapshot {
             recent_history: Vec::new(),
@@ -659,8 +695,8 @@ impl ContextService {
 #[cfg(test)]
 mod tests {
     use super::{
-        config_from_settings, extract_hostname, merge_runtime_snapshot, resolve_policy,
-        ContextConfig,
+        config_from_settings, extract_hostname, merge_runtime_snapshot, metadata_probe_config,
+        policy_capture_config, resolve_policy, ContextConfig,
     };
     use crate::context_pack::{
         ContextCaptureDiag, ContextPolicyDecision, ContextSnapshot, FocusedAppInfo, HistorySnippet,
@@ -751,6 +787,47 @@ mod tests {
         assert!(full_policy.allow_input_state);
         assert!(full_policy.allow_related_content);
         assert!(full_policy.allow_visible_text);
+    }
+
+    #[test]
+    fn metadata_probe_config_strips_text_bodies_but_keeps_metadata_flags() {
+        let cfg = ContextConfig::default();
+        let probe = metadata_probe_config(&cfg);
+
+        assert!(probe.include_focused_app_meta);
+        assert!(probe.include_prev_window_meta);
+        assert!(probe.include_focused_element_meta);
+        assert!(!probe.include_input_state);
+        assert!(!probe.include_related_content);
+        assert!(!probe.include_visible_text);
+    }
+
+    #[test]
+    fn policy_capture_config_turns_off_denied_text_flags() {
+        let cfg = ContextConfig::default();
+        let policy = resolve_policy(
+            &cfg,
+            Some(r"C:\Program Files\Notepad++\notepad++.exe"),
+            Some("https://example.com"),
+        );
+        let effective = policy_capture_config(&cfg, &policy);
+
+        assert!(effective.include_input_state);
+        assert!(effective.include_related_content);
+        assert!(!effective.include_visible_text);
+
+        let mut denied_cfg = ContextConfig::default();
+        denied_cfg.rules.domain_denylist = vec!["example.com".to_string()];
+        let denied_policy = resolve_policy(
+            &denied_cfg,
+            Some(r"C:\Program Files\Notepad++\notepad++.exe"),
+            Some("https://example.com"),
+        );
+        let denied_effective = policy_capture_config(&denied_cfg, &denied_policy);
+
+        assert!(!denied_effective.include_input_state);
+        assert!(!denied_effective.include_related_content);
+        assert!(!denied_effective.include_visible_text);
     }
 
     #[test]

@@ -215,7 +215,7 @@ impl WindowsContext {
         let mut out = ForegroundTextContext {
             focused_app: Some(FocusedAppInfo {
                 process_image: process_image.clone(),
-                window_title: if cfg.include_prev_window_meta {
+                window_title: if cfg.include_focused_app_meta {
                     title.clone()
                 } else {
                     None
