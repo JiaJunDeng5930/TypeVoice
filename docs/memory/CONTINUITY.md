@@ -100,6 +100,7 @@
 - [VERIFIED] 2026-03-18：Windows 上下文采集已接入 UI Automation 文本读取入口，并在前台目标为 TypeVoice 时优先退回最近 5 秒内的最后一个外部窗口元信息。
 - [VERIFIED] 2026-03-18：设置链路已扩展为可配置上下文模式、文本预算与 app/domain 规则；`SettingsScreen` 不再暴露 screenshot/vision 开关。
 - [VERIFIED] 2026-03-18：本轮本地回归已通过 `apps/desktop npm run build` 与 `apps/desktop/src-tauri cargo test -q`。
+- [VERIFIED] 2026-03-20：文本上下文策略已收紧两处边界：当浏览器窗口无法解析 URL 且存在 domain allow/deny 规则时，策略默认拒绝文本采集；backend recording 仅在 `rewrite_enabled=true` 时才会在录音开始预采样上下文，且 rewrite 关闭时不会再合并 `pre_captured_context`。
 - [VERIFIED] 2026-03-18：仓库根 Python 测试未执行，原因是当前工作区不存在项目级 `.venv/`；失败属于环境缺失而非代码回归。
 - [VERIFIED] 2026-03-18：已修复上下文采集两个回归：关闭 `context_include_prev_window_meta` 时不再经 `focused_app.window_title` 泄露窗口标题；`context_related_before_chars` / `context_related_after_chars` 已分离接入运行时 budget 与 related content 截断链路。
 - [VERIFIED] 2026-03-18：已修复上下文策略三处回归：`deny` 规则优先于 `allow`，浏览器地址栏无 scheme 时仍可匹配 domain 规则，热键预采样上下文在 rewrite 阶段会保留原始 `policy_decision/capture_diag` 而非被运行时快照覆盖。

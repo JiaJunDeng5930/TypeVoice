@@ -406,12 +406,15 @@ fn start_opts_from_settings(data_dir: &std::path::Path) -> Result<task_manager::
 
 fn recording_context_config_from_settings(
     data_dir: &std::path::Path,
-) -> Result<context_capture::ContextConfig, String> {
+) -> Result<Option<context_capture::ContextConfig>, String> {
     if !settings::settings_path(data_dir).exists() {
-        return Ok(context_capture::ContextConfig::default());
+        return Ok(None);
     }
     let s = settings::load_settings_strict(data_dir).map_err(|e| e.to_string())?;
-    Ok(context_capture::config_from_settings(&s))
+    if !s.rewrite_enabled.unwrap_or(false) {
+        return Ok(None);
+    }
+    Ok(Some(context_capture::config_from_settings(&s)))
 }
 
 fn abort_pending_task_if_present(state: &tauri::State<'_, TaskManager>, task_id: &Option<String>) {
@@ -827,7 +830,8 @@ fn start_backend_recording(
     let input_spec = resolved_input.spec.clone();
     let ffmpeg = pipeline::ffmpeg_cmd().map_err(|e| e.to_string())?;
     let pre_captured_context = match recording_context_config_from_settings(&dir) {
-        Ok(cfg) => Some(state.capture_recording_context_best_effort(&dir, &cfg)),
+        Ok(Some(cfg)) => Some(state.capture_recording_context_best_effort(&dir, &cfg)),
+        Ok(None) => None,
         Err(e) => {
             span.err("config", "E_SETTINGS_INVALID", &e, None);
             return Err(e);
@@ -2011,10 +2015,10 @@ mod tests {
     }
 
     #[test]
-    fn recording_context_config_loads_without_rewrite_enabled() {
+    fn recording_context_config_loads_when_rewrite_is_enabled() {
         let td = tempfile::tempdir().expect("tempdir");
         let settings = settings::Settings {
-            rewrite_enabled: Some(false),
+            rewrite_enabled: Some(true),
             rewrite_template_id: None,
             context_capture_mode: Some("full".to_string()),
             context_include_visible_text: Some(true),
@@ -2022,20 +2026,35 @@ mod tests {
         };
         settings::save_settings(td.path(), &settings).expect("save settings");
 
-        let cfg = recording_context_config_from_settings(td.path()).expect("context cfg");
+        let cfg = recording_context_config_from_settings(td.path())
+            .expect("context cfg")
+            .expect("rewrite-enabled context cfg");
 
         assert_eq!(cfg.rules.capture_mode, "full");
         assert!(cfg.include_visible_text);
     }
 
     #[test]
-    fn recording_context_config_defaults_when_settings_file_is_absent() {
+    fn recording_context_config_is_absent_when_settings_file_is_absent() {
         let td = tempfile::tempdir().expect("tempdir");
 
         let cfg = recording_context_config_from_settings(td.path()).expect("context cfg");
 
-        assert_eq!(cfg.rules.capture_mode, "balanced");
-        assert!(cfg.include_input_state);
-        assert!(cfg.include_related_content);
+        assert!(cfg.is_none());
+    }
+
+    #[test]
+    fn recording_context_config_is_absent_when_rewrite_is_disabled() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let settings = settings::Settings {
+            rewrite_enabled: Some(false),
+            context_capture_mode: Some("full".to_string()),
+            ..Default::default()
+        };
+        settings::save_settings(td.path(), &settings).expect("save settings");
+
+        let cfg = recording_context_config_from_settings(td.path()).expect("context cfg");
+
+        assert!(cfg.is_none());
     }
 }

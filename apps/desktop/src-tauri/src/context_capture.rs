@@ -174,6 +174,12 @@ fn process_basename(process_image: Option<&str>) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+fn is_browser_process(process_image: Option<&str>) -> bool {
+    process_basename(process_image)
+        .map(|name| matches!(name.as_str(), "chrome.exe" | "msedge.exe" | "firefox.exe"))
+        .unwrap_or(false)
+}
+
 fn extract_hostname(url: Option<&str>) -> Option<String> {
     let raw = url?.trim();
     if raw.is_empty() {
@@ -198,6 +204,9 @@ fn resolve_policy(
 ) -> PolicyResolution {
     let app_name = process_basename(process_image);
     let host = extract_hostname(url);
+    let requires_domain_resolution = is_browser_process(process_image)
+        && host.is_none()
+        && (!cfg.rules.domain_allowlist.is_empty() || !cfg.rules.domain_denylist.is_empty());
     let app_rule = if let Some(name) = app_name.as_deref() {
         if cfg.rules.app_denylist.iter().any(|v| v == name) {
             Some("deny".to_string())
@@ -227,6 +236,8 @@ fn resolve_policy(
         } else {
             None
         }
+    } else if requires_domain_resolution {
+        Some("deny".to_string())
     } else {
         None
     };
@@ -737,6 +748,23 @@ mod tests {
         );
 
         assert_eq!(policy.app_rule.as_deref(), Some("allow"));
+        assert_eq!(policy.domain_rule.as_deref(), Some("deny"));
+        assert!(!policy.allow_input_state);
+        assert!(!policy.allow_related_content);
+        assert!(!policy.allow_visible_text);
+    }
+
+    #[test]
+    fn resolve_policy_denies_browser_capture_when_domain_rules_need_a_host() {
+        let mut cfg = ContextConfig::default();
+        cfg.rules.domain_denylist = vec!["mail.google.com".to_string()];
+
+        let policy = resolve_policy(
+            &cfg,
+            Some(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+            None,
+        );
+
         assert_eq!(policy.domain_rule.as_deref(), Some("deny"));
         assert!(!policy.allow_input_state);
         assert!(!policy.allow_related_content);

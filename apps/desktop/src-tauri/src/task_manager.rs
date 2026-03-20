@@ -646,20 +646,22 @@ impl TaskManager {
         } else {
             context_pack::ContextSnapshot::default()
         };
-        if let Some(pre) = opts.pre_captured_context.clone() {
-            merge_pre_captured_context(&ctx_cfg, &mut ctx_snap, pre);
-            crate::obs::event(
-                &data_dir,
-                Some(&task_id),
-                "ContextCapture",
-                "CTX.hotkey_capture_injected",
-                "ok",
-                Some(serde_json::json!({
-                    "has_focused_app": ctx_snap.focused_app.is_some(),
-                    "has_focused_element": ctx_snap.focused_element.is_some(),
-                    "has_input_state": ctx_snap.input_state.is_some(),
-                })),
-            );
+        if opts.rewrite_enabled {
+            if let Some(pre) = opts.pre_captured_context.clone() {
+                merge_pre_captured_context(&ctx_cfg, &mut ctx_snap, pre);
+                crate::obs::event(
+                    &data_dir,
+                    Some(&task_id),
+                    "ContextCapture",
+                    "CTX.hotkey_capture_injected",
+                    "ok",
+                    Some(serde_json::json!({
+                        "has_focused_app": ctx_snap.focused_app.is_some(),
+                        "has_focused_element": ctx_snap.focused_element.is_some(),
+                        "has_input_state": ctx_snap.input_state.is_some(),
+                    })),
+                );
+            }
         }
 
         if !ctx_cfg.include_history {
@@ -1482,5 +1484,40 @@ mod tests {
                 .and_then(|v| v.target_source.as_deref()),
             Some("last_external")
         );
+    }
+
+    #[test]
+    fn rewrite_disabled_flow_keeps_context_snapshot_empty() {
+        let opts = StartOpts {
+            asr_provider: "local".to_string(),
+            remote_asr_url: String::new(),
+            remote_asr_model: None,
+            remote_asr_concurrency: 1,
+            rewrite_enabled: false,
+            template_id: None,
+            asr_preprocess: crate::pipeline::PreprocessConfig::default(),
+            rewrite_glossary: Vec::new(),
+            rewrite_include_glossary: false,
+            context_cfg: context_capture::ContextConfig::default(),
+            pre_captured_context: Some(ContextSnapshot {
+                clipboard_text: Some("secret".to_string()),
+                ..Default::default()
+            }),
+            record_elapsed_ms: 0,
+            record_label: "Record".to_string(),
+        };
+
+        let mut ctx_snap = if opts.rewrite_enabled {
+            panic!("rewrite should be disabled in this test");
+        } else {
+            ContextSnapshot::default()
+        };
+        if opts.rewrite_enabled {
+            if let Some(pre) = opts.pre_captured_context.clone() {
+                merge_pre_captured_context(&opts.context_cfg, &mut ctx_snap, pre);
+            }
+        }
+
+        assert!(ctx_snap.clipboard_text.is_none());
     }
 }
