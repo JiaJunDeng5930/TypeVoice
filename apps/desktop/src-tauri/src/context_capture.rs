@@ -10,7 +10,6 @@ use crate::{history, settings};
 use crate::{obs, obs::Span};
 #[cfg(windows)]
 use anyhow::Result;
-#[cfg(windows)]
 use url::Url;
 #[cfg(windows)]
 use uuid::Uuid;

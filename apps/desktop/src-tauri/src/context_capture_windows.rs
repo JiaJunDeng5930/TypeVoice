@@ -273,12 +273,7 @@ impl WindowsContext {
         let Some(element) = focused else {
             return out;
         };
-        if element
-            .get_process_id()
-            .ok()
-            .filter(|v| *v == pid)
-            .is_none()
-        {
+        if !element_belongs_to_window(&automation, &root, &element) {
             return out;
         }
 
@@ -412,6 +407,32 @@ fn stable_focused_element(automation: &UIAutomation) -> (bool, Option<UIElement>
         std::thread::sleep(Duration::from_millis(30));
     }
     (false, last_element)
+}
+
+fn element_belongs_to_window(
+    automation: &UIAutomation,
+    root: &UIElement,
+    element: &UIElement,
+) -> bool {
+    if automation.compare_elements(root, element).unwrap_or(false) {
+        return true;
+    }
+    let walker = match automation.create_tree_walker() {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let mut current = element.clone();
+    for _ in 0..64 {
+        let parent = match walker.get_parent(&current) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        if automation.compare_elements(&parent, root).unwrap_or(false) {
+            return true;
+        }
+        current = parent;
+    }
+    false
 }
 
 fn describe_element(element: &UIElement) -> FocusedElementInfo {

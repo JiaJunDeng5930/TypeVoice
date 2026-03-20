@@ -118,6 +118,7 @@
 - [VERIFIED] 2026-03-18：提交 `fix(context): honor deny rules and frozen hotkey policy` 后，`apps/desktop/src-tauri cargo test -q` 通过（40 passed），`scripts/windows/windows_gate.ps1` 的 Windows compile gate 通过，但完整 gate 仍被既有环境问题阻断：FFmpeg 签名 key 导入失败、fixtures 下载 `zh_10s.ogg` 命中 Wikimedia 403、`npm ci` 触发 `@tauri-apps/cli-win32-x64-msvc/cli.win32-x64-msvc.node` 的 `EPERM unlink` 占用错误，导致后续 `tauri` 命令不可用。
 - [VERIFIED] 2026-03-18：本轮按文档执行 `scripts/windows/windows_gate.ps1` 时，Windows compile gate 通过，但后续 gate 未完整通过：FFmpeg 上游签名 key 导入失败、fixtures 下载 `zh_10s.ogg` 遇到 Wikimedia 403、`npm ci` 命中 `@esbuild/win32-x64/esbuild.exe` 的 `EPERM unlink` 占用错误，因此未形成完整 Windows 闭环通过结论。
 - [VERIFIED] 2026-03-19：已修复三处上下文回归：app/domain `deny` 规则现在会在 Windows 正文文本采集前生效，不再“先读再丢”；`start_backend_recording` 在缺失 `settings.json` 时改为使用默认上下文配置继续启动；`focused_app.window_title` 已改为受 `context_include_focused_app_meta` 控制，不再错误依赖 `context_include_prev_window_meta`。
+- [VERIFIED] 2026-03-20：已修复两处 review 阻断项：`context_capture.rs` 的 `Url` 导入改为跨平台可见，避免 Linux/CI 因 `extract_hostname` 无法解析而编译失败；Windows UIA 焦点元素归属判断改为“属于目标窗口子树”而非“必须同 PID”，避免 Chromium/Electron 多进程文本框被误丢弃。`apps/desktop/src-tauri cargo test -q` 通过（50 passed）。
 
 ### 当前工作集
 
