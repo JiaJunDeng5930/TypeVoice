@@ -195,6 +195,27 @@ pub(crate) fn is_browser_process(process_image: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
+fn is_browser_window_class(class_name: Option<&str>) -> bool {
+    class_name
+        .map(|name| {
+            let normalized = name.trim().to_ascii_lowercase();
+            normalized.starts_with("chrome_widgetwin_")
+                || normalized == "mozillawindowclass"
+                || normalized == "mozilla_dialog_class"
+        })
+        .unwrap_or(false)
+}
+
+pub(crate) fn is_browser_target(
+    process_image: Option<&str>,
+    window_class: Option<&str>,
+    url: Option<&str>,
+) -> bool {
+    is_browser_process(process_image)
+        || is_browser_window_class(window_class)
+        || url.map(|value| !value.trim().is_empty()).unwrap_or(false)
+}
+
 fn extract_hostname(url: Option<&str>) -> Option<String> {
     let raw = url?.trim();
     if raw.is_empty() {
@@ -215,11 +236,12 @@ fn extract_hostname(url: Option<&str>) -> Option<String> {
 fn resolve_policy(
     cfg: &ContextConfig,
     process_image: Option<&str>,
+    window_class: Option<&str>,
     url: Option<&str>,
 ) -> PolicyResolution {
     let app_name = process_basename(process_image);
     let host = extract_hostname(url);
-    let requires_domain_resolution = is_browser_process(process_image)
+    let requires_domain_resolution = is_browser_target(process_image, window_class, url)
         && host.is_none()
         && (!cfg.rules.domain_allowlist.is_empty() || !cfg.rules.domain_denylist.is_empty());
     let app_rule = if let Some(name) = app_name.as_deref() {
@@ -636,12 +658,10 @@ impl ContextService {
                 .and_then(|v| v.process_image.as_deref()),
         );
         if allow_last_external && matches!(self_process.as_deref(), Some("typevoice-desktop.exe")) {
-            if let Some(last_external) =
-                win.capture_last_external_text_context_best_effort(
-                    &pre_policy_last_external_config(cfg),
-                    5_000,
-                )
-            {
+            if let Some(last_external) = win.capture_last_external_text_context_best_effort(
+                &pre_policy_last_external_config(cfg),
+                5_000,
+            ) {
                 captured = last_external;
             }
         }
@@ -652,6 +672,10 @@ impl ContextService {
                 .focused_app
                 .as_ref()
                 .and_then(|v| v.process_image.as_deref()),
+            captured
+                .focused_window
+                .as_ref()
+                .and_then(|v| v.class_name.as_deref()),
             captured.focused_app.as_ref().and_then(|v| v.url.as_deref()),
         );
         let effective_cfg = policy_capture_config(cfg, &policy);
@@ -785,6 +809,7 @@ mod tests {
         let policy = resolve_policy(
             &cfg,
             Some(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+            None,
             Some("https://mail.google.com/mail/u/0/#inbox"),
         );
 
@@ -804,6 +829,7 @@ mod tests {
             &cfg,
             Some(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
             None,
+            None,
         );
 
         assert_eq!(policy.domain_rule.as_deref(), Some("deny"));
@@ -820,6 +846,7 @@ mod tests {
         let policy = resolve_policy(
             &cfg,
             Some(r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe"),
+            None,
             None,
         );
 
@@ -840,6 +867,7 @@ mod tests {
         let policy = resolve_policy(
             &cfg,
             Some(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+            None,
             Some("https://example.com/path"),
         );
 
@@ -854,21 +882,21 @@ mod tests {
     fn resolve_policy_distinguishes_minimal_balanced_and_full() {
         let mut minimal = ContextConfig::default();
         minimal.rules.capture_mode = "minimal".to_string();
-        let minimal_policy = resolve_policy(&minimal, Some("notepad.exe"), None);
+        let minimal_policy = resolve_policy(&minimal, Some("notepad.exe"), None, None);
         assert!(!minimal_policy.allow_input_state);
         assert!(!minimal_policy.allow_related_content);
         assert!(!minimal_policy.allow_visible_text);
 
         let mut balanced = ContextConfig::default();
         balanced.rules.capture_mode = "balanced".to_string();
-        let balanced_policy = resolve_policy(&balanced, Some("notepad.exe"), None);
+        let balanced_policy = resolve_policy(&balanced, Some("notepad.exe"), None, None);
         assert!(balanced_policy.allow_input_state);
         assert!(balanced_policy.allow_related_content);
         assert!(!balanced_policy.allow_visible_text);
 
         let mut full = ContextConfig::default();
         full.rules.capture_mode = "full".to_string();
-        let full_policy = resolve_policy(&full, Some("notepad.exe"), None);
+        let full_policy = resolve_policy(&full, Some("notepad.exe"), None, None);
         assert!(full_policy.allow_input_state);
         assert!(full_policy.allow_related_content);
         assert!(full_policy.allow_visible_text);
@@ -893,6 +921,7 @@ mod tests {
         let policy = resolve_policy(
             &cfg,
             Some(r"C:\Program Files\Notepad++\notepad++.exe"),
+            None,
             Some("https://example.com"),
         );
         let effective = policy_capture_config(&cfg, &policy);
@@ -906,6 +935,7 @@ mod tests {
         let denied_policy = resolve_policy(
             &denied_cfg,
             Some(r"C:\Program Files\Notepad++\notepad++.exe"),
+            None,
             Some("https://example.com"),
         );
         let denied_effective = policy_capture_config(&denied_cfg, &denied_policy);
@@ -913,6 +943,19 @@ mod tests {
         assert!(!denied_effective.include_input_state);
         assert!(!denied_effective.include_related_content);
         assert!(!denied_effective.include_visible_text);
+    }
+
+    #[test]
+    fn resolve_policy_denies_browser_capture_when_window_class_identifies_browser() {
+        let mut cfg = ContextConfig::default();
+        cfg.rules.domain_denylist = vec!["mail.google.com".to_string()];
+
+        let policy = resolve_policy(&cfg, None, Some("Chrome_WidgetWin_1"), None);
+
+        assert_eq!(policy.domain_rule.as_deref(), Some("deny"));
+        assert!(!policy.allow_input_state);
+        assert!(!policy.allow_related_content);
+        assert!(!policy.allow_visible_text);
     }
 
     #[test]

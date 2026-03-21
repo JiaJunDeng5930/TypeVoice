@@ -16,7 +16,8 @@ use windows_sys::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindow,
+    GetClassNameW, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
+    GetWindowThreadProcessId, IsWindow,
 };
 
 use crate::context_capture::ContextConfig;
@@ -207,11 +208,17 @@ impl WindowsContext {
         cfg: &ContextConfig,
     ) -> ForegroundTextContext {
         let title = get_window_title_best_effort(hwnd);
+        let window_class = get_window_class_best_effort(hwnd);
         let process_image = if pid != 0 {
             get_process_image_best_effort(pid)
         } else {
             None
         };
+        let is_browser = crate::context_capture::is_browser_target(
+            process_image.as_deref(),
+            window_class.as_deref(),
+            None,
+        );
         let mut out = ForegroundTextContext {
             focused_app: Some(FocusedAppInfo {
                 process_image: process_image.clone(),
@@ -221,13 +228,13 @@ impl WindowsContext {
                     None
                 },
                 url: None,
-                is_browser: detect_browser(process_image.as_deref()),
+                is_browser,
                 target_source: Some(target_source.to_string()),
             }),
             focused_window: if cfg.include_prev_window_meta {
                 Some(FocusedWindowInfo {
                     title: title.clone(),
-                    class_name: None,
+                    class_name: window_class.clone(),
                 })
             } else {
                 None
@@ -249,11 +256,10 @@ impl WindowsContext {
             Err(_) => return out,
         };
 
-        if out.focused_app.as_ref().is_some_and(|app| app.is_browser) {
-            if let Some(url) = find_browser_url(&automation, &root) {
-                if let Some(app) = out.focused_app.as_mut() {
-                    app.url = Some(url);
-                }
+        if let Some(url) = find_browser_url(&automation, &root) {
+            if let Some(app) = out.focused_app.as_mut() {
+                app.url = Some(url);
+                app.is_browser = true;
             }
         }
 
@@ -262,11 +268,8 @@ impl WindowsContext {
                 collect_visible_text(&automation, &root, cfg.budget.max_chars_visible_text);
         }
 
-        let (focus_stable, focused) = resolve_context_element(
-            &automation,
-            &root,
-            allow_focus_context,
-        );
+        let (focus_stable, focused) =
+            resolve_context_element(&automation, &root, allow_focus_context);
         if let Some(diag) = out.capture_diag.as_mut() {
             diag.focus_stable = focus_stable;
         }
@@ -818,18 +821,6 @@ fn normalize_browser_url_candidate(value: &str) -> Option<String> {
         .and_then(|url| url.host_str().map(|_| normalized))
 }
 
-fn detect_browser(process_image: Option<&str>) -> bool {
-    crate::context_capture::is_browser_process(process_image)
-}
-
-fn process_basename(process_image: Option<&str>) -> Option<String> {
-    let raw = process_image?.replace('/', "\\");
-    raw.rsplit('\\')
-        .next()
-        .map(|v| v.trim().to_ascii_lowercase())
-        .filter(|v| !v.is_empty())
-}
-
 fn non_empty_trimmed(s: String) -> Option<String> {
     let trimmed = s.trim().to_string();
     if trimmed.is_empty() {
@@ -909,6 +900,16 @@ fn get_window_title_best_effort(hwnd: HWND) -> Option<String> {
     }
     let mut buf = vec![0u16; (len as usize) + 1];
     let n = unsafe { GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32) };
+    if n <= 0 {
+        return None;
+    }
+    buf.truncate(n as usize);
+    Some(String::from_utf16_lossy(&buf).trim().to_string())
+}
+
+fn get_window_class_best_effort(hwnd: HWND) -> Option<String> {
+    let mut buf = vec![0u16; 256];
+    let n = unsafe { GetClassNameW(hwnd, buf.as_mut_ptr(), buf.len() as i32) };
     if n <= 0 {
         return None;
     }

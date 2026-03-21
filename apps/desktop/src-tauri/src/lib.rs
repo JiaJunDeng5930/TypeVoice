@@ -408,9 +408,12 @@ fn recording_context_config_from_settings(
     data_dir: &std::path::Path,
 ) -> Result<Option<context_capture::ContextConfig>, String> {
     if !settings::settings_path(data_dir).exists() {
-        return Ok(Some(context_capture::ContextConfig::default()));
+        return Ok(None);
     }
     let s = settings::load_settings_strict(data_dir).map_err(|e| e.to_string())?;
+    if !s.rewrite_enabled.unwrap_or(false) {
+        return Ok(None);
+    }
     Ok(Some(context_capture::config_from_settings(&s)))
 }
 
@@ -2035,18 +2038,13 @@ mod tests {
     fn recording_context_config_uses_defaults_when_settings_file_is_absent() {
         let td = tempfile::tempdir().expect("tempdir");
 
-        let cfg = recording_context_config_from_settings(td.path())
-            .expect("context cfg")
-            .expect("default context cfg");
+        let cfg = recording_context_config_from_settings(td.path()).expect("context cfg");
 
-        assert_eq!(cfg.rules.capture_mode, "balanced");
-        assert!(cfg.include_input_state);
-        assert!(cfg.include_related_content);
-        assert!(cfg.include_visible_text);
+        assert!(cfg.is_none());
     }
 
     #[test]
-    fn recording_context_config_still_freezes_when_rewrite_is_disabled() {
+    fn recording_context_config_skips_freeze_when_rewrite_is_disabled() {
         let td = tempfile::tempdir().expect("tempdir");
         let settings = settings::Settings {
             rewrite_enabled: Some(false),
@@ -2056,11 +2054,8 @@ mod tests {
         };
         settings::save_settings(td.path(), &settings).expect("save settings");
 
-        let cfg = recording_context_config_from_settings(td.path())
-            .expect("context cfg")
-            .expect("frozen context cfg");
+        let cfg = recording_context_config_from_settings(td.path()).expect("context cfg");
 
-        assert_eq!(cfg.rules.capture_mode, "full");
-        assert!(cfg.include_visible_text);
+        assert!(cfg.is_none());
     }
 }

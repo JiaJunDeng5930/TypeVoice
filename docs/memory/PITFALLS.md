@@ -50,3 +50,4 @@
 - `trace.jsonl` 在并发写场景下需序列化写入；否则可能出现粘连行导致 JSON 解析失败。
 - Windows 自动粘贴链路里，`SendInput` 返回成功并不等于“文本已进入目标输入框”；目标窗口/焦点判定必须与任务时刻一致，且不能依赖“最近外部窗口”推断来宣称成功。
 - Windows 热键 overlay 若在导出时仍保持可见，可能抢占前台焦点，导致 Unicode 输入命中 TypeVoice 自身窗口并产生“假成功”；导出前先隐藏 overlay 并校验目标进程归属。
+- 浏览器 domain allow/deny 规则不能只依赖 `process_image` 识别浏览器；`QueryFullProcessImageNameW` 失败时应继续使用窗口类名或已解析 URL 判定，否则会把本应拒绝的浏览器正文文本误当普通窗口采集。
