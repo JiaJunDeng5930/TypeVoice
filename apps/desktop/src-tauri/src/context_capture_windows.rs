@@ -262,11 +262,11 @@ impl WindowsContext {
                 collect_visible_text(&automation, &root, cfg.budget.max_chars_visible_text);
         }
 
-        if !allow_focus_context {
-            return out;
-        }
-
-        let (focus_stable, focused) = stable_focused_element(&automation);
+        let (focus_stable, focused) = resolve_context_element(
+            &automation,
+            &root,
+            allow_focus_context,
+        );
         if let Some(diag) = out.capture_diag.as_mut() {
             diag.focus_stable = focus_stable;
         }
@@ -407,6 +407,86 @@ fn stable_focused_element(automation: &UIAutomation) -> (bool, Option<UIElement>
         std::thread::sleep(Duration::from_millis(30));
     }
     (false, last_element)
+}
+
+fn resolve_context_element(
+    automation: &UIAutomation,
+    root: &UIElement,
+    allow_focus_context: bool,
+) -> (bool, Option<UIElement>) {
+    if allow_focus_context {
+        let (focus_stable, focused) = stable_focused_element(automation);
+        if let Some(element) = focused {
+            if element_belongs_to_window(automation, root, &element) {
+                return (focus_stable, Some(element));
+            }
+        }
+    }
+
+    (false, best_editable_descendant(automation, root))
+}
+
+fn best_editable_descendant(automation: &UIAutomation, root: &UIElement) -> Option<UIElement> {
+    let condition = automation.create_true_condition().ok()?;
+    let descendants = root.find_all(TreeScope::Descendants, &condition).ok()?;
+    let mut best: Option<(i32, UIElement)> = None;
+    for element in descendants {
+        let element_info = describe_element(&element);
+        if !element_info.editable {
+            continue;
+        }
+        let score = context_element_candidate_score(
+            element_info.role.as_deref(),
+            element.has_keyboard_focus().unwrap_or(false),
+            element.is_offscreen().unwrap_or(false),
+            element_has_text(&element),
+        );
+        match &best {
+            Some((best_score, _)) if *best_score >= score => {}
+            _ => best = Some((score, element)),
+        }
+    }
+    best.map(|(_, element)| element)
+}
+
+fn context_element_candidate_score(
+    role: Option<&str>,
+    has_keyboard_focus: bool,
+    is_offscreen: bool,
+    has_text: bool,
+) -> i32 {
+    let mut score = 0;
+    if has_keyboard_focus {
+        score += 100;
+    }
+    if !is_offscreen {
+        score += 20;
+    }
+    if has_text {
+        score += 15;
+    }
+    match role {
+        Some("Document") => score += 12,
+        Some("Edit") => score += 10,
+        Some(_) | None => {}
+    }
+    score
+}
+
+fn element_has_text(element: &UIElement) -> bool {
+    if let Ok(name) = element.get_name() {
+        if !name.trim().is_empty() {
+            return true;
+        }
+    }
+    if let Ok(value_pattern) = element.get_pattern::<UIValuePattern>() {
+        if let Ok(value) = value_pattern.get_value() {
+            if !value.trim().is_empty() {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn element_belongs_to_window(
@@ -779,7 +859,8 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        browser_url_field_score, input_context_from_value, normalize_browser_url_candidate,
+        browser_url_field_score, context_element_candidate_score, input_context_from_value,
+        normalize_browser_url_candidate,
     };
 
     #[test]
@@ -810,6 +891,16 @@ mod tests {
         assert_eq!(ctx.selection_text, None);
         assert_eq!(ctx.before_text, None);
         assert_eq!(ctx.after_text, None);
+    }
+
+    #[test]
+    fn context_element_candidate_score_prefers_visible_focused_editable_text() {
+        let focused_score = context_element_candidate_score(Some("Edit"), true, false, true);
+        let unfocused_score = context_element_candidate_score(Some("Edit"), false, false, true);
+        let offscreen_score = context_element_candidate_score(Some("Edit"), false, true, true);
+
+        assert!(focused_score > unfocused_score);
+        assert!(unfocused_score > offscreen_score);
     }
 }
 
