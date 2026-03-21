@@ -819,9 +819,7 @@ fn normalize_browser_url_candidate(value: &str) -> Option<String> {
 }
 
 fn detect_browser(process_image: Option<&str>) -> bool {
-    process_basename(process_image)
-        .map(|name| matches!(name.as_str(), "chrome.exe" | "msedge.exe" | "firefox.exe"))
-        .unwrap_or(false)
+    crate::context_capture::is_browser_process(process_image)
 }
 
 fn process_basename(process_image: Option<&str>) -> Option<String> {

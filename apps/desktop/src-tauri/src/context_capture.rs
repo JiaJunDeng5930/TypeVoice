@@ -174,9 +174,24 @@ fn process_basename(process_image: Option<&str>) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-fn is_browser_process(process_image: Option<&str>) -> bool {
+fn is_browser_basename(name: &str) -> bool {
+    matches!(
+        name,
+        "chrome.exe"
+            | "msedge.exe"
+            | "firefox.exe"
+            | "brave.exe"
+            | "chromium.exe"
+            | "vivaldi.exe"
+            | "opera.exe"
+            | "opera_gx.exe"
+            | "arc.exe"
+    )
+}
+
+pub(crate) fn is_browser_process(process_image: Option<&str>) -> bool {
     process_basename(process_image)
-        .map(|name| matches!(name.as_str(), "chrome.exe" | "msedge.exe" | "firefox.exe"))
+        .map(|name| is_browser_basename(name.as_str()))
         .unwrap_or(false)
 }
 
@@ -314,6 +329,16 @@ fn merge_runtime_snapshot(mut snap: ContextSnapshot, runtime: ContextSnapshot) -
     snap.policy_decision = runtime.policy_decision;
     snap.capture_diag = runtime.capture_diag;
     snap
+}
+
+fn apply_focused_window_fallback(cfg: &ContextConfig, snap: &mut ContextSnapshot) {
+    if !cfg.include_prev_window_meta || snap.focused_window.is_some() {
+        return;
+    }
+    snap.focused_window = snap.focused_app.as_ref().map(|app| FocusedWindowInfo {
+        title: app.window_title.clone(),
+        class_name: None,
+    });
 }
 
 #[derive(Clone)]
@@ -699,12 +724,7 @@ impl ContextService {
             }),
         };
 
-        if snap.focused_window.is_none() {
-            snap.focused_window = snap.focused_app.as_ref().map(|app| FocusedWindowInfo {
-                title: app.window_title.clone(),
-                class_name: None,
-            });
-        }
+        apply_focused_window_fallback(cfg, &mut snap);
         snap
     }
 }
@@ -712,8 +732,9 @@ impl ContextService {
 #[cfg(test)]
 mod tests {
     use super::{
-        config_from_settings, extract_hostname, merge_runtime_snapshot, metadata_probe_config,
-        policy_capture_config, pre_policy_last_external_config, resolve_policy, ContextConfig,
+        apply_focused_window_fallback, config_from_settings, extract_hostname,
+        merge_runtime_snapshot, metadata_probe_config, policy_capture_config,
+        pre_policy_last_external_config, resolve_policy, ContextConfig,
     };
     use crate::context_pack::{
         ContextCaptureDiag, ContextPolicyDecision, ContextSnapshot, FocusedAppInfo, HistorySnippet,
@@ -782,6 +803,23 @@ mod tests {
         let policy = resolve_policy(
             &cfg,
             Some(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+            None,
+        );
+
+        assert_eq!(policy.domain_rule.as_deref(), Some("deny"));
+        assert!(!policy.allow_input_state);
+        assert!(!policy.allow_related_content);
+        assert!(!policy.allow_visible_text);
+    }
+
+    #[test]
+    fn resolve_policy_treats_brave_as_browser_for_domain_rules() {
+        let mut cfg = ContextConfig::default();
+        cfg.rules.domain_denylist = vec!["mail.google.com".to_string()];
+
+        let policy = resolve_policy(
+            &cfg,
+            Some(r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe"),
             None,
         );
 
@@ -922,5 +960,31 @@ mod tests {
                 .and_then(|app| app.process_image.as_deref()),
             Some("notepad.exe")
         );
+    }
+
+    #[test]
+    fn focused_window_fallback_respects_window_meta_toggle() {
+        let cfg = ContextConfig {
+            include_prev_window_meta: false,
+            include_focused_app_meta: true,
+            ..ContextConfig::default()
+        };
+        let mut snap = ContextSnapshot {
+            focused_app: Some(FocusedAppInfo {
+                process_image: Some("notepad.exe".to_string()),
+                window_title: Some("note".to_string()),
+                url: None,
+                is_browser: false,
+                target_source: Some("foreground".to_string()),
+            }),
+            focused_window: None,
+            ..Default::default()
+        };
+
+        apply_focused_window_fallback(&cfg, &mut snap);
+
+        assert!(cfg.include_focused_app_meta);
+        assert!(!cfg.include_prev_window_meta);
+        assert!(snap.focused_window.is_none());
     }
 }
