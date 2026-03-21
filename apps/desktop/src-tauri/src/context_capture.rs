@@ -292,6 +292,10 @@ fn metadata_probe_config(cfg: &ContextConfig) -> ContextConfig {
     probe
 }
 
+fn pre_policy_last_external_config(cfg: &ContextConfig) -> ContextConfig {
+    metadata_probe_config(cfg)
+}
+
 fn policy_capture_config(cfg: &ContextConfig, policy: &PolicyResolution) -> ContextConfig {
     let mut effective = cfg.clone();
     effective.include_input_state &= policy.allow_input_state;
@@ -608,7 +612,10 @@ impl ContextService {
         );
         if allow_last_external && matches!(self_process.as_deref(), Some("typevoice-desktop.exe")) {
             if let Some(last_external) =
-                win.capture_last_external_text_context_best_effort(cfg, 5_000)
+                win.capture_last_external_text_context_best_effort(
+                    &pre_policy_last_external_config(cfg),
+                    5_000,
+                )
             {
                 captured = last_external;
             }
@@ -706,7 +713,7 @@ impl ContextService {
 mod tests {
     use super::{
         config_from_settings, extract_hostname, merge_runtime_snapshot, metadata_probe_config,
-        policy_capture_config, resolve_policy, ContextConfig,
+        policy_capture_config, pre_policy_last_external_config, resolve_policy, ContextConfig,
     };
     use crate::context_pack::{
         ContextCaptureDiag, ContextPolicyDecision, ContextSnapshot, FocusedAppInfo, HistorySnippet,
@@ -725,6 +732,19 @@ mod tests {
 
         assert_eq!(cfg.budget.max_chars_related_before, 111);
         assert_eq!(cfg.budget.max_chars_related_after, 37);
+    }
+
+    #[test]
+    fn pre_policy_last_external_config_uses_metadata_only() {
+        let cfg = ContextConfig::default();
+
+        let probe_cfg = pre_policy_last_external_config(&cfg);
+
+        assert!(!probe_cfg.include_input_state);
+        assert!(!probe_cfg.include_related_content);
+        assert!(!probe_cfg.include_visible_text);
+        assert!(probe_cfg.include_focused_app_meta);
+        assert!(probe_cfg.include_prev_window_meta);
     }
 
     #[test]
