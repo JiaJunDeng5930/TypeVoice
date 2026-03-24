@@ -829,9 +829,8 @@ fn start_backend_recording(
     let resolved_input = cached_input.resolved.clone();
     let input_spec = resolved_input.spec.clone();
     let ffmpeg = pipeline::ffmpeg_cmd().map_err(|e| e.to_string())?;
-    let pre_captured_context = match recording_context_config_from_settings(&dir) {
-        Ok(Some(cfg)) => Some(state.capture_recording_context_best_effort(&dir, &cfg)),
-        Ok(None) => None,
+    let recording_context_cfg = match recording_context_config_from_settings(&dir) {
+        Ok(v) => v,
         Err(e) => {
             span.err("config", "E_SETTINGS_INVALID", &e, None);
             return Err(e);
@@ -913,6 +912,10 @@ fn start_backend_recording(
             return Err(msg);
         }
     }
+
+    let pre_captured_context = recording_context_cfg
+        .as_ref()
+        .map(|cfg| state.capture_recording_context_best_effort(&dir, cfg));
 
     g.active = Some(ActiveBackendRecording {
         recording_id: recording_id.clone(),

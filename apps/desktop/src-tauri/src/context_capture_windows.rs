@@ -179,7 +179,9 @@ impl WindowsContext {
         max_age_ms: i64,
     ) -> Option<ForegroundTextContext> {
         self.tracker.ensure_started();
-        let snap = self.tracker.last_external_snapshot();
+        let snap = self
+            .tracker
+            .wait_for_last_external_snapshot(Duration::from_millis(250));
         let hwnd = snap.hwnd? as HWND;
         let age_ms = snap
             .seen_at_ms
@@ -373,6 +375,17 @@ impl ForegroundTracker {
 
     fn last_external_snapshot(&self) -> ExternalSnapshot {
         self.last_external.lock().unwrap().clone()
+    }
+
+    fn wait_for_last_external_snapshot(&self, max_wait: Duration) -> ExternalSnapshot {
+        let start = std::time::Instant::now();
+        loop {
+            let snap = self.last_external_snapshot();
+            if snap.hwnd.is_some() || start.elapsed() >= max_wait {
+                return snap;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 }
 
@@ -764,6 +777,9 @@ fn find_browser_url(automation: &UIAutomation, root: &UIElement) -> Option<Strin
         let name = element.get_name().unwrap_or_default();
         let automation_id = element.get_automation_id().unwrap_or_default();
         let score = browser_url_field_score(&name, &automation_id);
+        if score == 0 {
+            continue;
+        }
         match &best_match {
             Some((best_score, _)) if *best_score >= score => {}
             _ => best_match = Some((score, normalized)),
@@ -775,14 +791,12 @@ fn find_browser_url(automation: &UIAutomation, root: &UIElement) -> Option<Strin
 fn browser_url_field_score(name: &str, automation_id: &str) -> usize {
     let normalized_name = name.to_lowercase();
     let normalized_automation_id = automation_id.to_lowercase();
-    let mut score = 1usize;
+    let mut score = 0usize;
     for token in [
         "address",
-        "search",
         "url",
         "\u{5730}\u{5740}",
         "\u{7f51}\u{5740}",
-        "\u{641c}\u{7d22}",
         "\u{4f4f}\u{6240}",
         "\u{ad6c}\u{c18c}",
         "\u{30a2}\u{30c9}\u{30ec}\u{30b9}",
@@ -791,9 +805,7 @@ fn browser_url_field_score(name: &str, automation_id: &str) -> usize {
             score += 4;
         }
     }
-    if normalized_automation_id.contains("address")
-        || normalized_automation_id.contains("search")
-        || normalized_automation_id.contains("omnibox")
+    if normalized_automation_id.contains("address") || normalized_automation_id.contains("omnibox")
     {
         score += 6;
     }
@@ -871,6 +883,12 @@ mod tests {
             browser_url_field_score("\u{5730}\u{5740}\u{548c}\u{641c}\u{7d22}\u{680f}", "")
                 > browser_url_field_score("message search", "")
         );
+    }
+
+    #[test]
+    fn browser_url_field_score_rejects_generic_search_fields() {
+        assert_eq!(browser_url_field_score("Search", ""), 0);
+        assert_eq!(browser_url_field_score("", "searchBox"), 0);
     }
 
     #[test]
