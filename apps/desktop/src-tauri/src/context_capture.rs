@@ -179,6 +179,13 @@ struct PolicyResolution {
     allow_visible_text: bool,
 }
 
+impl PolicyResolution {
+    fn has_allow_override(&self) -> bool {
+        matches!(self.app_rule.as_deref(), Some("allow"))
+            || matches!(self.domain_rule.as_deref(), Some("allow"))
+    }
+}
+
 fn process_basename(process_image: Option<&str>) -> Option<String> {
     let raw = process_image?.replace('/', "\\");
     raw.rsplit('\\')
@@ -321,9 +328,13 @@ fn pre_policy_last_external_config(cfg: &ContextConfig) -> ContextConfig {
 
 fn policy_capture_config(cfg: &ContextConfig, policy: &PolicyResolution) -> ContextConfig {
     let mut effective = cfg.clone();
-    effective.include_input_state &= policy.allow_input_state;
-    effective.include_related_content &= policy.allow_related_content;
-    effective.include_visible_text &= policy.allow_visible_text;
+    let allow_override = policy.has_allow_override();
+    effective.include_input_state =
+        (effective.include_input_state || allow_override) && policy.allow_input_state;
+    effective.include_related_content =
+        (effective.include_related_content || allow_override) && policy.allow_related_content;
+    effective.include_visible_text =
+        (effective.include_visible_text || allow_override) && policy.allow_visible_text;
     effective
 }
 
@@ -744,7 +755,7 @@ mod tests {
     use super::{
         apply_focused_window_fallback, config_from_settings, extract_hostname,
         merge_runtime_snapshot, metadata_probe_config, policy_capture_config,
-        pre_policy_last_external_config, resolve_policy, ContextConfig,
+        pre_policy_last_external_config, resolve_policy, ContextConfig, ContextRules,
     };
     use crate::context_pack::{
         ContextCaptureDiag, ContextPolicyDecision, ContextSnapshot, FocusedAppInfo, HistorySnippet,
@@ -960,6 +971,32 @@ mod tests {
         assert!(!denied_effective.include_input_state);
         assert!(!denied_effective.include_related_content);
         assert!(!denied_effective.include_visible_text);
+    }
+
+    #[test]
+    fn policy_capture_config_lets_allowlists_expand_capture_scope() {
+        let cfg = ContextConfig {
+            include_input_state: false,
+            include_related_content: false,
+            include_visible_text: false,
+            rules: ContextRules {
+                capture_mode: "minimal".to_string(),
+                app_allowlist: vec!["notepad++.exe".to_string()],
+                ..ContextRules::default()
+            },
+            ..ContextConfig::default()
+        };
+        let policy = resolve_policy(
+            &cfg,
+            Some(r"C:\Program Files\Notepad++\notepad++.exe"),
+            None,
+            None,
+        );
+        let effective = policy_capture_config(&cfg, &policy);
+
+        assert!(effective.include_input_state);
+        assert!(effective.include_related_content);
+        assert!(effective.include_visible_text);
     }
 
     #[test]

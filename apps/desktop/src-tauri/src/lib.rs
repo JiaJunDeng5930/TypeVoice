@@ -408,7 +408,9 @@ fn recording_context_config_from_settings(
     data_dir: &std::path::Path,
 ) -> Result<Option<context_capture::ContextConfig>, String> {
     if !settings::settings_path(data_dir).exists() {
-        return Ok(None);
+        return Ok(Some(context_capture::config_from_settings(
+            &settings::Settings::default(),
+        )));
     }
     let s = settings::load_settings_strict(data_dir).map_err(|e| e.to_string())?;
     if !s.rewrite_enabled.unwrap_or(false) {
@@ -2050,9 +2052,14 @@ mod tests {
     fn recording_context_config_uses_defaults_when_settings_file_is_absent() {
         let td = tempfile::tempdir().expect("tempdir");
 
-        let cfg = recording_context_config_from_settings(td.path()).expect("context cfg");
+        let cfg = recording_context_config_from_settings(td.path())
+            .expect("context cfg")
+            .expect("default context cfg");
 
-        assert!(cfg.is_none());
+        assert_eq!(cfg.rules.capture_mode, "balanced");
+        assert!(cfg.include_input_state);
+        assert!(cfg.include_related_content);
+        assert!(!cfg.include_visible_text);
     }
 
     #[test]

@@ -62,6 +62,7 @@ struct ChoiceMessage {
 pub struct RewriteContextPolicy {
     pub include_history: bool,
     pub include_clipboard: bool,
+    pub include_prev_window_meta: bool,
     pub include_focused_app_meta: bool,
     pub include_focused_element_meta: bool,
     pub include_input_state: bool,
@@ -75,6 +76,7 @@ impl Default for RewriteContextPolicy {
         Self {
             include_history: false,
             include_clipboard: false,
+            include_prev_window_meta: false,
             include_focused_app_meta: false,
             include_focused_element_meta: false,
             include_input_state: false,
@@ -527,6 +529,7 @@ fn build_rewrite_user_text(
 
     let include_context_sections = policy.include_history
         || policy.include_clipboard
+        || policy.include_prev_window_meta
         || policy.include_focused_app_meta
         || policy.include_focused_element_meta
         || policy.include_input_state
@@ -601,6 +604,7 @@ mod tests {
         let policy = RewriteContextPolicy {
             include_history: true,
             include_clipboard: true,
+            include_prev_window_meta: false,
             include_focused_app_meta: true,
             include_focused_element_meta: true,
             include_input_state: true,
@@ -625,6 +629,7 @@ mod tests {
         let policy = RewriteContextPolicy {
             include_history: false,
             include_clipboard: false,
+            include_prev_window_meta: false,
             include_focused_app_meta: true,
             include_focused_element_meta: false,
             include_input_state: false,
@@ -635,5 +640,28 @@ mod tests {
         let (send, debug) = build_user_content("hello", Some(&ctx), &[], &policy);
         assert!(matches!(send, MessageContent::Text(_)));
         assert!(matches!(debug, MessageContent::Text(_)));
+    }
+
+    #[test]
+    fn build_rewrite_user_text_keeps_window_only_context() {
+        let prepared = PreparedContext {
+            user_text: "### TRANSCRIPT\nhello\n\n### CONTEXT\nFOCUSED WINDOW\n- title: notes"
+                .to_string(),
+        };
+        let policy = RewriteContextPolicy {
+            include_history: false,
+            include_clipboard: false,
+            include_prev_window_meta: true,
+            include_focused_app_meta: false,
+            include_focused_element_meta: false,
+            include_input_state: false,
+            include_related_content: false,
+            include_visible_text: false,
+            include_glossary: false,
+        };
+
+        let text = build_rewrite_user_text("hello", Some(&prepared), &[], &policy);
+
+        assert!(text.contains("FOCUSED WINDOW"));
     }
 }

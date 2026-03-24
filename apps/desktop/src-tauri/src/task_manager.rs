@@ -1026,6 +1026,7 @@ impl TaskManager {
                     let rewrite_ctx_policy = llm::RewriteContextPolicy {
                         include_history: !ctx_snap.recent_history.is_empty(),
                         include_clipboard: ctx_snap.clipboard_text.is_some(),
+                        include_prev_window_meta: ctx_snap.focused_window.is_some(),
                         include_focused_app_meta: ctx_snap.focused_app.is_some(),
                         include_focused_element_meta: ctx_snap.focused_element.is_some(),
                         include_input_state: ctx_snap.input_state.is_some(),
