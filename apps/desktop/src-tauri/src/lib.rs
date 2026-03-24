@@ -413,7 +413,16 @@ fn recording_context_config_from_settings(
         )));
     }
     let s = settings::load_settings_strict(data_dir).map_err(|e| e.to_string())?;
-    Ok(Some(context_capture::config_from_settings(&s)))
+    let mut cfg = context_capture::config_from_settings(&s);
+    if !s.rewrite_enabled.unwrap_or(false) {
+        cfg.include_history = false;
+        cfg.include_clipboard = false;
+        cfg.include_focused_element_meta = false;
+        cfg.include_input_state = false;
+        cfg.include_related_content = false;
+        cfg.include_visible_text = false;
+    }
+    Ok(Some(cfg))
 }
 
 fn abort_pending_task_if_present(state: &tauri::State<'_, TaskManager>, task_id: &Option<String>) {
@@ -2075,6 +2084,11 @@ mod tests {
             .expect("context cfg");
 
         assert_eq!(cfg.rules.capture_mode, "full");
-        assert!(cfg.include_visible_text);
+        assert!(!cfg.include_history);
+        assert!(!cfg.include_clipboard);
+        assert!(!cfg.include_focused_element_meta);
+        assert!(!cfg.include_input_state);
+        assert!(!cfg.include_related_content);
+        assert!(!cfg.include_visible_text);
     }
 }

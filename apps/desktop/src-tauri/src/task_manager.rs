@@ -157,18 +157,34 @@ fn rewrite_entered(opts: &StartOpts) -> bool {
 
 fn runtime_context_capture_config(
     ctx_cfg: &context_capture::ContextConfig,
-    has_pre_captured_context: bool,
+    pre_captured_context: Option<&context_pack::ContextSnapshot>,
 ) -> context_capture::ContextConfig {
     let mut cfg = ctx_cfg.clone();
-    if has_pre_captured_context {
-        cfg.include_history = false;
-        cfg.include_clipboard = false;
-        cfg.include_focused_app_meta = false;
-        cfg.include_prev_window_meta = false;
-        cfg.include_focused_element_meta = false;
-        cfg.include_input_state = false;
-        cfg.include_related_content = false;
-        cfg.include_visible_text = false;
+    if let Some(pre) = pre_captured_context {
+        if !pre.recent_history.is_empty() {
+            cfg.include_history = false;
+        }
+        if pre.clipboard_text.is_some() {
+            cfg.include_clipboard = false;
+        }
+        if pre.focused_app.is_some() {
+            cfg.include_focused_app_meta = false;
+        }
+        if pre.focused_window.is_some() {
+            cfg.include_prev_window_meta = false;
+        }
+        if pre.focused_element.is_some() {
+            cfg.include_focused_element_meta = false;
+        }
+        if pre.input_state.is_some() {
+            cfg.include_input_state = false;
+        }
+        if pre.related_content.is_some() {
+            cfg.include_related_content = false;
+        }
+        if pre.visible_text.is_some() {
+            cfg.include_visible_text = false;
+        }
     }
     cfg
 }
@@ -639,7 +655,7 @@ impl TaskManager {
         let history_append = self.deps.history_append;
         let ctx_cfg = opts.context_cfg.clone();
         let capture_ctx_cfg =
-            runtime_context_capture_config(&ctx_cfg, opts.pre_captured_context.is_some());
+            runtime_context_capture_config(&ctx_cfg, opts.pre_captured_context.as_ref());
         let mut ctx_snap = if opts.rewrite_enabled {
             self.ctx
                 .capture_snapshot_best_effort_with_config(&data_dir, &task_id, &capture_ctx_cfg)
@@ -1408,18 +1424,31 @@ mod tests {
     }
 
     #[test]
-    fn runtime_context_capture_config_skips_frozen_fields_when_pre_captured_exists() {
+    fn runtime_context_capture_config_skips_only_fields_present_in_pre_capture() {
         let cfg = context_capture::ContextConfig::default();
-        let runtime_cfg = runtime_context_capture_config(&cfg, true);
+        let runtime_cfg = runtime_context_capture_config(
+            &cfg,
+            Some(&ContextSnapshot {
+                clipboard_text: Some("frozen".to_string()),
+                focused_app: Some(crate::context_pack::FocusedAppInfo {
+                    process_image: Some("notepad.exe".to_string()),
+                    window_title: Some("notes".to_string()),
+                    url: None,
+                    is_browser: false,
+                    target_source: Some("foreground".to_string()),
+                }),
+                ..Default::default()
+            }),
+        );
 
-        assert!(!runtime_cfg.include_history);
+        assert!(runtime_cfg.include_history);
         assert!(!runtime_cfg.include_clipboard);
         assert!(!runtime_cfg.include_focused_app_meta);
-        assert!(!runtime_cfg.include_prev_window_meta);
-        assert!(!runtime_cfg.include_focused_element_meta);
-        assert!(!runtime_cfg.include_input_state);
-        assert!(!runtime_cfg.include_related_content);
-        assert!(!runtime_cfg.include_visible_text);
+        assert!(runtime_cfg.include_prev_window_meta);
+        assert!(runtime_cfg.include_focused_element_meta);
+        assert!(runtime_cfg.include_input_state);
+        assert!(runtime_cfg.include_related_content);
+        assert!(runtime_cfg.include_visible_text);
     }
 
     #[test]
