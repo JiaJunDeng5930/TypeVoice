@@ -694,13 +694,19 @@ impl TaskManager {
             .as_ref()
             .map(|v| v.allow_visible_text)
             .unwrap_or(ctx_cfg.include_visible_text);
-        if !ctx_cfg.include_input_state && !allow_input_state {
+        let keep_input_state =
+            ctx_cfg.include_input_state || (!ctx_cfg.input_state_explicit && allow_input_state);
+        let keep_related_content = ctx_cfg.include_related_content
+            || (!ctx_cfg.related_content_explicit && allow_related_content);
+        let keep_visible_text =
+            ctx_cfg.include_visible_text || (!ctx_cfg.visible_text_explicit && allow_visible_text);
+        if !keep_input_state {
             ctx_snap.input_state = None;
         }
-        if !ctx_cfg.include_related_content && !allow_related_content {
+        if !keep_related_content {
             ctx_snap.related_content = None;
         }
-        if !ctx_cfg.include_visible_text && !allow_visible_text {
+        if !keep_visible_text {
             ctx_snap.visible_text = None;
         }
         crate::obs::event(
