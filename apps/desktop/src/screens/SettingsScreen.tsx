@@ -165,8 +165,14 @@ export function SettingsScreen({
   const [contextIncludeFocusedAppMeta, setContextIncludeFocusedAppMeta] = useState(true);
   const [contextIncludeFocusedElementMeta, setContextIncludeFocusedElementMeta] = useState(true);
   const [contextIncludeInputState, setContextIncludeInputState] = useState(true);
+  const [contextIncludeInputStateExplicit, setContextIncludeInputStateExplicit] =
+    useState(false);
   const [contextIncludeRelatedContent, setContextIncludeRelatedContent] = useState(true);
+  const [contextIncludeRelatedContentExplicit, setContextIncludeRelatedContentExplicit] =
+    useState(false);
   const [contextIncludeVisibleText, setContextIncludeVisibleText] = useState(true);
+  const [contextIncludeVisibleTextExplicit, setContextIncludeVisibleTextExplicit] =
+    useState(false);
   const [contextHistoryN, setContextHistoryN] = useState("3");
   const [contextHistoryWindowMs, setContextHistoryWindowMs] = useState("1800000");
   const [contextInputMaxChars, setContextInputMaxChars] = useState("4096");
@@ -195,8 +201,11 @@ export function SettingsScreen({
     const defaults = contextFieldDefaults(mode);
     setContextCaptureMode(mode);
     setContextIncludeInputState(defaults.inputState);
+    setContextIncludeInputStateExplicit(false);
     setContextIncludeRelatedContent(defaults.relatedContent);
+    setContextIncludeRelatedContentExplicit(false);
     setContextIncludeVisibleText(defaults.visibleText);
+    setContextIncludeVisibleTextExplicit(false);
   }
 
   useEffect(() => {
@@ -274,11 +283,20 @@ export function SettingsScreen({
     setContextIncludeInputState(
       settings.context_include_input_state ?? captureDefaults.inputState,
     );
+    setContextIncludeInputStateExplicit(
+      typeof settings.context_include_input_state === "boolean",
+    );
     setContextIncludeRelatedContent(
       settings.context_include_related_content ?? captureDefaults.relatedContent,
     );
+    setContextIncludeRelatedContentExplicit(
+      typeof settings.context_include_related_content === "boolean",
+    );
     setContextIncludeVisibleText(
       settings.context_include_visible_text ?? captureDefaults.visibleText,
+    );
+    setContextIncludeVisibleTextExplicit(
+      typeof settings.context_include_visible_text === "boolean",
     );
     setContextHistoryN(String(settings.context_history_n ?? 3));
     setContextHistoryWindowMs(String(settings.context_history_window_ms ?? 1800000));
@@ -566,9 +584,15 @@ export function SettingsScreen({
         context_include_prev_window_meta: contextIncludePrevWindowMeta,
         context_include_focused_app_meta: contextIncludeFocusedAppMeta,
         context_include_focused_element_meta: contextIncludeFocusedElementMeta,
-        context_include_input_state: contextIncludeInputState,
-        context_include_related_content: contextIncludeRelatedContent,
-        context_include_visible_text: contextIncludeVisibleText,
+        context_include_input_state: contextIncludeInputStateExplicit
+          ? contextIncludeInputState
+          : null,
+        context_include_related_content: contextIncludeRelatedContentExplicit
+          ? contextIncludeRelatedContent
+          : null,
+        context_include_visible_text: contextIncludeVisibleTextExplicit
+          ? contextIncludeVisibleText
+          : null,
         context_history_n: Math.max(1, Math.round(historyN)),
         context_history_window_ms: Math.max(1, Math.round(historyWindowMs)),
         context_input_max_chars: Math.max(1, Math.round(inputMaxChars)),
@@ -1097,7 +1121,10 @@ export function SettingsScreen({
             <div className="muted">Input state</div>
             <PixelToggle
               value={contextIncludeInputState}
-              onChange={setContextIncludeInputState}
+              onChange={(value) => {
+                setContextIncludeInputState(value);
+                setContextIncludeInputStateExplicit(true);
+              }}
               label="input state"
             />
           </div>
@@ -1105,7 +1132,10 @@ export function SettingsScreen({
             <div className="muted">Related content</div>
             <PixelToggle
               value={contextIncludeRelatedContent}
-              onChange={setContextIncludeRelatedContent}
+              onChange={(value) => {
+                setContextIncludeRelatedContent(value);
+                setContextIncludeRelatedContentExplicit(true);
+              }}
               label="related content"
             />
           </div>
@@ -1113,7 +1143,10 @@ export function SettingsScreen({
             <div className="muted">Visible window text</div>
             <PixelToggle
               value={contextIncludeVisibleText}
-              onChange={setContextIncludeVisibleText}
+              onChange={(value) => {
+                setContextIncludeVisibleText(value);
+                setContextIncludeVisibleTextExplicit(true);
+              }}
               label="visible text"
             />
           </div>
