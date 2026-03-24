@@ -174,32 +174,32 @@ fn runtime_context_capture_config(
 }
 
 fn merge_pre_captured_context(
-    ctx_cfg: &context_capture::ContextConfig,
+    _ctx_cfg: &context_capture::ContextConfig,
     ctx_snap: &mut context_pack::ContextSnapshot,
     pre: context_pack::ContextSnapshot,
 ) {
-    if ctx_cfg.include_history {
+    if !pre.recent_history.is_empty() {
         ctx_snap.recent_history = pre.recent_history;
     }
-    if ctx_cfg.include_clipboard {
+    if pre.clipboard_text.is_some() {
         ctx_snap.clipboard_text = pre.clipboard_text;
     }
-    if ctx_cfg.include_focused_app_meta {
+    if pre.focused_app.is_some() {
         ctx_snap.focused_app = pre.focused_app;
     }
-    if ctx_cfg.include_prev_window_meta {
+    if pre.focused_window.is_some() {
         ctx_snap.focused_window = pre.focused_window;
     }
-    if ctx_cfg.include_focused_element_meta {
+    if pre.focused_element.is_some() {
         ctx_snap.focused_element = pre.focused_element;
     }
-    if ctx_cfg.include_input_state {
+    if pre.input_state.is_some() {
         ctx_snap.input_state = pre.input_state;
     }
-    if ctx_cfg.include_related_content {
+    if pre.related_content.is_some() {
         ctx_snap.related_content = pre.related_content;
     }
-    if ctx_cfg.include_visible_text {
+    if pre.visible_text.is_some() {
         ctx_snap.visible_text = pre.visible_text;
     }
     if pre.policy_decision.is_some() {
@@ -1484,6 +1484,47 @@ mod tests {
                 .as_ref()
                 .and_then(|v| v.target_source.as_deref()),
             Some("last_external")
+        );
+    }
+
+    #[test]
+    fn merge_pre_captured_context_keeps_frozen_fields_even_if_current_flags_are_off() {
+        let cfg = context_capture::ContextConfig {
+            include_focused_app_meta: false,
+            include_prev_window_meta: false,
+            ..context_capture::ContextConfig::default()
+        };
+        let mut runtime = ContextSnapshot::default();
+        let pre = ContextSnapshot {
+            focused_app: Some(crate::context_pack::FocusedAppInfo {
+                process_image: Some("notepad.exe".to_string()),
+                window_title: Some("notes".to_string()),
+                url: None,
+                is_browser: false,
+                target_source: Some("foreground".to_string()),
+            }),
+            focused_window: Some(crate::context_pack::FocusedWindowInfo {
+                title: Some("notes".to_string()),
+                class_name: Some("Notepad".to_string()),
+            }),
+            ..Default::default()
+        };
+
+        merge_pre_captured_context(&cfg, &mut runtime, pre);
+
+        assert_eq!(
+            runtime
+                .focused_app
+                .as_ref()
+                .and_then(|v| v.process_image.as_deref()),
+            Some("notepad.exe")
+        );
+        assert_eq!(
+            runtime
+                .focused_window
+                .as_ref()
+                .and_then(|v| v.class_name.as_deref()),
+            Some("Notepad")
         );
     }
 

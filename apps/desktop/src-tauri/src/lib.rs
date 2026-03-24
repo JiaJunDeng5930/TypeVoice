@@ -413,9 +413,6 @@ fn recording_context_config_from_settings(
         )));
     }
     let s = settings::load_settings_strict(data_dir).map_err(|e| e.to_string())?;
-    if !s.rewrite_enabled.unwrap_or(false) {
-        return Ok(None);
-    }
     Ok(Some(context_capture::config_from_settings(&s)))
 }
 
@@ -2063,7 +2060,7 @@ mod tests {
     }
 
     #[test]
-    fn recording_context_config_skips_freeze_when_rewrite_is_disabled() {
+    fn recording_context_config_uses_current_settings_when_rewrite_is_disabled() {
         let td = tempfile::tempdir().expect("tempdir");
         let settings = settings::Settings {
             rewrite_enabled: Some(false),
@@ -2073,8 +2070,11 @@ mod tests {
         };
         settings::save_settings(td.path(), &settings).expect("save settings");
 
-        let cfg = recording_context_config_from_settings(td.path()).expect("context cfg");
+        let cfg = recording_context_config_from_settings(td.path())
+            .expect("context cfg")
+            .expect("context cfg");
 
-        assert!(cfg.is_none());
+        assert_eq!(cfg.rules.capture_mode, "full");
+        assert!(cfg.include_visible_text);
     }
 }
