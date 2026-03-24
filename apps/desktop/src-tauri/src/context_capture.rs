@@ -725,17 +725,17 @@ impl ContextService {
             } else {
                 None
             },
-            input_state: if cfg.include_input_state && policy.allow_input_state {
+            input_state: if effective_cfg.include_input_state {
                 captured.input_state
             } else {
                 None
             },
-            related_content: if cfg.include_related_content && policy.allow_related_content {
+            related_content: if effective_cfg.include_related_content {
                 captured.related_content
             } else {
                 None
             },
-            visible_text: if cfg.include_visible_text && policy.allow_visible_text {
+            visible_text: if effective_cfg.include_visible_text {
                 captured.visible_text
             } else {
                 None

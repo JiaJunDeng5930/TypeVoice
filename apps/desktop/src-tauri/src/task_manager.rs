@@ -679,13 +679,28 @@ impl TaskManager {
         if !ctx_cfg.include_focused_element_meta {
             ctx_snap.focused_element = None;
         }
-        if !ctx_cfg.include_input_state {
+        let allow_input_state = ctx_snap
+            .policy_decision
+            .as_ref()
+            .map(|v| v.allow_input_state)
+            .unwrap_or(ctx_cfg.include_input_state);
+        let allow_related_content = ctx_snap
+            .policy_decision
+            .as_ref()
+            .map(|v| v.allow_related_content)
+            .unwrap_or(ctx_cfg.include_related_content);
+        let allow_visible_text = ctx_snap
+            .policy_decision
+            .as_ref()
+            .map(|v| v.allow_visible_text)
+            .unwrap_or(ctx_cfg.include_visible_text);
+        if !ctx_cfg.include_input_state && !allow_input_state {
             ctx_snap.input_state = None;
         }
-        if !ctx_cfg.include_related_content {
+        if !ctx_cfg.include_related_content && !allow_related_content {
             ctx_snap.related_content = None;
         }
-        if !ctx_cfg.include_visible_text {
+        if !ctx_cfg.include_visible_text && !allow_visible_text {
             ctx_snap.visible_text = None;
         }
         crate::obs::event(
