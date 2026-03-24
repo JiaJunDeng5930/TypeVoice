@@ -857,6 +857,19 @@ mod tests {
     }
 
     #[test]
+    fn resolve_policy_treats_browser_window_class_as_browser_for_domain_rules() {
+        let mut cfg = ContextConfig::default();
+        cfg.rules.domain_denylist = vec!["mail.google.com".to_string()];
+
+        let policy = resolve_policy(&cfg, None, Some("Chrome_WidgetWin_1"), None);
+
+        assert_eq!(policy.domain_rule.as_deref(), Some("deny"));
+        assert!(!policy.allow_input_state);
+        assert!(!policy.allow_related_content);
+        assert!(!policy.allow_visible_text);
+    }
+
+    #[test]
     fn resolve_policy_prioritizes_same_dimension_deny_over_allow() {
         let mut cfg = ContextConfig::default();
         cfg.rules.app_allowlist = vec!["chrome.exe".to_string()];

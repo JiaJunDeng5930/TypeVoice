@@ -233,14 +233,10 @@ impl WindowsContext {
                 is_browser,
                 target_source: Some(target_source.to_string()),
             }),
-            focused_window: if cfg.include_prev_window_meta {
-                Some(FocusedWindowInfo {
-                    title: title.clone(),
-                    class_name: window_class.clone(),
-                })
-            } else {
-                None
-            },
+            focused_window: Some(FocusedWindowInfo {
+                title: title.clone(),
+                class_name: window_class.clone(),
+            }),
             capture_diag: Some(ContextCaptureDiag {
                 target_source: Some(target_source.to_string()),
                 target_age_ms,
