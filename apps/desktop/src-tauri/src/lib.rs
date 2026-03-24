@@ -413,16 +413,10 @@ fn recording_context_config_from_settings(
         )));
     }
     let s = settings::load_settings_strict(data_dir).map_err(|e| e.to_string())?;
-    let mut cfg = context_capture::config_from_settings(&s);
     if !s.rewrite_enabled.unwrap_or(false) {
-        cfg.include_history = false;
-        cfg.include_clipboard = false;
-        cfg.include_focused_element_meta = false;
-        cfg.include_input_state = false;
-        cfg.include_related_content = false;
-        cfg.include_visible_text = false;
+        return Ok(None);
     }
-    Ok(Some(cfg))
+    Ok(Some(context_capture::config_from_settings(&s)))
 }
 
 fn abort_pending_task_if_present(state: &tauri::State<'_, TaskManager>, task_id: &Option<String>) {
@@ -2069,7 +2063,7 @@ mod tests {
     }
 
     #[test]
-    fn recording_context_config_uses_current_settings_when_rewrite_is_disabled() {
+    fn recording_context_config_skips_freeze_when_rewrite_is_disabled() {
         let td = tempfile::tempdir().expect("tempdir");
         let settings = settings::Settings {
             rewrite_enabled: Some(false),
@@ -2079,16 +2073,8 @@ mod tests {
         };
         settings::save_settings(td.path(), &settings).expect("save settings");
 
-        let cfg = recording_context_config_from_settings(td.path())
-            .expect("context cfg")
-            .expect("context cfg");
+        let cfg = recording_context_config_from_settings(td.path()).expect("context cfg");
 
-        assert_eq!(cfg.rules.capture_mode, "full");
-        assert!(!cfg.include_history);
-        assert!(!cfg.include_clipboard);
-        assert!(!cfg.include_focused_element_meta);
-        assert!(!cfg.include_input_state);
-        assert!(!cfg.include_related_content);
-        assert!(!cfg.include_visible_text);
+        assert!(cfg.is_none());
     }
 }

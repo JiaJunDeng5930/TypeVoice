@@ -45,6 +45,9 @@ pub struct ContextConfig {
     pub include_input_state: bool,
     pub include_related_content: bool,
     pub include_visible_text: bool,
+    pub input_state_explicit: bool,
+    pub related_content_explicit: bool,
+    pub visible_text_explicit: bool,
     pub budget: ContextBudget,
     pub rules: ContextRules,
 }
@@ -60,6 +63,9 @@ impl Default for ContextConfig {
             include_input_state: true,
             include_related_content: true,
             include_visible_text: true,
+            input_state_explicit: false,
+            related_content_explicit: false,
+            visible_text_explicit: false,
             budget: ContextBudget::default(),
             rules: ContextRules::default(),
         }
@@ -122,6 +128,9 @@ pub fn config_from_settings(s: &settings::Settings) -> ContextConfig {
     cfg.include_visible_text = s
         .context_include_visible_text
         .unwrap_or(default_include_visible_text);
+    cfg.input_state_explicit = s.context_include_input_state.is_some();
+    cfg.related_content_explicit = s.context_include_related_content.is_some();
+    cfg.visible_text_explicit = s.context_include_visible_text.is_some();
 
     if let Some(n) = s.context_history_n {
         if n > 0 {
@@ -329,12 +338,15 @@ fn pre_policy_last_external_config(cfg: &ContextConfig) -> ContextConfig {
 fn policy_capture_config(cfg: &ContextConfig, policy: &PolicyResolution) -> ContextConfig {
     let mut effective = cfg.clone();
     let allow_override = policy.has_allow_override();
-    effective.include_input_state =
-        (effective.include_input_state || allow_override) && policy.allow_input_state;
-    effective.include_related_content =
-        (effective.include_related_content || allow_override) && policy.allow_related_content;
-    effective.include_visible_text =
-        (effective.include_visible_text || allow_override) && policy.allow_visible_text;
+    effective.include_input_state = (effective.include_input_state
+        || (allow_override && !cfg.input_state_explicit))
+        && policy.allow_input_state;
+    effective.include_related_content = (effective.include_related_content
+        || (allow_override && !cfg.related_content_explicit))
+        && policy.allow_related_content;
+    effective.include_visible_text = (effective.include_visible_text
+        || (allow_override && !cfg.visible_text_explicit))
+        && policy.allow_visible_text;
     effective
 }
 
@@ -928,6 +940,9 @@ mod tests {
         assert!(cfg.include_input_state);
         assert!(cfg.include_related_content);
         assert!(cfg.include_visible_text);
+        assert!(cfg.input_state_explicit);
+        assert!(cfg.related_content_explicit);
+        assert!(cfg.visible_text_explicit);
     }
 
     #[test]
@@ -997,6 +1012,35 @@ mod tests {
         assert!(effective.include_input_state);
         assert!(effective.include_related_content);
         assert!(effective.include_visible_text);
+    }
+
+    #[test]
+    fn policy_capture_config_keeps_explicitly_disabled_fields_off_even_with_allowlist() {
+        let cfg = ContextConfig {
+            include_input_state: false,
+            include_related_content: false,
+            include_visible_text: false,
+            input_state_explicit: true,
+            related_content_explicit: true,
+            visible_text_explicit: true,
+            rules: ContextRules {
+                capture_mode: "full".to_string(),
+                app_allowlist: vec!["notepad++.exe".to_string()],
+                ..ContextRules::default()
+            },
+            ..ContextConfig::default()
+        };
+        let policy = resolve_policy(
+            &cfg,
+            Some(r"C:\Program Files\Notepad++\notepad++.exe"),
+            None,
+            None,
+        );
+        let effective = policy_capture_config(&cfg, &policy);
+
+        assert!(!effective.include_input_state);
+        assert!(!effective.include_related_content);
+        assert!(!effective.include_visible_text);
     }
 
     #[test]
