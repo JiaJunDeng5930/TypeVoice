@@ -96,6 +96,33 @@ function isSameHotkey(a: string, b: string): boolean {
   return a.trim().toUpperCase() === b.trim().toUpperCase();
 }
 
+function contextFieldDefaults(mode: string): {
+  inputState: boolean;
+  relatedContent: boolean;
+  visibleText: boolean;
+} {
+  switch (mode) {
+    case "minimal":
+      return {
+        inputState: false,
+        relatedContent: false,
+        visibleText: false,
+      };
+    case "full":
+      return {
+        inputState: true,
+        relatedContent: true,
+        visibleText: true,
+      };
+    default:
+      return {
+        inputState: true,
+        relatedContent: true,
+        visibleText: false,
+      };
+  }
+}
+
 export function SettingsScreen({
   settings,
   savePatch,
@@ -164,6 +191,14 @@ export function SettingsScreen({
   const [confirmClear, setConfirmClear] = useState(false);
   const [isCheckingHotkey, setIsCheckingHotkey] = useState(false);
 
+  function applyContextCaptureMode(mode: string) {
+    const defaults = contextFieldDefaults(mode);
+    setContextCaptureMode(mode);
+    setContextIncludeInputState(defaults.inputState);
+    setContextIncludeRelatedContent(defaults.relatedContent);
+    setContextIncludeVisibleText(defaults.visibleText);
+  }
+
   useEffect(() => {
     if (!settings) return;
     setAsrModel(settings.asr_model ?? "");
@@ -228,15 +263,23 @@ export function SettingsScreen({
     setHotkeyToggle(settings.hotkey_toggle ?? "");
     setHotkeysShowOverlay(settings.hotkeys_show_overlay);
 
-    setContextCaptureMode(settings.context_capture_mode ?? "balanced");
+    const captureMode = settings.context_capture_mode ?? "balanced";
+    const captureDefaults = contextFieldDefaults(captureMode);
+    setContextCaptureMode(captureMode);
     setContextIncludeHistory(settings.context_include_history ?? true);
     setContextIncludeClipboard(settings.context_include_clipboard ?? true);
     setContextIncludePrevWindowMeta(settings.context_include_prev_window_meta ?? true);
     setContextIncludeFocusedAppMeta(settings.context_include_focused_app_meta ?? true);
     setContextIncludeFocusedElementMeta(settings.context_include_focused_element_meta ?? true);
-    setContextIncludeInputState(settings.context_include_input_state ?? true);
-    setContextIncludeRelatedContent(settings.context_include_related_content ?? true);
-    setContextIncludeVisibleText(settings.context_include_visible_text ?? true);
+    setContextIncludeInputState(
+      settings.context_include_input_state ?? captureDefaults.inputState,
+    );
+    setContextIncludeRelatedContent(
+      settings.context_include_related_content ?? captureDefaults.relatedContent,
+    );
+    setContextIncludeVisibleText(
+      settings.context_include_visible_text ?? captureDefaults.visibleText,
+    );
     setContextHistoryN(String(settings.context_history_n ?? 3));
     setContextHistoryWindowMs(String(settings.context_history_window_ms ?? 1800000));
     setContextInputMaxChars(String(settings.context_input_max_chars ?? 4096));
@@ -1007,7 +1050,7 @@ export function SettingsScreen({
         <div className="stack">
           <PixelSelect
             value={contextCaptureMode}
-            onChange={setContextCaptureMode}
+            onChange={applyContextCaptureMode}
             options={CONTEXT_CAPTURE_MODES}
           />
           <div className="row" style={{ justifyContent: "space-between" }}>
