@@ -99,15 +99,6 @@ pub fn config_from_settings(s: &settings::Settings) -> ContextConfig {
     if let Some(v) = s.context_include_focused_element_meta {
         cfg.include_focused_element_meta = v;
     }
-    if let Some(v) = s.context_include_input_state {
-        cfg.include_input_state = v;
-    }
-    if let Some(v) = s.context_include_related_content {
-        cfg.include_related_content = v;
-    }
-    if let Some(v) = s.context_include_visible_text {
-        cfg.include_visible_text = v;
-    }
     if let Some(v) = s.context_include_history {
         cfg.include_history = v;
     }
@@ -117,6 +108,20 @@ pub fn config_from_settings(s: &settings::Settings) -> ContextConfig {
             cfg.rules.capture_mode = trimmed.to_ascii_lowercase();
         }
     }
+    let (
+        default_include_input_state,
+        default_include_related_content,
+        default_include_visible_text,
+    ) = capture_mode_field_defaults(&cfg.rules.capture_mode);
+    cfg.include_input_state = s
+        .context_include_input_state
+        .unwrap_or(default_include_input_state);
+    cfg.include_related_content = s
+        .context_include_related_content
+        .unwrap_or(default_include_related_content);
+    cfg.include_visible_text = s
+        .context_include_visible_text
+        .unwrap_or(default_include_visible_text);
 
     if let Some(n) = s.context_history_n {
         if n > 0 {
@@ -155,6 +160,14 @@ pub fn config_from_settings(s: &settings::Settings) -> ContextConfig {
     cfg.rules.domain_denylist = normalize_rules(&s.context_domain_denylist);
 
     cfg
+}
+
+fn capture_mode_field_defaults(mode: &str) -> (bool, bool, bool) {
+    match mode {
+        "minimal" => (false, false, false),
+        "full" => (true, true, true),
+        _ => (true, true, false),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -281,36 +294,9 @@ fn resolve_policy(
 
     let denied = matches!(app_rule.as_deref(), Some("deny"))
         || matches!(domain_rule.as_deref(), Some("deny"));
-    let allowed = matches!(app_rule.as_deref(), Some("allow"))
-        || matches!(domain_rule.as_deref(), Some("allow"));
-    let (default_allow_input_state, default_allow_related_content, default_allow_visible_text) =
-        match cfg.rules.capture_mode.as_str() {
-            "minimal" => (false, false, false),
-            "full" => (true, true, true),
-            _ => (true, true, false),
-        };
-
-    let allow_input_state = if denied {
-        false
-    } else if allowed {
-        true
-    } else {
-        default_allow_input_state
-    };
-    let allow_related_content = if denied {
-        false
-    } else if allowed {
-        true
-    } else {
-        default_allow_related_content
-    };
-    let allow_visible_text = if denied {
-        false
-    } else if allowed {
-        true
-    } else {
-        default_allow_visible_text
-    };
+    let allow_input_state = !denied;
+    let allow_related_content = !denied;
+    let allow_visible_text = !denied;
 
     PolicyResolution {
         app_rule,
@@ -892,27 +878,45 @@ mod tests {
     }
 
     #[test]
-    fn resolve_policy_distinguishes_minimal_balanced_and_full() {
-        let mut minimal = ContextConfig::default();
-        minimal.rules.capture_mode = "minimal".to_string();
-        let minimal_policy = resolve_policy(&minimal, Some("notepad.exe"), None, None);
-        assert!(!minimal_policy.allow_input_state);
-        assert!(!minimal_policy.allow_related_content);
-        assert!(!minimal_policy.allow_visible_text);
+    fn config_from_settings_uses_capture_mode_as_default_field_profile() {
+        let minimal = config_from_settings(&Settings {
+            context_capture_mode: Some("minimal".to_string()),
+            ..Default::default()
+        });
+        assert!(!minimal.include_input_state);
+        assert!(!minimal.include_related_content);
+        assert!(!minimal.include_visible_text);
 
-        let mut balanced = ContextConfig::default();
-        balanced.rules.capture_mode = "balanced".to_string();
-        let balanced_policy = resolve_policy(&balanced, Some("notepad.exe"), None, None);
-        assert!(balanced_policy.allow_input_state);
-        assert!(balanced_policy.allow_related_content);
-        assert!(!balanced_policy.allow_visible_text);
+        let balanced = config_from_settings(&Settings {
+            context_capture_mode: Some("balanced".to_string()),
+            ..Default::default()
+        });
+        assert!(balanced.include_input_state);
+        assert!(balanced.include_related_content);
+        assert!(!balanced.include_visible_text);
 
-        let mut full = ContextConfig::default();
-        full.rules.capture_mode = "full".to_string();
-        let full_policy = resolve_policy(&full, Some("notepad.exe"), None, None);
-        assert!(full_policy.allow_input_state);
-        assert!(full_policy.allow_related_content);
-        assert!(full_policy.allow_visible_text);
+        let full = config_from_settings(&Settings {
+            context_capture_mode: Some("full".to_string()),
+            ..Default::default()
+        });
+        assert!(full.include_input_state);
+        assert!(full.include_related_content);
+        assert!(full.include_visible_text);
+    }
+
+    #[test]
+    fn config_from_settings_allows_explicit_field_toggles_to_override_capture_mode() {
+        let cfg = config_from_settings(&Settings {
+            context_capture_mode: Some("minimal".to_string()),
+            context_include_input_state: Some(true),
+            context_include_related_content: Some(true),
+            context_include_visible_text: Some(true),
+            ..Default::default()
+        });
+
+        assert!(cfg.include_input_state);
+        assert!(cfg.include_related_content);
+        assert!(cfg.include_visible_text);
     }
 
     #[test]
@@ -941,7 +945,7 @@ mod tests {
 
         assert!(effective.include_input_state);
         assert!(effective.include_related_content);
-        assert!(!effective.include_visible_text);
+        assert!(effective.include_visible_text);
 
         let mut denied_cfg = ContextConfig::default();
         denied_cfg.rules.domain_denylist = vec!["example.com".to_string()];

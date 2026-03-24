@@ -913,18 +913,27 @@ fn start_backend_recording(
         }
     }
 
-    let pre_captured_context = recording_context_cfg
-        .as_ref()
-        .map(|cfg| state.capture_recording_context_best_effort(&dir, cfg));
-
     g.active = Some(ActiveBackendRecording {
         recording_id: recording_id.clone(),
         output_path: output_path.clone(),
         child,
         started_at: std::time::Instant::now(),
         meter_join: Some(meter_join),
-        pre_captured_context,
+        pre_captured_context: None,
     });
+    drop(g);
+
+    let pre_captured_context = recording_context_cfg
+        .as_ref()
+        .map(|cfg| state.capture_recording_context_best_effort(&dir, cfg));
+    if pre_captured_context.is_some() {
+        let mut g = recorder.inner.lock().unwrap();
+        if let Some(active) = g.active.as_mut() {
+            if active.recording_id == recording_id {
+                active.pre_captured_context = pre_captured_context;
+            }
+        }
+    }
 
     span.ok(Some(serde_json::json!({
         "recording_id": recording_id,
