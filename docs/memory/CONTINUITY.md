@@ -1,181 +1,57 @@
 # CONTINUITY（外置记忆）
 
-- 本文件记录当前可执行进度与工作集，必须可直接恢复下一步工作，不包含历史复盘。
-- 优先以 `docs/` 中冻结文档为真源，`docs/memory` 仅保留当前状态快照。
+- 本文件只保留当前有效状态，用于在新会话中直接恢复工作。
+- 不记录历史过程、日期流水、旧结论或复盘信息。
+- 真源优先级：`docs/` 冻结文档 > `docs/memory/DECISIONS.md` / `SPEC.md` / `USER_PREFS.md` / `PITFALLS.md`。
 
 ## 当前有效目标
 
-- 保持 MVP 核心能力的稳定可用性：录音、预处理、转录、可选改写、复制、自动粘贴、可观测。
-- 继续压实可复用的上下文与错误诊断链路，支持热键与 UI 两条路径行为一致。
+- 保持 MVP 核心链路稳定可用：录音、预处理、转录、可选改写、导出、自动粘贴、可观测。
+- 保持热键路径与主 UI 路径在任务启动、上下文冻结、错误暴露上的行为一致。
+- 维护 `docs/memory` 为“当前事实快照”，不保留历史堆积内容。
 
-## 当前状态（进行中）
+## 当前状态
 
 ### 已确认
 
-- [VERIFIED] 2026-03-06：Windows 环境已通过 `winget install --id GitHub.cli -e --source winget` 安装 GitHub CLI，二进制位于 `C:\Program Files\GitHub CLI\gh.exe`；当前用户尚未执行 `gh auth login`，因此尚不能读取受认证保护的 code scanning alerts API。
-- [VERIFIED] 2026-03-06：GitHub `CI` 的 `rust` job 已补齐 Ubuntu/Tauri Linux 原生依赖安装步骤（`libglib2.0-dev`、`libgtk-3-dev`、`libwebkit2gtk-4.1-dev`、`libayatana-appindicator3-dev`、`librsvg2-dev`、`patchelf`），用于修复 `glib-sys` / `gio-sys` / `gobject-sys` 因缺失 `pkg-config` `.pc` 文件导致的 `cargo check --locked` 失败；`docs/repository-automation.md` 已同步记录。
-- [VERIFIED] 2026-03-06：Dependabot 配置已收敛：`npm` / `cargo` / `pip` 三个生态均新增 `open-pull-requests-limit: 1`，并分别将 `version-updates` 与 `security-updates` 按生态聚合为单个 PR；新增 `docs/repository-automation.md` 并写入 `docs/index.md`。
-- [VERIFIED] 2026-02-28：`tauri.conf.json` 已将 `csp` 从 `null` 收敛为显式策略，限制默认资源来源并约束脚本/连接来源。
-- [VERIFIED] 2026-02-28：FFmpeg 工具链下载脚本已接入上游签名链校验：先校验 FFmpeg 官方 release source 的 `sha256` 与 PGP 签名（`ffmpeg-devel.asc` 指纹固定），再下载并校验预编译二进制。
-- [VERIFIED] 2026-02-28：`verify_quick.py` / `verify_full.py` 已接入 fixtures manifest 自动拉取与 `sha256` 校验；新增 `scripts/fixtures_manifest.json` 与 `scripts/download_fixtures.py`。
-- [VERIFIED] 2026-02-28：仓库已补齐开源基线文件：`LICENSE(MIT)`、`CHANGELOG.md`、`CODEOWNERS`、`SECURITY.md`、`CONTRIBUTING.md`、`CODE_OF_CONDUCT.md`、`SUPPORT.md`、`GOVERNANCE.md`、`MAINTAINERS.md`、`CITATION.cff`。
-- [VERIFIED] 2026-02-28：已新增 `.github/` 协作与自动化骨架（Issue/PR 模板、`ci.yml`、`codeql.yml`、`scorecards.yml`、`dependabot.yml`、`release.yml`）。
-- [VERIFIED] 2026-02-28：已补齐第三方声明文件 `THIRD_PARTY_NOTICES.md`，并在 `docs/tech-spec.md` 固化 FFmpeg 版本/来源/GPL 路线说明；`FFmpeg 许可证声明写法` 已从待确认项移除。
-- [VERIFIED] 2026-02-28：已补齐可复现环境文件：`requirements.txt`、`requirements-asr.txt`、`rust-toolchain.toml`、`.nvmrc`、`.python-version`。
-- [VERIFIED] 2026-02-28：根 README 与 `apps/desktop/README.md` 已重写，补齐安装、使用、测试、反馈、贡献、许可与隐私数据流入口契约。
-- [VERIFIED] 2026-02-28：远程 ASR 默认示例 URL 已从 `http://api.server/transcribe` 调整为 `https://api.server/transcribe`（`settings.rs`、`SettingsScreen.tsx`、`docs/memory/SPEC.md` 同步）。
-- [VERIFIED] 2026-02-28：新增前端到后端结构化错误上报命令 `ui_log_event`（`stage=UI`），支持 `toast/diagnostic/invoke_error` 三类事件落盘 `trace.jsonl`，包含稳定 `error.code` 与结构化上下文。
-- [VERIFIED] 2026-02-28：热键失败链路补齐结构化证据：`HK.hotkey_rejected`（`E_TASK_ALREADY_ACTIVE`）、`HK.task_open_failed`（`E_HOTKEY_TASK_OPEN`）、`HK.emit_failed`（`E_HK_EMIT_FAILED`）已写入 trace。
-- [VERIFIED] 2026-02-28：前端热键 fallback 错误码从模糊 `E_HOTKEY_CAPTURE` 改为 `E_HOTKEY_EVENT_INCOMPLETE`，并新增对应提示映射，避免误判为截图失败。
-- [VERIFIED] 2026-02-28：本轮改动已通过 WSL 本地构建校验：`apps/desktop/src-tauri cargo check --locked`、`apps/desktop npm run build`。
-- 结构化诊断链路已启用：`TYPEVOICE_DATA_DIR/trace.jsonl` 为主日志入口，关键路径记录稳定的 `step_id` 与 `code`。
-- 热键上下文采集已改为“`task_id` 单生命周期”路径：按热键在按下瞬间生成 `task_id` 并缓存上下文快照，开始转写时消费该上下文并在任务收尾或显式 abort 时统一清理，剔除“capture_id 60 秒有效期”分支。
-- 上下文采集与改写参数链路按设置主源，支持配置缺失即失败（fail-fast），不引入静默兜底。
-- `docs/` 文档索引与命名清洗已完成，历史版本后缀已移除。
-- 可复用的执行索引文件已新增：`docs/index.md`。
-- 词汇表重写入口已完成：新增 `rewrite_glossary` 配置持久化与 rewrite content 透传，默认提示词已加入 `### GLOSSARY` 约束说明。
-- [VERIFIED] Windows 侧补齐“最新源码构建并启动”流程：新增 `scripts/windows/run-latest.ps1`，并在 `docs/windows-dev.md` / `docs/windows-gate.md` 固化一键执行路径。
-- [VERIFIED] `scripts/windows/run-latest.ps1` 启动 `npm run tauri dev` 时改为隐藏 `cmd` 窗口（`Start-Process ... -WindowStyle Hidden`），避免开发启动弹出黑色终端框，同时保留原日志重定向与进程探活逻辑。
-- [VERIFIED] 2026-03-02：Windows release 子进程窗口隐藏能力已全链路接通：新增 Rust 侧 `subprocess::CommandNoConsoleExt`，并在 ASR daemon、FFmpeg 录音/预处理、录音输入枚举/probe、toolchain 版本探测、Python 版本检查、模型下载、Windows `taskkill` 路径统一调用 `.no_console()`；`asr_runner/runner.py` 的 `ffprobe` 调用同步增加 `creationflags=subprocess.CREATE_NO_WINDOW`（仅 Windows）。
-- [VERIFIED] 已将“严格按文档执行”升级为零偏移禁制令，并同步写入 `AGENTS.md`、`docs/windows-dev.md`、`docs/windows-gate.md`、`docs/memory/USER_PREFS.md`（含禁止动作清单与失败处理唯一路径）。
-- [VERIFIED] ASR 预处理新增可配置项已接通：新增 `asr_preprocess_silence_*` 设置字段，`Settings` 与 `SettingsPatch` 持久化，并在 `SettingsScreen` 新增 `PREPROCESS` 开关/参数面板（静音裁剪开关、阈值、首尾静音时长）。
-- [VERIFIED] 预处理配置已纳入运行链路：`task_manager::StartOpts`、`StartOpts` 组装、FFmpeg 预处理阶段与日志指标（`task_perf`）均记录 `asr_preprocess_*`，用于比对配置对 ASR 时延的影响。
-- [UNCONFIRMED] 任务启动入口已统一：新增 `start_task(req)` 命令并删除旧的多入口转写命令实现；待校验路径：`npm run tauri dev` + 热键/UI 双链路 smoke。
-- [UNCONFIRMED] 更正：主 UI 录音链路已收敛为 `start_backend_recording` -> `stop_backend_recording` -> `start_task(record_mode=recording_asset)`；任务启动只经 `start_task`。
-- [UNCONFIRMED] 录音中间产物已切换为后端托管 `recording_asset_id` 语义：任务启动不再接收裸文件路径，资产由后端租约回收。
-- [UNCONFIRMED] 后端同步清理了旧转写命令实现，当前命令面仅保留统一任务链路。
-- [UNCONFIRMED] 热键注册已改为“作用域化注销”语义：`HotkeyManager` 仅注销自身曾注册快捷键，不再调用 `unregister_all`；待校验路径：热键重复保存设置后仍可触发，且不影响其他 scope。
-- [UNCONFIRMED] 热键预采样上下文清理链路已更新为 `task_id` 语义：新增 `abort_pending_task` 命令，前端在录音失败/转写启动失败/组件卸载时会回收未消费 `task_id`；待校验路径：trace 中无悬挂 pending context。
-- [VERIFIED] 2026-02-27：后端已完成“session 生命周期并入 task 生命周期”改造：`recording_session_id` 字段与 `RecordingSession` 容器已移除；热键事件改为携带 `task_id`，`start_task` 支持输入并复用外部 `task_id`，并新增 `abort_pending_task` 回收未消费热键上下文。WSL 侧 `cargo test -q`（30 passed）与 `npm run build` 通过。
-- [VERIFIED] 2026-02-27：Windows 侧已执行 `windows_gate.ps1` 并完成 `verify_quick` / `verify_full`，`metrics/verify.jsonl` 最新记录均为 PASS（quick `ts_ms=1772200090629`，full `ts_ms=1772200358667`）；`typevoice-desktop.exe` 已拉起（PID `14448`，StartTime `2026-02-27 21:47:22`）。热键 `task_id` 单生命周期改造在 Windows 编译与 gate 链路下可运行。
-- [UNCONFIRMED] 上下文窗口采样语义已向“前台窗口即时采样”收敛：hotkey 与任务内上下文均优先使用 `foreground_window_*` 路径；待校验路径：同 task_id 下两入口截图来源一致。
-- [UNCONFIRMED] 录音停止诊断链路已增强：`start_backend_recording` 增加 ffmpeg 早退探测（避免“启动已失败但在 stop 才暴露”），`stop_backend_recording` 在失败时附带 stderr 末行，前端停止失败提示改为展示真实错误提示（不再固定 `STOP FAILED`）；待校验路径：Windows 下复现一次录音设备异常并确认错误文案含 `E_RECORD_*` 与 stderr 线索。
-- [VERIFIED] Windows 侧已定位 `Recording failed` 根因为 dshow 输入规格 `audio=default` 在当前设备集上不可解析；`ffmpeg` 直接探测显示 `Error opening input files: I/O error`。固定为设备 `Alternative name`（如 `audio="@device_cm_{...}\\wave_{...}"`）后可稳定录制，且不受蓝牙耳机连接导致默认设备切换的影响。
-- [VERIFIED] 录音输入策略已切换为显式模型：`record_input_strategy=follow_default|fixed_device|auto_select`，并新增 `record_follow_default_role`（默认 `communications`）与 `record_fixed_*` 字段。
-- [VERIFIED] 后端已实现录音输入回退状态机：`fixed_device -> default -> auto_select`，`follow_default -> last_working -> auto_select`；解析成功后仅更新 `record_last_working_*` 缓存，不再隐式覆盖用户配置。
-- [VERIFIED] 录音输入解析已从热路径移出：新增 `RecordInputCacheState`，慢操作（dshow 枚举/probe）仅在 `app_startup`、`set_settings/update_settings`、设备变更事件触发时执行；`start_backend_recording` 只读取缓存并启动 ffmpeg。
-- [VERIFIED] Windows 设备变更监听已接通：注册 `IMMNotificationClient`，在 `OnDefaultDeviceChanged/OnDeviceAdded/OnDeviceRemoved/OnDeviceStateChanged/OnPropertyValueChanged` 触发缓存刷新请求，并写入 `APP.audio_device_event` 诊断事件。
-- [VERIFIED] hotkey 录音 overlay 显示时机已修正：`MainScreen.startRecording` 只在 `start_backend_recording` 成功返回后再 `overlaySet(true, "REC")`，不再提前显示。
-- [VERIFIED] Windows 工作区已同步到提交 `7f22a8c` 并执行 `scripts/windows/windows_gate.ps1`：Windows compile gate、`verify_quick`、`verify_full` 均通过；`typevoice-desktop.exe` 已拉起（PID `37664`，`StartTime=2026-02-27 17:54:29`）。
-- [VERIFIED] Windows 下默认设备解析已接入 Core Audio（MMDevice endpoint id + friendly name），并通过 dshow 设备列表映射到 ffmpeg `audio=...` 输入规格；新增 `list_audio_capture_devices` 命令供设置页展示。
-- [VERIFIED] 设置页已新增 `RECORDING INPUT` 配置区，可显式选择策略、默认角色、固定设备并保存到 settings。
-- [VERIFIED] 本轮验证通过：`apps/desktop/src-tauri` 执行 `cargo test -q`（27 passed），`apps/desktop` 执行 `npm run build`（通过）。
-- [VERIFIED] 可调试性链路补强完成：前端失败提示不再只显示泛化 `ERROR`，已展示 `error_code + 摘要 + 建议动作`；`cancel_task` 失败返回显式带 `E_CMD_CANCEL`。
-- [VERIFIED] ASR 冷启动错误码保真已修复：runner 在 ready 前返回 `ok=false/error.code` 时，后端直接透传真实错误码并记录 stderr tail，不再退化为 `E_ASR_READY_EOF`。
-- [VERIFIED] 任务启动 runtime 创建失败已补发终态：`tokio runtime build Err` 分支会发 `task_event.failed(E_INTERNAL)`，避免 UI 卡住无终态。
-- [VERIFIED] trace 并发写入已加全局互斥，新增并发 JSONL 可解析测试 `trace::tests::concurrent_emit_keeps_jsonl_lines_parseable`。
-- [VERIFIED] gate 已纳入可调试性自动化：`verify_quick/full` 新增 Rust 可调试性契约测试步骤，并要求 ASR 失败时必须有结构化 `error.code`。
-- [VERIFIED] 日志系统已完成模块化重构：新增 `apps/desktop/src-tauri/src/obs/`（`schema/writer/trace/metrics/debug/startup/panic`），`trace.jsonl` 与 `metrics.jsonl` 统一走“有界队列 + 单写线程”串行落盘，业务代码不再直接 append 文件。
-- [VERIFIED] 结构化指标统一完成：`TaskManager` 与 debug artifact 均改为 `MetricsRecord` 写入，`metrics.jsonl` 新增稳定 `type` 标签与 `ts_ms` 字段，队列拥塞时记录 `logger_dropped`。
-- [VERIFIED] 可调试性契约新增并通过：`obs::writer::tests::concurrent_metrics_emit_keeps_jsonl_lines_parseable` 与 `obs::writer::tests::trace_rotation_creates_suffix_file`；`scripts/verify_quick.py` 与 `scripts/verify_full.py` 已纳入 metrics 并发可解析测试。
-- [VERIFIED] 本仓已完成回归：`cargo check --locked`、`npm run build`、`pytest -q tests`、`verify_quick.py`、`verify_full.py` 全部通过。
-- [VERIFIED] 2026-02-14：已清理错误路径 `/home/atticusdeng/Projects/TypeVoice` 下误拉取产物（`.venv`、`models`、`apps/desktop/node_modules`、toolchain 可执行）；随后按文档在 `D:\Projects\TypeVoice` 执行 `.\scripts\windows\run-latest.ps1`，成功拉起 Windows runtime（`typevoice-desktop.exe`, PID `38500`）。
-- [VERIFIED] `TaskManager` 已引入可注入依赖缝隙：新增 `AsrClient`、`ContextCollector` 与 `TaskManagerDeps`，核心编排不再硬编码外部依赖构造。
-- [VERIFIED] 前端已接入运行时端口层：新增 `src/infra/runtimePorts.ts`，`MainScreen`/`SettingsScreen`/`HistoryScreen`/`OverlayApp` 通过 `TauriGateway`/`TimerPort`/`ClipboardPort` 访问平台能力。
-- [VERIFIED] 诊断逻辑已从 UI 抽离：新增 `src/domain/diagnostic.ts`，`MainScreen` 仅消费纯函数输出，降低组件内业务逻辑耦合。
-- [VERIFIED] `asr_runner/runner.py` 已移除全局 `_should_exit`，改为 `RunnerRuntime` 实例状态；并引入 `ProbePort`/`ModelPort` 注入缝隙。
-- [VERIFIED] 新增导出命令 `export_text`：后端统一执行复制与自动粘贴开关判定，返回结构化导出结果（`copied/auto_paste_*` 与错误码）。
-- [VERIFIED] 设置链路新增 `auto_paste_enabled` 并接入 UI（`SettingsScreen` 新增 `EXPORT` 开关，默认开启）。
-- [VERIFIED] 平台实现已接通：Windows 路径使用 `SendInput + KEYEVENTF_UNICODE` 直接提交 Unicode 文本输入；Linux 路径使用 AT-SPI 焦点可编辑对象写入；均不使用快捷键模拟。
-- [VERIFIED] Windows 自动粘贴路径已收敛为“当前焦点控件单路径执行”：`export_text` 不再使用 `last_external_hwnd` hint，也不再做目标窗口回退；Windows 仅对当前前台线程焦点控件直接提交 Unicode 输入。
-- [UNCONFIRMED] 热键链路在执行 `export_text` 前已先隐藏 overlay（并短暂等待窗口焦点稳定），以避免 overlay 抢前台导致 Unicode 输入命中自身窗口。
-- [UNCONFIRMED] Windows 自动粘贴新增“自进程目标拒绝”校验：若前台窗口或焦点窗口属于 TypeVoice 进程，直接返回 `E_EXPORT_TARGET_UNAVAILABLE`，不再回报 `auto_paste_ok=true`。
-- [UNCONFIRMED] Windows 端自动粘贴实机闭环待验证：`task_done -> export_text -> SendInput Unicode` 在记事本/浏览器输入框可稳定工作。
-- [UNCONFIRMED] Linux 端自动粘贴实机闭环待验证：X11/Wayland 会话下 AT-SPI 焦点对象写入行为待验证。
-- [VERIFIED] 本轮本机回归结果：`cargo test -q`（通过）、`npm run build`（通过）、`./.venv/bin/python -m pytest -q tests`（通过）。
-- [VERIFIED] `verify_quick.py` 在当前环境失败：缺少本地模型目录 `models/Qwen3-ASR-0.6B`；失败原因为环境资产缺失而非编译错误。
-- [VERIFIED] 2026-02-19：自动粘贴实现改为“直接提交 Unicode 文本输入”：Windows 路径替换为 `SendInput + KEYEVENTF_UNICODE`，Linux 继续 AT-SPI `EditableText.InsertText`，导出命令接口保持不变。
-- [VERIFIED] 2026-02-19：按文档从 WSL 触发 `scripts/windows/windows_gate.ps1`，Windows compile gate 与 FFmpeg toolchain 准备通过，并进入 `npm run tauri dev`（检测到 `typevoice-desktop.exe` 进程）。
-- [VERIFIED] 2026-02-19：当前 WSL 工作区不存在 `./.venv/bin/python`，且系统 `python3` 未安装 `pytest`；无法在该环境执行 `pytest -q tests`。
-- [VERIFIED] 2026-02-26：ASR 新增 provider 分流能力（`local|remote`），设置链路已接通 `asr_provider/remote_asr_url/remote_asr_model/remote_asr_concurrency`；`TaskManager` 在转写阶段按 provider 分支执行。
-- [VERIFIED] 2026-02-26：新增独立 `remote_asr` 模块，已实现远程 API key（keyring + env）、切片并发请求、响应文本合并去重与结构化错误码。
-- [VERIFIED] 2026-02-26：设置页已新增远程 ASR 配置 UI（provider 切换、URL/model/concurrency、remote key save/clear/check），并保持本地 ASR 配置可用。
-- [VERIFIED] 2026-02-26：本轮回归通过 `cargo test -q`（25 passed）与 `npm run build`（通过）。
-- [VERIFIED] 2026-02-26：本轮 Python 测试仍不可执行：`.venv` 缺失，且系统 `python3` 未安装 `pytest`。
-- [VERIFIED] 2026-02-27：热键 overlay 已接入音量波形：后端录音进程同步输出 PCM 到 `stdout` 并按 50ms 窗口计算 `rms/peak` 事件 `tv_overlay_audio_level`；前端 `OverlayApp` 在 `REC/RECORDING` 状态显示 5 条音量条并按音量实时更新。WSL 侧 `cargo test -q` 与 `npm run build` 通过，Windows 侧 `run-latest.ps1` 已拉起单实例 `typevoice-desktop`（PID `21900`）。
-- [VERIFIED] 2026-02-27：误在 WSL 路径执行 `scripts/windows/windows_gate.ps1`，导致仓库 `.venv/pyvenv.cfg` 被改写为 Windows 解释器（`C:\\Python312`）。已执行 `/usr/bin/python3 -m venv --upgrade .venv` 原地修复，并验证 `./.venv/bin/python -m pytest tests -m quick -x` 通过（3 passed）。
-- [VERIFIED] 2026-02-27：Windows 工作区 `D:\\Projects\\TypeVoice` 已同步到最新提交 `4f08a50`（与 Linux 工作区一致）；随后执行 `scripts/windows/run-latest.ps1 -RepoRoot D:\\Projects\\TypeVoice`，编译通过并成功拉起 `typevoice-desktop.exe`（PID `31584`，StartTime `2026-02-27 14:52:50`，日志 `D:\\Projects\\TypeVoice\\tmp\\typevoice-logs\\tauri-latest-run.txt`）。
-- [VERIFIED] 2026-02-27：录音输入诊断日志已增强：`CMD.start_backend_recording` 现在记录 `record_input_spec`（实际传给 ffmpeg 的 dshow 输入）、`record_input_resolved_by`（匹配来源）与 `record_input_resolution_log`（每一步条件判断、失败原因与回退原因）。
-- [VERIFIED] 2026-03-18：上下文采集链路已切换为文本结构模型：`ContextSnapshot` 改为焦点应用/窗口、焦点元素、输入状态、相关文本、可见文本、历史、剪贴板、策略与采集诊断；窗口截图字段已移除。
-- [VERIFIED] 2026-03-18：Windows 上下文采集已接入 UI Automation 文本读取入口，并在前台目标为 TypeVoice 时优先退回最近 5 秒内的最后一个外部窗口元信息。
-- [VERIFIED] 2026-03-18：设置链路已扩展为可配置上下文模式、文本预算与 app/domain 规则；`SettingsScreen` 不再暴露 screenshot/vision 开关。
-- [VERIFIED] 2026-03-18：本轮本地回归已通过 `apps/desktop npm run build` 与 `apps/desktop/src-tauri cargo test -q`。
-- [VERIFIED] 2026-03-20：文本上下文策略已收紧两处边界：当浏览器窗口无法解析 URL 且存在 domain allow/deny 规则时，策略默认拒绝文本采集；backend recording 仅在 `rewrite_enabled=true` 时才会在录音开始预采样上下文，且 rewrite 关闭时不会再合并 `pre_captured_context`。
-- [VERIFIED] 2026-03-21：已修复两处 context review 回归：`recording_context_config_from_settings` 在缺失 `settings.json` 时改为返回默认 `ContextConfig`，保证首次运行录音也会冻结起始上下文；`capture_runtime_snapshot` 的 `last_external` 预策略采样改为 metadata-only probe，不再在 `deny` 规则判定前读取输入状态/相关文本/可见文本。`apps/desktop/src-tauri cargo test -q` 通过（54 passed）。
-- [VERIFIED] 2026-03-21：已修复两处新增 context review 问题：浏览器识别已扩展并收敛为共享判定，`context_domain_allowlist` / `context_domain_denylist` 不再只对 `chrome/msedge/firefox` 生效；`capture_runtime_snapshot` 的 `focused_window` 回填现已受 `context_include_prev_window_meta` 约束，不会在关闭窗口元信息时重新泄露窗口标题。`apps/desktop/src-tauri cargo test -q` 通过（57 passed）。
-- [VERIFIED] 2026-03-21：已修复两处 review 回归：`start_backend_recording` 仅在 `rewrite_enabled=true` 时才会冻结录音起始上下文，缺失 `settings.json` 或 `rewrite_enabled=false` 不再额外读取 clipboard/history/focused text；Windows 浏览器判定扩展为 `process image + window class + URL` 共享来源，`QueryFullProcessImageNameW` 失败时只要窗口类名仍指向浏览器，domain allow/deny 规则仍会默认拒绝正文文本采集。相关单测 `recording_context_config*` 与 `resolve_policy*` 已通过。
-- [VERIFIED] 2026-03-18：仓库根 Python 测试未执行，原因是当前工作区不存在项目级 `.venv/`；失败属于环境缺失而非代码回归。
-- [VERIFIED] 2026-03-18：已修复上下文采集两个回归：关闭 `context_include_prev_window_meta` 时不再经 `focused_app.window_title` 泄露窗口标题；`context_related_before_chars` / `context_related_after_chars` 已分离接入运行时 budget 与 related content 截断链路。
-- [VERIFIED] 2026-03-18：已修复上下文策略三处回归：`deny` 规则优先于 `allow`，浏览器地址栏无 scheme 时仍可匹配 domain 规则，热键预采样上下文在 rewrite 阶段会保留原始 `policy_decision/capture_diag` 而非被运行时快照覆盖。
-- [VERIFIED] 2026-03-18：已补齐热键冻结上下文缺口：`capture_hotkey_context_now` 现在会在按键时刻同时冻结历史与剪贴板；当存在 `pre_captured_context` 时，运行时快照不再重新采样 `history/clipboard/focused_*` 字段。
-- [VERIFIED] 2026-03-18：Windows 文本上下文采集已修复两处回归：仅暴露 `UIValuePattern` 的可编辑控件也会产出 `input_state.full_text`；浏览器 URL 遍历遇到单个失效 descendant 不再提前返回 `None`。
-- [VERIFIED] 2026-03-18：已修复 hotkey/UI 两条上下文冻结回归：`capture_hotkey_context_now` 在前台为 TypeVoice 时会允许 last-external 回退；主 UI 录音在 `start_backend_recording` 时冻结上下文，并通过 `recording_asset` 传递到 `start_task`，不再在任务启动时重采样外部窗口。
-- [VERIFIED] 2026-03-18：已放宽浏览器地址栏识别为“URL 值 + 本地化名称/automation id 打分”模型，domain allow/deny 规则不再只依赖英文 `address/search` 标签；新增对应 Rust 单测。
-- [VERIFIED] 2026-03-18：本轮 Rust 本地回归通过 `apps/desktop/src-tauri cargo test -q`（41 passed）。
-- [VERIFIED] 2026-03-18：本轮 Rust 本地回归通过 `apps/desktop/src-tauri cargo test -q`（34 passed）；`apps/desktop npm run build` 未执行成功，原因是当前环境缺少前端依赖导致 `tsc` 不在 PATH，而非本轮代码编译错误。
-- [VERIFIED] 2026-03-18：本轮修复后 `apps/desktop/src-tauri cargo test -q` 通过（43 passed）；`apps/desktop cmd /d /c npm run build` 仍失败，原因是当前环境缺少前端依赖，`tsc` 不在 PATH。
-- [VERIFIED] 2026-03-18：已修复两处上下文采集回归：Windows 运行时快照不再覆盖已加载的 `recent_history`，且 app/domain 同维度冲突时 `deny` 规则优先于 `allow`；`apps/desktop/src-tauri cargo test -q` 现通过（45 passed）。
-- [VERIFIED] 2026-03-18：`context_capture_mode` 已落成三档真实语义：`minimal` 默认关闭输入状态/相关文本/可见文本，`balanced` 默认开启输入状态与相关文本但关闭可见文本，`full` 默认开启三者；app/domain `deny` 会同时抑制这三类文本上下文。
-- [VERIFIED] 2026-03-18：主 UI 录音链路现在无论录音开始时是否启用 rewrite，都会在 `start_backend_recording` 时冻结上下文快照；即便录音过程中再开启 rewrite，`Rewrite` 阶段也不会回退到停止时重采样。
-- [VERIFIED] 2026-03-18：提交 `fix(context): preserve history and deny precedence` 后再次执行 `powershell -ExecutionPolicy Bypass -File .\\scripts\\windows\\windows_gate.ps1`：Windows compile gate 通过，但完整 gate 仍被既有环境问题阻断，包括 FFmpeg 签名 key 导入失败、fixtures 下载 `zh_10s.ogg` 命中 Wikimedia 403、`npm ci` 触发 `@tauri-apps/cli-win32-x64-msvc/cli.win32-x64-msvc.node` 的 `EPERM unlink` 占用错误，随后 `tauri` 命令不可用。
-- [VERIFIED] 2026-03-18：提交 `fix(context): freeze recording snapshot at record start` 后，按文档执行 `powershell -ExecutionPolicy Bypass -File .\\scripts\\windows\\windows_gate.ps1`：Windows compile gate 通过，完整 gate 仍被既有环境问题阻断，包括 FFmpeg 签名 key 导入失败、fixtures 下载 `zh_10s.ogg` 命中 Wikimedia 403、`npm ci` 触发 `@tauri-apps/cli-win32-x64-msvc/cli.win32-x64-msvc.node` 的 `EPERM unlink` 占用错误，后续 `tauri` 命令不可用。
-- [VERIFIED] 2026-03-18：提交 `fix(context): honor deny rules and frozen hotkey policy` 后，`apps/desktop/src-tauri cargo test -q` 通过（40 passed），`scripts/windows/windows_gate.ps1` 的 Windows compile gate 通过，但完整 gate 仍被既有环境问题阻断：FFmpeg 签名 key 导入失败、fixtures 下载 `zh_10s.ogg` 命中 Wikimedia 403、`npm ci` 触发 `@tauri-apps/cli-win32-x64-msvc/cli.win32-x64-msvc.node` 的 `EPERM unlink` 占用错误，导致后续 `tauri` 命令不可用。
-- [VERIFIED] 2026-03-18：本轮按文档执行 `scripts/windows/windows_gate.ps1` 时，Windows compile gate 通过，但后续 gate 未完整通过：FFmpeg 上游签名 key 导入失败、fixtures 下载 `zh_10s.ogg` 遇到 Wikimedia 403、`npm ci` 命中 `@esbuild/win32-x64/esbuild.exe` 的 `EPERM unlink` 占用错误，因此未形成完整 Windows 闭环通过结论。
-- [VERIFIED] 2026-03-19：已修复三处上下文回归：app/domain `deny` 规则现在会在 Windows 正文文本采集前生效，不再“先读再丢”；`start_backend_recording` 在缺失 `settings.json` 时改为使用默认上下文配置继续启动；`focused_app.window_title` 已改为受 `context_include_focused_app_meta` 控制，不再错误依赖 `context_include_prev_window_meta`。
-- [VERIFIED] 2026-03-20：已修复两处 review 阻断项：`context_capture.rs` 的 `Url` 导入改为跨平台可见，避免 Linux/CI 因 `extract_hostname` 无法解析而编译失败；Windows UIA 焦点元素归属判断改为“属于目标窗口子树”而非“必须同 PID”，避免 Chromium/Electron 多进程文本框被误丢弃。`apps/desktop/src-tauri cargo test -q` 通过（50 passed）。
-- [VERIFIED] 2026-03-20：提交 `fix(context): address review blockers` 后按文档执行 `powershell -ExecutionPolicy Bypass -File .\\scripts\\windows\\windows_gate.ps1`：Windows compile gate 通过，但完整 gate 仍被环境问题阻断，包括 FFmpeg 签名 key 导入失败（`gpg` keyring 路径异常）、fixtures 下载 `zh_10s.ogg` 命中 Wikimedia 403、`npm ci` 命中 `@esbuild/win32-x64/esbuild.exe` 的 `EPERM unlink` 占用错误，随后 `tauri` 命令不可用。
+- [VERIFIED] 项目当前以 Windows 桌面端为主要运行目标，Linux/WSL 主要承担开发与辅助验证。
+- [VERIFIED] 任务统一入口以 `start_task` 为主，录音链路使用后端托管资产而不是前端直接持有音频字节。
+- [VERIFIED] 上下文采集当前采用文本结构模型，不再走截图路径。
+- [VERIFIED] 录音输入采用显式策略模型，并依赖缓存而不是在热路径里做慢速探测。
+- [VERIFIED] 自动粘贴是导出阶段的一部分，要求错误可见、不可静默吞掉。
+- [VERIFIED] `docs/index.md` 是文档导航入口；`docs/memory` 只保存会影响后续工作的当前事实。
 
-### 当前工作集
+### 待确认
 
-- 需要在下一步优先验证：
-  - 热键触发链路的 rewrite 一致性（`rewrite_enabled/template_id` 与设置一致）。
-  - 关键 Windows-only 改动后的本机 `Windows` `npm run tauri dev` 与 `quick/full` 可回归（当前 Linux 侧已通过）。
-  - 自动粘贴跨平台闭环（Windows + Linux）与失败码可见性。
-- [UNCONFIRMED] “后端录音替代前端 `MediaRecorder`”已接通：`MainScreen` 调用 `start_backend_recording` / `stop_backend_recording` / `abort_backend_recording`，录音由后端 FFmpeg 进程托管；待校验路径：Windows 默认麦克风 dshow 输入可用性。
-- [UNCONFIRMED] `start_task(recording_bytes)` 已从任务入口移除；当前统一输入模式为 `recording_asset|fixture`。
-- 进行中更新点：`docs/memory` 由复盘内容转为“当前事实清单”。
-- ASR 设置页状态来源修正：状态检查已改为按 `settings` 解析后的实际 ASR 模型来源（本地路径或远端模型 id）执行，不再固定指向仓库默认目录。
-- 完整性告警策略调整：`manifest.json_missing` 仍可见，但不再阻断 ASR 可用性，状态面板会明确标注为“可用但未做完整性清单校验”。
+- [UNCONFIRMED] Windows 端热键录音到转写完成的整条闭环是否仍稳定。
+- [UNCONFIRMED] Windows 自动粘贴在真实目标输入框上的实机闭环是否稳定。
+- [UNCONFIRMED] Linux 自动粘贴的真实桌面环境闭环是否稳定。
+- [UNCONFIRMED] 热键链路与主 UI 链路在改写参数和上下文冻结上的最终一致性是否已全部补齐。
 
-## 下一步建议
+## 当前工作集
 
-- 在 Windows 下补一次完整闭环验证：热键按下->开始录音->停止/取消->转写完成/失败，确认同一 `task_id` 贯穿热键事件、任务事件与结果输出，且未消费上下文可被 `abort_pending_task` 清理。
-- 在 Windows 会话里补齐一次“热键录音 -> 转写 -> 改写 -> persist -> copy”闭环，并将观察结果回写：
-  - 正常：同一 `task_id` 链路内 `CMD.start...`、`TASK.rewrite_effective`、`task_done` 一致。
-  - 异常：将复现条件与处理思路写入 `docs/memory/PITFALLS.md`。
-- 在本仓执行 `git status` 与 `./.venv/bin/python scripts/verify_full.py` 前后对照文档约定。
-- 避免改动 `docs/memory` 以外文档时引入重复事实，若新增约束立即写回对应文件。
+- 重点模块：
+  - `apps/desktop/src-tauri/src/lib.rs`
+  - `apps/desktop/src-tauri/src/pipeline.rs`
+  - `apps/desktop/src-tauri/src/settings.rs`
+  - `apps/desktop/src-tauri/src/task_manager.rs`
+  - `apps/desktop/src-tauri/src/context_capture.rs`
+  - `apps/desktop/src-tauri/src/context_capture_windows.rs`
+  - `apps/desktop/src/screens/MainScreen.tsx`
+  - `apps/desktop/src/screens/SettingsScreen.tsx`
+- 验证入口：
+  - `scripts/verify_quick.py`
+  - `scripts/verify_full.py`
+  - `scripts/windows/windows_gate.ps1`
 
-## 变更后固定执行流程
+## 下一步
 
-- 所有代码修复/功能更新完成后，Windows 侧必须按以下顺序执行：
-  1. 同步源码（拉取当前分支最新提交）。
-  2. 重新编译（推荐按项目文档链路执行）。
-  3. 以 Debug 模式启动进程并复测相关链路。
+- 优先在 Windows 端补完整闭环验证：热键录音、停止/取消、转写、改写、导出、自动粘贴。
+- 若新增会影响后续工作的事实，立刻同步写回对应 memory 文件，不把状态继续堆在本文件里。
+- 继续把 `CONTINUITY.md` 维持成短小、可恢复、无历史噪音的当前状态页。
 
-## 关键文件（当前可直接核验）
+## 当前约束
 
-- `apps/desktop/src-tauri/src/obs/trace.rs`、`apps/desktop/src-tauri/src/obs/writer.rs`：trace/metrics 统一日志落盘主流程（异步单写线程）。
-- `apps/desktop/src-tauri/src/context_capture.rs`、`apps/desktop/src-tauri/src/context_capture_windows.rs`：上下文采集。
-- `apps/desktop/src-tauri/src/lib.rs`、`pipeline.rs`、`settings.rs`、`templates.rs`：流程入口与配置。
-- `scripts/verify_quick.py`、`scripts/verify_full.py`：验收闭环。
-- `docs/index.md`：文档导航入口。
-- [ASR 预处理路径] `apps/desktop/src-tauri/src/pipeline.rs`：
-  - `PreprocessConfig`、`build_ffmpeg_preprocess_args`、`clamp_preprocess_config`。
-  - `run_audio_pipeline_with_task_id`、`run_fixture_pipeline`、`preprocess_ffmpeg(_cancellable)` 增加配置入参。
-- [ASR 配置链路] `apps/desktop/src-tauri/src/settings.rs`、`lib.rs`、`task_manager.rs`、`apps/desktop/src/screens/SettingsScreen.tsx`、`apps/desktop/src/types.ts`。
-
-## 关键命令（仅当前可复用）
-
-- `./.venv/bin/python scripts/verify_quick.py`
-- `./.venv/bin/python scripts/verify_full.py`
-- Windows 环境文档命令：
-  - `Set-Location <repo>/apps/desktop`
-  - `npm run tauri dev`
-- WSL 下触发 Windows 文档命令必须保持文档命令语义不变，仅调整调用链环境。
-
-## 关键约束
-
-- 不增加用户交互类“发送预览/确认”流程；上下文采集与发送保持自动化。
-- 所有新增行为变更须同时落在 `docs/*` 与对应 `docs/memory` 文件里。
-- 任何多路径并发日志结论必须按 `task_id` 聚合，不按尾部单行推断可用性。
+- 不使用静默兜底；配置缺失或关键链路异常应尽早暴露。
+- 用户要求“严格按文档执行”时，只能执行文档原文命令和文档明示修复步骤。
+- 代码或行为变更如果影响后续工作，必须同步更新 `docs/` 与 `docs/memory`。
