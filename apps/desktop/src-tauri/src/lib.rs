@@ -52,6 +52,7 @@ struct ActiveBackendRecording {
 
 struct RecordedAsset {
     asset_id: String,
+    recording_id: String,
     output_path: std::path::PathBuf,
     record_elapsed_ms: u128,
     created_at: std::time::Instant,
@@ -61,6 +62,8 @@ struct RecordedAsset {
 struct BackendRecordingInner {
     active: Option<ActiveBackendRecording>,
     assets: std::collections::HashMap<String, RecordedAsset>,
+    completed_pre_captured_contexts:
+        std::collections::HashMap<String, context_pack::ContextSnapshot>,
 }
 
 struct BackendRecordingState {
@@ -100,6 +103,7 @@ impl BackendRecordingState {
             inner: std::sync::Mutex::new(BackendRecordingInner {
                 active: None,
                 assets: std::collections::HashMap::new(),
+                completed_pre_captured_contexts: std::collections::HashMap::new(),
             }),
         }
     }
@@ -928,12 +932,18 @@ fn start_backend_recording(
     let pre_captured_context = recording_context_cfg
         .as_ref()
         .map(|cfg| state.capture_recording_context_best_effort(&dir, cfg));
-    if pre_captured_context.is_some() {
+    if let Some(pre) = pre_captured_context {
         let mut g = recorder.inner.lock().unwrap();
+        let mut attached_to_active = false;
         if let Some(active) = g.active.as_mut() {
             if active.recording_id == recording_id {
-                active.pre_captured_context = pre_captured_context;
+                active.pre_captured_context = Some(pre.clone());
+                attached_to_active = true;
             }
+        }
+        if !attached_to_active {
+            g.completed_pre_captured_contexts
+                .insert(recording_id.clone(), pre);
         }
     }
 
@@ -1050,14 +1060,19 @@ fn stop_backend_recording(
     let asset_id = uuid::Uuid::new_v4().to_string();
     {
         let mut g = recorder.inner.lock().unwrap();
+        let pre_captured_context = active.pre_captured_context.clone().or_else(|| {
+            g.completed_pre_captured_contexts
+                .remove(&active.recording_id)
+        });
         g.assets.insert(
             asset_id.clone(),
             RecordedAsset {
                 asset_id: asset_id.clone(),
+                recording_id: active.recording_id.clone(),
                 output_path: active.output_path.clone(),
                 record_elapsed_ms: elapsed_ms,
                 created_at: std::time::Instant::now(),
-                pre_captured_context: active.pre_captured_context.clone(),
+                pre_captured_context,
             },
         );
     }
@@ -1117,6 +1132,9 @@ fn abort_backend_recording(
     let _ = active.child.wait();
     join_overlay_meter_thread(&mut active);
     let _ = std::fs::remove_file(&active.output_path);
+    let mut g = recorder.inner.lock().unwrap();
+    g.completed_pre_captured_contexts
+        .remove(&active.recording_id);
     span.ok(Some(serde_json::json!({"aborted": true})));
     Ok(())
 }
@@ -1985,6 +2003,7 @@ mod tests {
     fn apply_recorded_asset_to_start_opts_restores_frozen_context() {
         let asset = RecordedAsset {
             asset_id: "a".to_string(),
+            recording_id: "r".to_string(),
             output_path: std::path::PathBuf::from("tmp.wav"),
             record_elapsed_ms: 42,
             created_at: std::time::Instant::now(),
