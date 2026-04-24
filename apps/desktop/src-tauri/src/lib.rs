@@ -1006,6 +1006,8 @@ pub fn run() {
             commands::record_transcribe_cancel,
             commands::rewrite_text,
             commands::insert_text,
+            commands::workflow_snapshot,
+            commands::workflow_command,
             commands::transcribe_fixture,
             abort_pending_task,
             list_templates,

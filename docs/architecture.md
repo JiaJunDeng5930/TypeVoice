@@ -1,17 +1,17 @@
 # TypeVoice 架构
 
-目标：前端显式控制录音转录、改写、插入；后端按业务能力拆成独立模块，并通过统一事件通道驱动显示。
+目标：前端只发送用户意图并渲染后端状态快照；后端核心状态机统一控制录音转录、改写、插入和取消，并通过统一事件通道驱动显示。
 
 ## 1. 分层与依赖方向
 
-- Frontend：React UI，只负责交互、显示和命令编排。
+- Frontend：React UI，只负责交互、显示和发送用户意图命令。
 - Commands：Tauri 命令入口，负责参数映射、状态注入和调用核心状态机。
 - Core Modules：`voice_workflow`、`audio_capture`、`transcription`、`rewrite`、`insertion`、`ui_events`。
 - Adapters：本地 ASR runner、API ASR、FFmpeg、LLM API、平台输入、存储、系统音频设备。
 
 依赖方向：
 
-- 前端通过 typed backend client 调用后端命令。
+- 前端通过 typed backend client 调用 `workflow_snapshot` 和 `workflow_command`。
 - 命令层只推进 `voice_workflow`。
 - `voice_workflow` 持有核心业务状态，并调用录音、转录、改写、插入能力模块。
 - 能力模块依赖端口或适配器。
@@ -105,18 +105,18 @@ Provider：
 
 - 提供 `UiEventMailbox`。
 - 启动 actor，从 mailbox 读取事件并投递给前端 `ui_event`。
-- 事件覆盖录音状态、音频电平、转录阶段、转录完成、改写完成、插入结果和诊断错误。
+- 事件覆盖 workflow 状态快照、音频电平、转录阶段、转录完成、改写完成、插入结果和诊断错误。
 
-## 3. 前端编排
+## 3. 前端交互
 
-主屏幕交互拆成独立操作：
+主屏幕只发送用户意图：
 
-- 主按钮：开始录音转录、结束录音并转录、取消当前录音或转录。
-- `REWRITE`：对最近一次转录结果执行改写。
-- `INSERT`：插入当前显示文本。
-- 点击最近结果文本：只执行浏览器剪贴板复制。
+- 主按钮发送 `primary`，由 `voice_workflow` 按当前阶段决定开始、停止或取消。
+- `REWRITE` 发送 `rewriteLast`，由 `voice_workflow` 选择最近一次 ASR 文本。
+- `INSERT` 发送 `insertLast`，由 `voice_workflow` 选择当前最终文本。
+- 点击最近结果文本发送 `copyLast`，由 `voice_workflow` 执行复制。
 
-前端不再在转录完成后自动改写或自动插入。
+前端显示来自 `WorkflowView` 的按钮文案、禁用状态、最近结果和诊断文本。
 
 ## 4. 数据契约
 
@@ -125,6 +125,7 @@ Provider：
 - `TranscriptionResult { transcriptId, asrText, finalText, metrics, historyId }`
 - `RewriteResult { transcriptId, finalText, rewriteMs, templateId }`
 - `InsertResult { copied, autoPasteAttempted, autoPasteOk, errorCode, errorMessage }`
+- `WorkflowView { phase, taskId, recordingSessionId, lastTranscriptId, lastAsrText, lastText, lastCreatedAtMs, diagnosticCode, diagnosticLine, primaryLabel, primaryDisabled, canRewrite, canInsert, canCopy }`
 
 历史记录规则：
 

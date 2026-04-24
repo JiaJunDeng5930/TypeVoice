@@ -55,6 +55,25 @@ export type InsertResult = {
   errorMessage?: string | null;
 };
 
+export type WorkflowCommand = "primary" | "rewriteLast" | "insertLast" | "copyLast" | "cancel";
+
+export type WorkflowView = {
+  phase: string;
+  taskId?: string | null;
+  recordingSessionId?: string | null;
+  lastTranscriptId?: string | null;
+  lastAsrText: string;
+  lastText: string;
+  lastCreatedAtMs?: number | null;
+  diagnosticCode?: string | null;
+  diagnosticLine: string;
+  primaryLabel: string;
+  primaryDisabled: boolean;
+  canRewrite: boolean;
+  canInsert: boolean;
+  canCopy: boolean;
+};
+
 export type TaskDone = {
   task_id: string;
   asr_text: string;

@@ -3,16 +3,19 @@ use std::{collections::HashMap, path::Path, sync::Mutex};
 use crate::audio_capture::RecordingRegistry;
 use crate::context_capture;
 use crate::context_pack::ContextSnapshot;
+use serde::{Deserialize, Serialize};
+
 use crate::insertion::{InsertResult, InsertTextRequest};
 use crate::ports::PortError;
 use crate::record_input_cache::RecordInputCacheState;
 use crate::rewrite::{RewriteResult, RewriteTextRequest};
 use crate::task_manager::TaskManager;
 use crate::transcription::{
-    TranscribeFixtureRequest, TranscriptionInput, TranscriptionResult, TranscriptionService,
+    TranscribeFixtureRequest, TranscriptionInput, TranscriptionMetrics, TranscriptionResult,
+    TranscriptionService,
 };
 use crate::ui_events::{UiEvent, UiEventMailbox, UiEventStatus};
-use crate::{insertion, rewrite, RuntimeState};
+use crate::{data_dir, export, history, insertion, rewrite, RuntimeState};
 
 pub type WorkflowResult<T> = Result<T, WorkflowError>;
 
@@ -27,6 +30,58 @@ pub enum WorkflowPhase {
     Inserting,
     Cancelled,
     Failed,
+}
+
+impl WorkflowPhase {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Recording => "recording",
+            Self::Transcribing => "transcribing",
+            Self::Transcribed => "transcribed",
+            Self::Rewriting => "rewriting",
+            Self::Rewritten => "rewritten",
+            Self::Inserting => "inserting",
+            Self::Cancelled => "cancelled",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowCommandRequest {
+    pub command: WorkflowCommand,
+    pub task_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkflowCommand {
+    Primary,
+    RewriteLast,
+    InsertLast,
+    CopyLast,
+    Cancel,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowView {
+    pub phase: String,
+    pub task_id: Option<String>,
+    pub recording_session_id: Option<String>,
+    pub last_transcript_id: Option<String>,
+    pub last_asr_text: String,
+    pub last_text: String,
+    pub last_created_at_ms: Option<i64>,
+    pub diagnostic_code: Option<String>,
+    pub diagnostic_line: String,
+    pub primary_label: String,
+    pub primary_disabled: bool,
+    pub can_rewrite: bool,
+    pub can_insert: bool,
+    pub can_copy: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,6 +124,7 @@ pub struct WorkflowSnapshot {
     pub session: Option<WorkflowSession>,
     pub transcription: Option<TranscriptionResult>,
     pub rewrite: Option<RewriteResult>,
+    pub last_created_at_ms: Option<i64>,
     pub last_error: Option<WorkflowError>,
 }
 
@@ -78,6 +134,7 @@ struct WorkflowState {
     session: Option<WorkflowSession>,
     transcription: Option<TranscriptionResult>,
     rewrite: Option<RewriteResult>,
+    last_created_at_ms: Option<i64>,
     pending_contexts: HashMap<String, PendingWorkflowContext>,
     last_error: Option<WorkflowError>,
 }
@@ -88,6 +145,14 @@ struct PendingWorkflowContext {
     snapshot: ContextSnapshot,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WorkflowActionText {
+    transcript_id: String,
+    asr_text: String,
+    final_text: String,
+    created_at_ms: Option<i64>,
+}
+
 impl WorkflowState {
     fn idle() -> Self {
         Self {
@@ -95,6 +160,7 @@ impl WorkflowState {
             session: None,
             transcription: None,
             rewrite: None,
+            last_created_at_ms: None,
             pending_contexts: HashMap::new(),
             last_error: None,
         }
@@ -106,6 +172,7 @@ impl WorkflowState {
             session: self.session.clone(),
             transcription: self.transcription.clone(),
             rewrite: self.rewrite.clone(),
+            last_created_at_ms: self.last_created_at_ms,
             last_error: self.last_error.clone(),
         }
     }
@@ -130,6 +197,54 @@ impl VoiceWorkflow {
         self.state.lock().unwrap().snapshot()
     }
 
+    pub fn snapshot_view(&self) -> WorkflowResult<WorkflowView> {
+        self.hydrate_latest_history()?;
+        Ok(self.view())
+    }
+
+    pub async fn run_command(
+        &self,
+        runtime: &RuntimeState,
+        audio: &RecordingRegistry,
+        transcriber: &TranscriptionService,
+        mailbox: &UiEventMailbox,
+        record_input_cache: &RecordInputCacheState,
+        task_state: &TaskManager,
+        req: WorkflowCommandRequest,
+    ) -> WorkflowResult<WorkflowView> {
+        self.hydrate_latest_history()?;
+        let result = match req.command {
+            WorkflowCommand::Primary => {
+                self.run_primary(
+                    runtime,
+                    audio,
+                    transcriber,
+                    mailbox,
+                    record_input_cache,
+                    normalize_optional_task_id(req.task_id)?,
+                )
+                .await
+            }
+            WorkflowCommand::RewriteLast => self.run_rewrite_last(mailbox, task_state).await,
+            WorkflowCommand::InsertLast => self.run_insert_last(mailbox).await,
+            WorkflowCommand::CopyLast => self.run_copy_last(),
+            WorkflowCommand::Cancel => self.run_cancel(audio, transcriber, mailbox),
+        };
+
+        match result {
+            Ok(()) => {
+                let view = self.view();
+                self.emit_state(mailbox);
+                Ok(view)
+            }
+            Err(err) => {
+                self.remember_error(err.clone());
+                self.emit_state(mailbox);
+                Err(err)
+            }
+        }
+    }
+
     pub fn has_active_task(&self) -> bool {
         matches!(
             self.phase(),
@@ -147,6 +262,111 @@ impl VoiceWorkflow {
             .session
             .as_ref()
             .map(|session| session.session_id.clone())
+    }
+
+    async fn run_primary(
+        &self,
+        runtime: &RuntimeState,
+        audio: &RecordingRegistry,
+        transcriber: &TranscriptionService,
+        mailbox: &UiEventMailbox,
+        record_input_cache: &RecordInputCacheState,
+        task_id: Option<String>,
+    ) -> WorkflowResult<()> {
+        let snapshot = self.snapshot();
+        match snapshot.phase {
+            WorkflowPhase::Idle
+            | WorkflowPhase::Transcribed
+            | WorkflowPhase::Rewritten
+            | WorkflowPhase::Cancelled
+            | WorkflowPhase::Failed => {
+                self.start_record_transcribe(runtime, audio, mailbox, record_input_cache, task_id)?;
+                Ok(())
+            }
+            WorkflowPhase::Recording => {
+                let recording_session_id = snapshot
+                    .session
+                    .as_ref()
+                    .map(|session| session.recording_session_id.as_str())
+                    .filter(|v| !v.trim().is_empty())
+                    .ok_or_else(|| {
+                        WorkflowError::new(
+                            "E_WORKFLOW_SESSION_MISSING",
+                            "recording session missing",
+                        )
+                    })?;
+                self.stop_record_transcribe(
+                    runtime,
+                    audio,
+                    transcriber,
+                    mailbox,
+                    recording_session_id,
+                )
+                .await?;
+                Ok(())
+            }
+            WorkflowPhase::Transcribing => self.run_cancel(audio, transcriber, mailbox),
+            WorkflowPhase::Rewriting | WorkflowPhase::Inserting => Err(WorkflowError::new(
+                "E_WORKFLOW_BUSY",
+                "workflow already has an active session",
+            )),
+        }
+    }
+
+    async fn run_rewrite_last(
+        &self,
+        mailbox: &UiEventMailbox,
+        task_state: &TaskManager,
+    ) -> WorkflowResult<()> {
+        let last = self.last_asr_for_action()?;
+        self.rewrite_text(
+            mailbox,
+            task_state,
+            RewriteTextRequest {
+                transcript_id: last.transcript_id,
+                text: last.asr_text,
+                template_id: None,
+            },
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn run_insert_last(&self, mailbox: &UiEventMailbox) -> WorkflowResult<()> {
+        let last = self.last_text_for_action()?;
+        self.insert_text(
+            mailbox,
+            InsertTextRequest {
+                transcript_id: Some(last.transcript_id),
+                text: last.final_text,
+            },
+        )
+        .await?;
+        Ok(())
+    }
+
+    fn run_copy_last(&self) -> WorkflowResult<()> {
+        let last = self.last_text_for_action()?;
+        export::copy_text_to_clipboard(&last.final_text)
+            .map_err(|err| WorkflowError::new(&err.code, err.message))
+    }
+
+    fn run_cancel(
+        &self,
+        audio: &RecordingRegistry,
+        transcriber: &TranscriptionService,
+        mailbox: &UiEventMailbox,
+    ) -> WorkflowResult<()> {
+        let snapshot = self.snapshot();
+        let session_id = snapshot
+            .session
+            .as_ref()
+            .map(|session| session.recording_session_id.clone());
+        let transcript_id = snapshot
+            .session
+            .as_ref()
+            .map(|session| session.session_id.clone());
+        self.cancel_record_transcribe(audio, transcriber, mailbox, session_id, transcript_id)
     }
 
     pub fn start_record_transcribe(
@@ -170,6 +390,7 @@ impl VoiceWorkflow {
         match audio.start_recording(mailbox, record_input_cache, Some(transcript_id.clone())) {
             Ok(recording_session_id) => {
                 self.attach_recording_session(&transcript_id, &recording_session_id)?;
+                self.emit_state(mailbox);
                 Ok(recording_session_id)
             }
             Err(err) => {
@@ -197,6 +418,7 @@ impl VoiceWorkflow {
         recording_session_id: &str,
     ) -> WorkflowResult<TranscriptionResult> {
         let session = self.begin_transcribing(recording_session_id)?;
+        self.emit_state(mailbox);
         let asset = match audio.stop_recording(recording_session_id) {
             Ok(asset) => asset,
             Err(err) => {
@@ -267,6 +489,7 @@ impl VoiceWorkflow {
             }
         };
         self.complete_transcription(result.clone())?;
+        self.emit_state(mailbox);
         mailbox.send(UiEvent::stage_with_elapsed(
             &result.transcript_id,
             "Transcribe",
@@ -297,6 +520,7 @@ impl VoiceWorkflow {
             WorkflowPhase::Recording => {
                 let expected = session_id.as_deref();
                 self.cancel_recording_state(expected)?;
+                self.emit_state(mailbox);
                 audio
                     .abort_recording(session_id)
                     .map_err(|err| WorkflowError::new(&err.code, err.message))?;
@@ -326,6 +550,7 @@ impl VoiceWorkflow {
                     .cancel(expected)
                     .map_err(WorkflowError::from_port)?;
                 self.mark_cancelled();
+                self.emit_state(mailbox);
                 if let Some(session) = snapshot.session {
                     mailbox.send(UiEvent::stage(
                         session.session_id,
@@ -365,6 +590,7 @@ impl VoiceWorkflow {
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         self.reserve_transcribing(&task_id)?;
+        self.emit_state(mailbox);
         mailbox.send(UiEvent::stage(
             &task_id,
             "Transcribe",
@@ -394,6 +620,7 @@ impl VoiceWorkflow {
             }
         };
         self.complete_transcription(result.clone())?;
+        self.emit_state(mailbox);
         mailbox.send(UiEvent::stage_with_elapsed(
             &result.transcript_id,
             "Transcribe",
@@ -419,6 +646,7 @@ impl VoiceWorkflow {
             ));
         }
         self.begin_rewrite(&transcript_id)?;
+        self.emit_state(mailbox);
         let pending_context = self.take_pending_context(&transcript_id);
         mailbox.send(UiEvent::stage(
             &transcript_id,
@@ -443,6 +671,7 @@ impl VoiceWorkflow {
             }
         };
         self.complete_rewrite(result.clone())?;
+        self.emit_state(mailbox);
         mailbox.send(UiEvent::stage_with_elapsed(
             &transcript_id,
             "Rewrite",
@@ -466,6 +695,7 @@ impl VoiceWorkflow {
         req: InsertTextRequest,
     ) -> WorkflowResult<InsertResult> {
         let previous = self.begin_insert()?;
+        self.emit_state(mailbox);
         let transcript_id = req.transcript_id.clone();
         let event_task_id = transcript_id.as_deref().unwrap_or("insert");
         mailbox.send(UiEvent::stage(
@@ -491,6 +721,7 @@ impl VoiceWorkflow {
             }
         };
         self.complete_insert(previous);
+        self.emit_state(mailbox);
         mailbox.send(UiEvent::stage(
             event_task_id,
             "Insert",
@@ -534,6 +765,149 @@ impl VoiceWorkflow {
         Ok(task_id)
     }
 
+    fn emit_state(&self, mailbox: &UiEventMailbox) {
+        mailbox.send(UiEvent::workflow_state(self.view()));
+    }
+
+    fn view(&self) -> WorkflowView {
+        let snapshot = self.snapshot();
+        let phase = snapshot.phase;
+        let task_id = snapshot
+            .session
+            .as_ref()
+            .map(|session| session.session_id.clone());
+        let recording_session_id = snapshot.session.as_ref().and_then(|session| {
+            if session.recording_session_id.trim().is_empty() {
+                None
+            } else {
+                Some(session.recording_session_id.clone())
+            }
+        });
+        let last = last_result_from_snapshot(&snapshot);
+        let diagnostic_code = snapshot.last_error.as_ref().map(|err| err.code.clone());
+        let diagnostic_line = snapshot
+            .last_error
+            .as_ref()
+            .map(|err| format!("{}: {}", err.code, err.message))
+            .unwrap_or_default();
+        let active = matches!(
+            phase,
+            WorkflowPhase::Recording
+                | WorkflowPhase::Transcribing
+                | WorkflowPhase::Rewriting
+                | WorkflowPhase::Inserting
+        );
+        let has_asr = last
+            .as_ref()
+            .map(|result| !result.asr_text.trim().is_empty())
+            .unwrap_or(false);
+        let has_text = last
+            .as_ref()
+            .map(|result| !result.final_text.trim().is_empty())
+            .unwrap_or(false);
+
+        WorkflowView {
+            phase: phase.as_str().to_string(),
+            task_id,
+            recording_session_id,
+            last_transcript_id: last.as_ref().map(|result| result.transcript_id.clone()),
+            last_asr_text: last
+                .as_ref()
+                .map(|result| result.asr_text.clone())
+                .unwrap_or_default(),
+            last_text: last
+                .as_ref()
+                .map(|result| result.final_text.clone())
+                .unwrap_or_default(),
+            last_created_at_ms: last.as_ref().and_then(|result| result.created_at_ms),
+            diagnostic_code,
+            diagnostic_line,
+            primary_label: primary_label(phase).to_string(),
+            primary_disabled: matches!(phase, WorkflowPhase::Rewriting | WorkflowPhase::Inserting),
+            can_rewrite: has_asr && !active,
+            can_insert: has_text && !active,
+            can_copy: has_text,
+        }
+    }
+
+    fn hydrate_latest_history(&self) -> WorkflowResult<()> {
+        let should_hydrate = {
+            let state = self.state.lock().unwrap();
+            matches!(
+                state.phase,
+                WorkflowPhase::Idle | WorkflowPhase::Cancelled | WorkflowPhase::Failed
+            ) && state.transcription.is_none()
+                && state.rewrite.is_none()
+        };
+        if !should_hydrate {
+            return Ok(());
+        }
+
+        let dir = data_dir::data_dir()
+            .map_err(|e| WorkflowError::from_message("E_DATA_DIR", e.to_string()))?;
+        let rows = history::list(&dir.join("history.sqlite3"), 1, None)
+            .map_err(|e| WorkflowError::from_message("E_HISTORY_LIST", e.to_string()))?;
+        let Some(item) = rows.into_iter().next() else {
+            return Ok(());
+        };
+
+        let mut state = self.state.lock().unwrap();
+        if !matches!(
+            state.phase,
+            WorkflowPhase::Idle | WorkflowPhase::Cancelled | WorkflowPhase::Failed
+        ) || state.transcription.is_some()
+            || state.rewrite.is_some()
+        {
+            return Ok(());
+        }
+        state.phase = WorkflowPhase::Transcribed;
+        state.session = Some(WorkflowSession {
+            session_id: item.task_id.clone(),
+            recording_session_id: String::new(),
+        });
+        let created_at_ms = item.created_at_ms;
+        state.transcription = Some(history_item_to_transcription_result(item));
+        state.rewrite = None;
+        state.last_created_at_ms = Some(created_at_ms);
+        state.last_error = None;
+        Ok(())
+    }
+
+    fn last_text_for_action(&self) -> WorkflowResult<WorkflowActionText> {
+        self.hydrate_latest_history()?;
+        let snapshot = self.snapshot();
+        let last = last_result_from_snapshot(&snapshot).ok_or_else(|| {
+            WorkflowError::new("E_WORKFLOW_LAST_RESULT_MISSING", "last result is missing")
+        })?;
+        if last.final_text.trim().is_empty() {
+            return Err(WorkflowError::new(
+                "E_WORKFLOW_LAST_TEXT_MISSING",
+                "last text is missing",
+            ));
+        }
+        Ok(last)
+    }
+
+    fn last_asr_for_action(&self) -> WorkflowResult<WorkflowActionText> {
+        self.hydrate_latest_history()?;
+        let snapshot = self.snapshot();
+        let last = last_result_from_snapshot(&snapshot).ok_or_else(|| {
+            WorkflowError::new("E_WORKFLOW_LAST_RESULT_MISSING", "last result is missing")
+        })?;
+        if last.asr_text.trim().is_empty() {
+            return Err(WorkflowError::new(
+                "E_WORKFLOW_LAST_ASR_TEXT_MISSING",
+                "last ASR text is missing",
+            ));
+        }
+        Ok(last)
+    }
+
+    fn remember_error(&self, err: WorkflowError) {
+        let mut state = self.state.lock().unwrap();
+        state.last_error = Some(err);
+    }
+
     #[cfg(test)]
     fn begin_recording(
         &self,
@@ -543,7 +917,11 @@ impl VoiceWorkflow {
         let mut state = self.state.lock().unwrap();
         if !matches!(
             state.phase,
-            WorkflowPhase::Idle | WorkflowPhase::Cancelled | WorkflowPhase::Failed
+            WorkflowPhase::Idle
+                | WorkflowPhase::Transcribed
+                | WorkflowPhase::Rewritten
+                | WorkflowPhase::Cancelled
+                | WorkflowPhase::Failed
         ) {
             return Err(WorkflowError::new(
                 "E_WORKFLOW_BUSY",
@@ -558,6 +936,7 @@ impl VoiceWorkflow {
         state.session = Some(session.clone());
         state.transcription = None;
         state.rewrite = None;
+        state.last_created_at_ms = None;
         state.last_error = None;
         Ok(session)
     }
@@ -566,7 +945,11 @@ impl VoiceWorkflow {
         let mut state = self.state.lock().unwrap();
         if !matches!(
             state.phase,
-            WorkflowPhase::Idle | WorkflowPhase::Cancelled | WorkflowPhase::Failed
+            WorkflowPhase::Idle
+                | WorkflowPhase::Transcribed
+                | WorkflowPhase::Rewritten
+                | WorkflowPhase::Cancelled
+                | WorkflowPhase::Failed
         ) {
             return Err(WorkflowError::new(
                 "E_WORKFLOW_BUSY",
@@ -580,6 +963,7 @@ impl VoiceWorkflow {
         });
         state.transcription = None;
         state.rewrite = None;
+        state.last_created_at_ms = None;
         state.last_error = None;
         Ok(())
     }
@@ -588,7 +972,11 @@ impl VoiceWorkflow {
         let mut state = self.state.lock().unwrap();
         if !matches!(
             state.phase,
-            WorkflowPhase::Idle | WorkflowPhase::Cancelled | WorkflowPhase::Failed
+            WorkflowPhase::Idle
+                | WorkflowPhase::Transcribed
+                | WorkflowPhase::Rewritten
+                | WorkflowPhase::Cancelled
+                | WorkflowPhase::Failed
         ) {
             return Err(WorkflowError::new(
                 "E_WORKFLOW_BUSY",
@@ -602,6 +990,7 @@ impl VoiceWorkflow {
         });
         state.transcription = None;
         state.rewrite = None;
+        state.last_created_at_ms = None;
         state.last_error = None;
         Ok(())
     }
@@ -675,6 +1064,7 @@ impl VoiceWorkflow {
         }
         state.phase = WorkflowPhase::Transcribed;
         state.transcription = Some(result);
+        state.last_created_at_ms = Some(now_ms());
         state.last_error = None;
         Ok(())
     }
@@ -717,6 +1107,7 @@ impl VoiceWorkflow {
         });
         state.transcription = Some(result);
         state.rewrite = None;
+        state.last_created_at_ms = Some(now_ms());
         state.last_error = None;
         Ok(())
     }
@@ -954,6 +1345,64 @@ impl Default for VoiceWorkflow {
     }
 }
 
+fn primary_label(phase: WorkflowPhase) -> &'static str {
+    match phase {
+        WorkflowPhase::Idle
+        | WorkflowPhase::Transcribed
+        | WorkflowPhase::Rewritten
+        | WorkflowPhase::Cancelled
+        | WorkflowPhase::Failed => "START",
+        WorkflowPhase::Recording => "STOP",
+        WorkflowPhase::Transcribing => "CANCEL",
+        WorkflowPhase::Rewriting => "REWRITING",
+        WorkflowPhase::Inserting => "INSERTING",
+    }
+}
+
+fn last_result_from_snapshot(snapshot: &WorkflowSnapshot) -> Option<WorkflowActionText> {
+    let transcription = snapshot.transcription.as_ref()?;
+    let final_text = snapshot
+        .rewrite
+        .as_ref()
+        .map(|result| result.final_text.clone())
+        .unwrap_or_else(|| transcription.final_text.clone());
+    Some(WorkflowActionText {
+        transcript_id: transcription.transcript_id.clone(),
+        asr_text: transcription.asr_text.clone(),
+        final_text,
+        created_at_ms: snapshot.last_created_at_ms,
+    })
+}
+
+fn history_item_to_transcription_result(item: history::HistoryItem) -> TranscriptionResult {
+    let task_id = item.task_id;
+    TranscriptionResult {
+        transcript_id: task_id.clone(),
+        asr_text: item.asr_text,
+        final_text: item.final_text,
+        metrics: TranscriptionMetrics {
+            rtf: item.rtf,
+            device_used: item.device_used,
+            preprocess_ms: item.preprocess_ms.max(0) as u128,
+            asr_ms: item.asr_ms.max(0) as u128,
+        },
+        history_id: task_id,
+    }
+}
+
+fn normalize_optional_task_id(task_id: Option<String>) -> WorkflowResult<Option<String>> {
+    let raw = match task_id {
+        Some(v) => v.trim().to_string(),
+        None => return Ok(None),
+    };
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    let parsed = uuid::Uuid::parse_str(&raw)
+        .map_err(|e| WorkflowError::new("E_TASK_ID_INVALID", format!("invalid task_id ({e})")))?;
+    Ok(Some(parsed.to_string()))
+}
+
 fn now_ms() -> i64 {
     match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
         Ok(dur) => dur.as_millis() as i64,
@@ -998,6 +1447,19 @@ mod tests {
     }
 
     #[test]
+    fn initial_workflow_view_allows_primary_start() {
+        let workflow = VoiceWorkflow::new();
+
+        let view = workflow.view();
+
+        assert_eq!(view.phase, "idle");
+        assert_eq!(view.primary_label, "START");
+        assert!(!view.primary_disabled);
+        assert!(!view.can_insert);
+        assert!(!view.can_copy);
+    }
+
+    #[test]
     fn start_recording_moves_idle_to_recording() {
         let workflow = VoiceWorkflow::new();
 
@@ -1007,6 +1469,10 @@ mod tests {
 
         assert_eq!(session.session_id, "task-1");
         assert_eq!(workflow.phase(), WorkflowPhase::Recording);
+        let view = workflow.view();
+        assert_eq!(view.primary_label, "STOP");
+        assert_eq!(view.task_id.as_deref(), Some("task-1"));
+        assert_eq!(view.recording_session_id.as_deref(), Some("recording-1"));
     }
 
     #[test]
@@ -1064,6 +1530,13 @@ mod tests {
             .expect("transcription completes");
 
         assert_eq!(workflow.phase(), WorkflowPhase::Transcribed);
+        let view = workflow.view();
+        assert_eq!(view.phase, "transcribed");
+        assert_eq!(view.last_transcript_id.as_deref(), Some("task-1"));
+        assert_eq!(view.last_asr_text, "asr text");
+        assert_eq!(view.last_text, "asr text");
+        assert!(view.can_insert);
+        assert!(view.can_copy);
         assert_eq!(
             workflow
                 .snapshot()
@@ -1094,6 +1567,10 @@ mod tests {
             .expect("rewrite completes");
 
         assert_eq!(workflow.phase(), WorkflowPhase::Rewritten);
+        let view = workflow.view();
+        assert_eq!(view.phase, "rewritten");
+        assert_eq!(view.last_asr_text, "asr text");
+        assert_eq!(view.last_text, "final text");
         assert_eq!(
             workflow
                 .snapshot()
@@ -1116,6 +1593,51 @@ mod tests {
         workflow.complete_insert_for_test(previous);
 
         assert_eq!(workflow.phase(), WorkflowPhase::Transcribed);
+    }
+
+    #[test]
+    fn rewrite_last_requires_asr_text() {
+        let workflow = VoiceWorkflow::new();
+        workflow
+            .open_transcribed_session_for_test("task-1", "")
+            .expect("transcribed");
+
+        let err = workflow
+            .last_asr_for_action()
+            .expect_err("empty ASR text is rejected");
+
+        assert_eq!(err.code, "E_WORKFLOW_LAST_ASR_TEXT_MISSING");
+    }
+
+    #[test]
+    fn insert_and_copy_require_final_text() {
+        let workflow = VoiceWorkflow::new();
+        workflow
+            .open_recording_for_test("task-1", "recording-1")
+            .expect("recording starts");
+        workflow
+            .begin_transcribing_for_test("recording-1")
+            .expect("transcribing starts");
+        let mut result = crate::transcription::TranscriptionResult::new(
+            "task-1",
+            "asr text",
+            crate::transcription::TranscriptionMetrics {
+                rtf: 0.4,
+                device_used: "cuda".to_string(),
+                preprocess_ms: 10,
+                asr_ms: 20,
+            },
+        );
+        result.final_text.clear();
+        workflow
+            .complete_transcription_for_test(result)
+            .expect("transcription completes");
+
+        let err = workflow
+            .last_text_for_action()
+            .expect_err("empty final text is rejected");
+
+        assert_eq!(err.code, "E_WORKFLOW_LAST_TEXT_MISSING");
     }
 
     #[test]

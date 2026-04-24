@@ -6,7 +6,7 @@
 
 ## 1. 总体架构
 
-系统由前端显式编排，后端提供细粒度命令。后端业务模块按职责拆分：
+系统由前端发送用户意图，后端核心状态机执行业务流转并输出状态快照。后端业务模块按职责拆分：
 
 - `commands`：Tauri 命令入口。
 - `voice_workflow`：核心业务状态机，统一推进录音转录、改写、插入和取消。
@@ -31,7 +31,20 @@ Frontend
 
 ## 2. 命令规范
 
-前端只通过以下命令控制核心语音流程：
+前端通过以下命令控制核心语音流程：
+
+- `workflow_snapshot() -> WorkflowView`
+- `workflow_command(req) -> WorkflowView`
+
+`workflow_command(req)` 的 `command` 取值：
+
+- `primary`
+- `rewriteLast`
+- `insertLast`
+- `copyLast`
+- `cancel`
+
+兼容命令仍由命令层转发到 `voice_workflow`：
 
 - `record_transcribe_start(req) -> { sessionId }`
 - `record_transcribe_stop(req) -> TranscriptionResult`
@@ -45,8 +58,10 @@ Frontend
 - 录音和转录属于同一个用户过程，由 start/stop/cancel 控制。
 - 改写由用户单独触发。
 - 插入由用户单独触发。
+- 复制最近结果由用户单独触发。
 - fixtures 转录走统一转录模块。
 - 命令层只调用 `voice_workflow`，具体能力模块由状态机调用。
+- 前端显示使用 `WorkflowView`，其中包含当前阶段、会话 ID、最近结果文本、诊断文本和按钮可用性。
 
 核心状态：
 
@@ -95,6 +110,7 @@ API provider：
 ## 5. 插入规范
 
 - `insert_text` 负责复制和自动写入。
+- `copyLast` 只复制当前最终文本。
 - 自动写入由设置项 `auto_paste_enabled` 控制。
 - 自动写入失败时返回 `copied=true`、`autoPasteAttempted=true`、`autoPasteOk=false` 和错误信息。
 - Windows 自动写入使用平台输入能力。
@@ -109,6 +125,7 @@ API provider：
 - `rewrite.completed`
 - `audio.level`
 - `diagnostic.error`
+- `workflow.state`
 
 业务阶段事件由 `voice_workflow` 投递。`audio_capture` 只投递 `audio.level`。Tauri `AppHandle.emit` 只在 `ui_events` actor 中集中执行。
 

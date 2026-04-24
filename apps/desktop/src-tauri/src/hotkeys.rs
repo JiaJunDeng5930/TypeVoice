@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 use crate::obs::Span;
@@ -25,30 +25,10 @@ fn hotkey_config_from_settings(s: &Settings) -> anyhow::Result<HotkeyConfig> {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct HotkeyRecordEvent {
-    pub kind: String,  // ptt|toggle
-    pub state: String, // Pressed|Released
-    pub shortcut: String,
-    pub ts_ms: i64,
-    pub task_id: Option<String>,
-    pub capture_status: Option<String>, // ok|err
-    pub capture_error_code: Option<String>,
-    pub capture_error_message: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct HotkeyAvailability {
     pub available: bool,
     pub reason: Option<String>,
     pub reason_code: Option<String>,
-}
-
-fn now_ms() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
 }
 
 fn normalized_shortcut(raw: &str) -> String {
@@ -57,6 +37,113 @@ fn normalized_shortcut(raw: &str) -> String {
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join("+")
+}
+
+fn spawn_primary_workflow_command<R: Runtime>(
+    app: AppHandle<R>,
+    data_dir: std::path::PathBuf,
+    task_id: Option<String>,
+    kind: &'static str,
+    state: &'static str,
+    shortcut: String,
+) {
+    tauri::async_runtime::spawn(async move {
+        let runtime = app.state::<crate::RuntimeState>();
+        let workflow = app.state::<crate::voice_workflow::VoiceWorkflow>();
+        let audio = app.state::<crate::audio_capture::RecordingRegistry>();
+        let transcriber = app.state::<crate::transcription::TranscriptionService>();
+        let mailbox = app.state::<crate::ui_events::UiEventMailbox>();
+        let record_input_cache = app.state::<crate::record_input_cache::RecordInputCacheState>();
+        let task_state = app.state::<crate::task_manager::TaskManager>();
+        let result = workflow
+            .run_command(
+                &runtime,
+                &audio,
+                &transcriber,
+                &mailbox,
+                &record_input_cache,
+                &task_state,
+                crate::voice_workflow::WorkflowCommandRequest {
+                    command: crate::voice_workflow::WorkflowCommand::Primary,
+                    task_id,
+                },
+            )
+            .await;
+        if let Err(err) = result {
+            let message = err.render();
+            crate::obs::event_err(
+                &data_dir,
+                None,
+                "Hotkeys",
+                "HK.workflow_command_failed",
+                "logic",
+                &err.code,
+                &message,
+                Some(serde_json::json!({
+                    "kind": kind,
+                    "state": state,
+                    "shortcut": shortcut,
+                })),
+            );
+            mailbox.send(crate::ui_events::UiEvent::error(
+                "hotkey", err.code, message,
+            ));
+        }
+    });
+}
+
+fn open_hotkey_task_or_report<R: Runtime>(
+    app: &AppHandle<R>,
+    data_dir: &Path,
+    ctx_cfg: &crate::context_capture::ContextConfig,
+    capture_required: bool,
+    kind: &str,
+    shortcut: &str,
+) -> Option<String> {
+    let tm = app.state::<crate::task_manager::TaskManager>();
+    let workflow = app.state::<crate::voice_workflow::VoiceWorkflow>();
+    if workflow.has_active_task() {
+        let active_task_id = workflow.active_task_id_best_effort();
+        crate::obs::event(
+            data_dir,
+            active_task_id.as_deref(),
+            "Hotkeys",
+            "HK.hotkey_active_forwarded",
+            "ok",
+            Some(serde_json::json!({
+                "kind": kind,
+                "shortcut": shortcut,
+                "capture_required": capture_required,
+                "active_task_id": active_task_id,
+            })),
+        );
+        return None;
+    }
+
+    match workflow.open_hotkey_task(&tm, data_dir, ctx_cfg, capture_required) {
+        Ok(id) => Some(id),
+        Err(e) => {
+            let code = e.code.clone();
+            let message = e.render();
+            crate::obs::event_err(
+                data_dir,
+                None,
+                "Hotkeys",
+                "HK.task_open_failed",
+                "logic",
+                &code,
+                &message,
+                Some(serde_json::json!({
+                    "kind": kind,
+                    "shortcut": shortcut,
+                    "capture_required": capture_required,
+                })),
+            );
+            let mailbox = app.state::<crate::ui_events::UiEventMailbox>();
+            mailbox.send(crate::ui_events::UiEvent::error("hotkey", code, message));
+            None
+        }
+    }
 }
 
 #[tauri::command]
@@ -197,104 +284,40 @@ impl HotkeyManager {
             let data_dir_buf = data_dir.to_path_buf();
             if let Err(e) = gs.on_shortcut(ptt.as_str(), move |app, shortcut, event| {
                 let shortcut_value = shortcut.into_string();
-                let (task_id, capture_status, capture_error_code, capture_error_message) =
-                    if event.state == ShortcutState::Pressed {
-                        let tm = app.state::<crate::task_manager::TaskManager>();
-                        let workflow = app.state::<crate::voice_workflow::VoiceWorkflow>();
-                        if workflow.has_active_task() {
-                            let active_task_id = workflow.active_task_id_best_effort();
-                            let reason = match active_task_id.as_deref() {
-                                Some(id) => {
-                                    format!("E_TASK_ALREADY_ACTIVE: task is already active ({id})")
-                                }
-                                None => "E_TASK_ALREADY_ACTIVE: task is already active".to_string(),
-                            };
-                            crate::obs::event_err(
-                                &data_dir_buf,
-                                None,
-                                "Hotkeys",
-                                "HK.hotkey_rejected",
-                                "logic",
-                                "E_TASK_ALREADY_ACTIVE",
-                                &reason,
-                                Some(serde_json::json!({
-                                    "kind": "ptt",
-                                    "state": "Pressed",
-                                    "shortcut": shortcut_value.clone(),
-                                    "capture_required": capture_required,
-                                    "active_task_id": active_task_id,
-                                })),
+                match event.state {
+                    ShortcutState::Pressed => {
+                        let task_id = open_hotkey_task_or_report(
+                            &app,
+                            &data_dir_buf,
+                            &ctx_cfg,
+                            capture_required,
+                            "ptt",
+                            &shortcut_value,
+                        );
+                        if task_id.is_some() {
+                            spawn_primary_workflow_command(
+                                app.clone(),
+                                data_dir_buf.clone(),
+                                task_id,
+                                "ptt",
+                                "Pressed",
+                                shortcut_value,
                             );
-                            (
-                                None,
-                                Some("err".to_string()),
-                                Some("E_TASK_ALREADY_ACTIVE".to_string()),
-                                Some(reason),
-                            )
-                        } else {
-                            match workflow.open_hotkey_task(
-                                &tm,
-                                &data_dir_buf,
-                                &ctx_cfg,
-                                capture_required,
-                            ) {
-                                Ok(id) => (Some(id), Some("ok".to_string()), None, None),
-                                Err(e) => {
-                                    let code = e.code.clone();
-                                    let message = e.render();
-                                    crate::obs::event_err(
-                                        &data_dir_buf,
-                                        None,
-                                        "Hotkeys",
-                                        "HK.task_open_failed",
-                                        "logic",
-                                        &code,
-                                        &message,
-                                        Some(serde_json::json!({
-                                            "kind": "ptt",
-                                            "state": "Pressed",
-                                            "shortcut": shortcut_value.clone(),
-                                            "capture_required": capture_required,
-                                        })),
-                                    );
-                                    (None, Some("err".to_string()), Some(code), Some(message))
-                                }
-                            }
                         }
-                    } else {
-                        (None, None, None, None)
-                    };
-                let payload = HotkeyRecordEvent {
-                    kind: "ptt".to_string(),
-                    state: match event.state {
-                        ShortcutState::Pressed => "Pressed".to_string(),
-                        ShortcutState::Released => "Released".to_string(),
-                    },
-                    shortcut: shortcut_value.clone(),
-                    ts_ms: now_ms(),
-                    task_id,
-                    capture_status,
-                    capture_error_code,
-                    capture_error_message,
-                };
-                if let Err(err) = app.emit("tv_hotkey_record", payload.clone()) {
-                    crate::obs::event_err(
-                        &data_dir_buf,
-                        None,
-                        "Hotkeys",
-                        "HK.emit_failed",
-                        "unknown",
-                        "E_HK_EMIT_FAILED",
-                        &err.to_string(),
-                        Some(serde_json::json!({
-                            "event_name": "tv_hotkey_record",
-                            "kind": payload.kind,
-                            "state": payload.state,
-                            "shortcut": payload.shortcut,
-                            "capture_status": payload.capture_status,
-                            "capture_error_code": payload.capture_error_code,
-                        })),
-                    );
+                    }
+                    ShortcutState::Released => {
+                        let workflow = app.state::<crate::voice_workflow::VoiceWorkflow>();
+                        if workflow.phase() == crate::voice_workflow::WorkflowPhase::Recording {
+                            spawn_primary_workflow_command(
+                                app.clone(),
+                                data_dir_buf.clone(),
+                                None,
+                                "ptt",
+                                "Released",
+                                shortcut_value,
+                            );
+                        }
+                    }
                 }
             }) {
                 crate::obs::event(
@@ -320,96 +343,27 @@ impl HotkeyManager {
                 if event.state != ShortcutState::Pressed {
                     return;
                 }
-                let tm = app.state::<crate::task_manager::TaskManager>();
                 let workflow = app.state::<crate::voice_workflow::VoiceWorkflow>();
-                let (task_id, capture_status, capture_error_code, capture_error_message) =
-                    if workflow.has_active_task() {
-                        let active_task_id = workflow.active_task_id_best_effort();
-                        let reason = match active_task_id.as_deref() {
-                            Some(id) => {
-                                format!("E_TASK_ALREADY_ACTIVE: task is already active ({id})")
-                            }
-                            None => "E_TASK_ALREADY_ACTIVE: task is already active".to_string(),
-                        };
-                        crate::obs::event_err(
-                            &data_dir_buf,
-                            None,
-                            "Hotkeys",
-                            "HK.hotkey_rejected",
-                            "logic",
-                            "E_TASK_ALREADY_ACTIVE",
-                            &reason,
-                            Some(serde_json::json!({
-                                "kind": "toggle",
-                                "state": "Pressed",
-                                "shortcut": shortcut_value.clone(),
-                                "capture_required": capture_required,
-                                "active_task_id": active_task_id,
-                            })),
-                        );
-                        (
-                            None,
-                            Some("err".to_string()),
-                            Some("E_TASK_ALREADY_ACTIVE".to_string()),
-                            Some(reason),
-                        )
-                    } else {
-                        match workflow.open_hotkey_task(
-                            &tm,
-                            &data_dir_buf,
-                            &ctx_cfg,
-                            capture_required,
-                        ) {
-                            Ok(id) => (Some(id), Some("ok".to_string()), None, None),
-                            Err(e) => {
-                                let code = e.code.clone();
-                                let message = e.render();
-                                crate::obs::event_err(
-                                    &data_dir_buf,
-                                    None,
-                                    "Hotkeys",
-                                    "HK.task_open_failed",
-                                    "logic",
-                                    &code,
-                                    &message,
-                                    Some(serde_json::json!({
-                                        "kind": "toggle",
-                                        "state": "Pressed",
-                                        "shortcut": shortcut_value.clone(),
-                                        "capture_required": capture_required,
-                                    })),
-                                );
-                                (None, Some("err".to_string()), Some(code), Some(message))
-                            }
-                        }
-                    };
-                let payload = HotkeyRecordEvent {
-                    kind: "toggle".to_string(),
-                    state: "Pressed".to_string(),
-                    shortcut: shortcut_value.clone(),
-                    ts_ms: now_ms(),
-                    task_id,
-                    capture_status,
-                    capture_error_code,
-                    capture_error_message,
-                };
-                if let Err(err) = app.emit("tv_hotkey_record", payload.clone()) {
-                    crate::obs::event_err(
+                let task_id = if workflow.has_active_task() {
+                    None
+                } else {
+                    open_hotkey_task_or_report(
+                        &app,
                         &data_dir_buf,
-                        None,
-                        "Hotkeys",
-                        "HK.emit_failed",
-                        "unknown",
-                        "E_HK_EMIT_FAILED",
-                        &err.to_string(),
-                        Some(serde_json::json!({
-                            "event_name": "tv_hotkey_record",
-                            "kind": payload.kind,
-                            "state": payload.state,
-                            "shortcut": payload.shortcut,
-                            "capture_status": payload.capture_status,
-                            "capture_error_code": payload.capture_error_code,
-                        })),
+                        &ctx_cfg,
+                        capture_required,
+                        "toggle",
+                        &shortcut_value,
+                    )
+                };
+                if workflow.has_active_task() || task_id.is_some() {
+                    spawn_primary_workflow_command(
+                        app.clone(),
+                        data_dir_buf.clone(),
+                        task_id,
+                        "toggle",
+                        "Pressed",
+                        shortcut_value,
                     );
                 }
             }) {

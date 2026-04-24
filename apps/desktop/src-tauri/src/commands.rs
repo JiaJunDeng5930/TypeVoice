@@ -7,7 +7,7 @@ use crate::record_input_cache::RecordInputCacheState;
 use crate::rewrite::{RewriteResult, RewriteTextRequest};
 use crate::transcription::{TranscribeFixtureRequest, TranscriptionResult, TranscriptionService};
 use crate::ui_events::UiEventMailbox;
-use crate::voice_workflow::{VoiceWorkflow, WorkflowError};
+use crate::voice_workflow::{VoiceWorkflow, WorkflowCommandRequest, WorkflowError, WorkflowView};
 use crate::{data_dir, RuntimeState};
 
 #[cfg(test)]
@@ -18,6 +18,8 @@ pub fn command_names() -> &'static [&'static str] {
         "record_transcribe_cancel",
         "rewrite_text",
         "insert_text",
+        "workflow_snapshot",
+        "workflow_command",
         "transcribe_fixture",
     ]
 }
@@ -66,6 +68,36 @@ pub fn record_transcribe_start(
         )
         .map_err(render_workflow_error)?;
     Ok(RecordTranscribeStartResult { session_id })
+}
+
+#[tauri::command]
+pub fn workflow_snapshot(workflow: State<'_, VoiceWorkflow>) -> Result<WorkflowView, String> {
+    workflow.snapshot_view().map_err(render_workflow_error)
+}
+
+#[tauri::command]
+pub async fn workflow_command(
+    runtime: State<'_, RuntimeState>,
+    workflow: State<'_, VoiceWorkflow>,
+    audio: State<'_, RecordingRegistry>,
+    transcriber: State<'_, TranscriptionService>,
+    mailbox: State<'_, UiEventMailbox>,
+    record_input_cache: State<'_, RecordInputCacheState>,
+    task_state: State<'_, crate::task_manager::TaskManager>,
+    req: WorkflowCommandRequest,
+) -> Result<WorkflowView, String> {
+    workflow
+        .run_command(
+            &runtime,
+            &audio,
+            &transcriber,
+            &mailbox,
+            &record_input_cache,
+            &task_state,
+            req,
+        )
+        .await
+        .map_err(render_workflow_error)
 }
 
 #[tauri::command]
@@ -179,6 +211,8 @@ mod tests {
         assert!(names.contains(&"record_transcribe_cancel"));
         assert!(names.contains(&"rewrite_text"));
         assert!(names.contains(&"insert_text"));
+        assert!(names.contains(&"workflow_snapshot"));
+        assert!(names.contains(&"workflow_command"));
         assert!(names.contains(&"transcribe_fixture"));
         assert!(!names.contains(&"start_task"));
         assert!(!names.contains(&"export_text"));
