@@ -14,6 +14,7 @@ use crate::transcription::{
     TranscribeFixtureRequest, TranscriptionInput, TranscriptionMetrics, TranscriptionResult,
     TranscriptionService,
 };
+use crate::transcription_actor::{StreamingProviderKind, TranscriptionActor};
 use crate::ui_events::{UiEvent, UiEventMailbox, UiEventStatus};
 use crate::{data_dir, export, history, insertion, rewrite, RuntimeState};
 
@@ -150,6 +151,7 @@ impl WorkflowError {
 pub struct WorkflowSession {
     pub session_id: String,
     pub recording_session_id: String,
+    pub streaming_transcription: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -328,6 +330,7 @@ impl VoiceWorkflow {
         runtime: &RuntimeState,
         audio: &RecordingRegistry,
         transcriber: &TranscriptionService,
+        streaming_actor: &TranscriptionActor,
         mailbox: &UiEventMailbox,
         record_input_cache: &RecordInputCacheState,
         task_state: &TaskManager,
@@ -340,6 +343,7 @@ impl VoiceWorkflow {
                     runtime,
                     audio,
                     transcriber,
+                    streaming_actor,
                     mailbox,
                     record_input_cache,
                     normalize_optional_task_id(req.task_id)?,
@@ -349,7 +353,9 @@ impl VoiceWorkflow {
             WorkflowCommand::RewriteLast => self.run_rewrite_last(mailbox, task_state).await,
             WorkflowCommand::InsertLast => self.run_insert_last(mailbox).await,
             WorkflowCommand::CopyLast => self.run_copy_last().map(|()| None),
-            WorkflowCommand::Cancel => self.run_cancel(audio, transcriber, mailbox),
+            WorkflowCommand::Cancel => {
+                self.run_cancel(audio, transcriber, streaming_actor, mailbox)
+            }
         };
 
         match result {
@@ -390,6 +396,7 @@ impl VoiceWorkflow {
         runtime: &RuntimeState,
         audio: &RecordingRegistry,
         transcriber: &TranscriptionService,
+        streaming_actor: &TranscriptionActor,
         mailbox: &UiEventMailbox,
         record_input_cache: &RecordInputCacheState,
         task_id: Option<String>,
@@ -401,25 +408,39 @@ impl VoiceWorkflow {
             | WorkflowPhase::Rewritten
             | WorkflowPhase::Cancelled
             | WorkflowPhase::Failed => {
-                self.start_record_transcribe(runtime, audio, mailbox, record_input_cache, task_id)?;
+                self.start_record_transcribe(
+                    runtime,
+                    audio,
+                    streaming_actor,
+                    mailbox,
+                    record_input_cache,
+                    task_id,
+                )?;
                 Ok(None)
             }
             WorkflowPhase::Recording => {
-                let recording_session_id = snapshot
-                    .session
-                    .as_ref()
-                    .map(|session| session.recording_session_id.as_str())
-                    .filter(|v| !v.trim().is_empty())
+                let session = snapshot.session.as_ref().ok_or_else(|| {
+                    WorkflowError::new("E_WORKFLOW_SESSION_MISSING", "recording session missing")
+                })?;
+                let recording_session_id = (!session.recording_session_id.trim().is_empty())
+                    .then_some(session.recording_session_id.as_str())
                     .ok_or_else(|| {
                         WorkflowError::new(
                             "E_WORKFLOW_SESSION_MISSING",
                             "recording session missing",
                         )
                     })?;
-                self.prepare_stop_record_transcribe(recording_session_id)
-                    .map(Some)
+                if session.streaming_transcription {
+                    self.stop_streaming_record_transcribe(audio, mailbox, recording_session_id)?;
+                    Ok(None)
+                } else {
+                    self.prepare_stop_record_transcribe(recording_session_id)
+                        .map(Some)
+                }
             }
-            WorkflowPhase::Transcribing => self.run_cancel(audio, transcriber, mailbox),
+            WorkflowPhase::Transcribing => {
+                self.run_cancel(audio, transcriber, streaming_actor, mailbox)
+            }
             WorkflowPhase::Rewriting | WorkflowPhase::Inserting => Err(WorkflowError::new(
                 "E_WORKFLOW_BUSY",
                 "workflow already has an active session",
@@ -473,6 +494,7 @@ impl VoiceWorkflow {
         &self,
         audio: &RecordingRegistry,
         transcriber: &TranscriptionService,
+        streaming_actor: &TranscriptionActor,
         mailbox: &UiEventMailbox,
     ) -> WorkflowResult<Option<WorkflowTaskRequest>> {
         let snapshot = self.snapshot();
@@ -484,14 +506,22 @@ impl VoiceWorkflow {
             .session
             .as_ref()
             .map(|session| session.session_id.clone());
-        self.cancel_record_transcribe(audio, transcriber, mailbox, session_id, transcript_id)
-            .map(|()| None)
+        self.cancel_record_transcribe(
+            audio,
+            transcriber,
+            streaming_actor,
+            mailbox,
+            session_id,
+            transcript_id,
+        )
+        .map(|()| None)
     }
 
     pub fn start_record_transcribe(
         &self,
         runtime: &RuntimeState,
         audio: &RecordingRegistry,
+        streaming_actor: &TranscriptionActor,
         mailbox: &UiEventMailbox,
         record_input_cache: &RecordInputCacheState,
         task_id: Option<String>,
@@ -506,13 +536,44 @@ impl VoiceWorkflow {
             "recording",
         ));
 
-        match audio.start_recording(mailbox, record_input_cache, Some(transcript_id.clone())) {
+        let streaming_config = match streaming_actor.session_config_for_current_settings() {
+            Ok(v) => v,
+            Err(e) => {
+                let workflow_err =
+                    WorkflowError::new("E_STREAMING_TRANSCRIBE_CONFIG", e.to_string());
+                self.mark_failed(workflow_err.clone());
+                return Err(workflow_err);
+            }
+        };
+        let streaming_enabled = streaming_config.provider != StreamingProviderKind::Remote;
+        if streaming_enabled {
+            if let Err(e) = streaming_actor.start_session(&transcript_id, streaming_config.clone())
+            {
+                let workflow_err =
+                    WorkflowError::new("E_STREAMING_TRANSCRIBE_START", e.to_string());
+                self.mark_failed(workflow_err.clone());
+                return Err(workflow_err);
+            }
+        }
+
+        match audio.start_recording(
+            mailbox,
+            streaming_enabled.then_some(streaming_actor),
+            streaming_enabled.then_some(streaming_config),
+            record_input_cache,
+            Some(transcript_id.clone()),
+        ) {
             Ok(recording_session_id) => {
-                self.attach_recording_session(&transcript_id, &recording_session_id)?;
+                self.attach_recording_session(
+                    &transcript_id,
+                    &recording_session_id,
+                    streaming_enabled,
+                )?;
                 self.emit_state(mailbox);
                 Ok(recording_session_id)
             }
             Err(err) => {
+                let _ = streaming_actor.cancel_session(&transcript_id);
                 let workflow_err = WorkflowError::new(&err.code, err.message);
                 self.mark_failed(workflow_err.clone());
                 mailbox.send(UiEvent::stage_with_elapsed(
@@ -537,6 +598,42 @@ impl VoiceWorkflow {
             task_id: session.session_id,
             recording_session_id: recording_session_id.to_string(),
         })
+    }
+
+    pub fn stop_streaming_record_transcribe(
+        &self,
+        audio: &RecordingRegistry,
+        mailbox: &UiEventMailbox,
+        recording_session_id: &str,
+    ) -> WorkflowResult<()> {
+        let session = self.begin_transcribing(recording_session_id)?;
+        self.emit_state(mailbox);
+        let asset = match audio.stop_recording(recording_session_id) {
+            Ok(asset) => asset,
+            Err(err) => {
+                let workflow_err = WorkflowError::new(&err.code, err.message);
+                self.mark_failed(workflow_err.clone());
+                mailbox.send(UiEvent::stage_with_elapsed(
+                    session.session_id,
+                    "Record",
+                    UiEventStatus::Failed,
+                    workflow_err.message.clone(),
+                    None,
+                    Some(workflow_err.code.clone()),
+                ));
+                return Err(workflow_err);
+            }
+        };
+        let consumed = audio.take_asset(&asset.asset_id).unwrap_or(asset);
+        mailbox.send(UiEvent::stage_with_elapsed(
+            &session.session_id,
+            "Record",
+            UiEventStatus::Completed,
+            "ok",
+            Some(consumed.record_elapsed_ms),
+            None,
+        ));
+        Ok(())
     }
 
     pub async fn stop_record_transcribe(
@@ -641,6 +738,7 @@ impl VoiceWorkflow {
         &self,
         audio: &RecordingRegistry,
         transcriber: &TranscriptionService,
+        streaming_actor: &TranscriptionActor,
         mailbox: &UiEventMailbox,
         session_id: Option<String>,
         transcript_id: Option<String>,
@@ -655,6 +753,7 @@ impl VoiceWorkflow {
                     .abort_recording(session_id)
                     .map_err(|err| WorkflowError::new(&err.code, err.message))?;
                 if let Some(session) = snapshot.session {
+                    let _ = streaming_actor.cancel_session(&session.session_id);
                     mailbox.send(UiEvent::stage(
                         session.session_id,
                         "Record",
@@ -679,6 +778,9 @@ impl VoiceWorkflow {
                 transcriber
                     .cancel(expected)
                     .map_err(WorkflowError::from_port)?;
+                if let Some(session) = snapshot.session.as_ref() {
+                    let _ = streaming_actor.cancel_session(&session.session_id);
+                }
                 self.mark_cancelled();
                 self.emit_state(mailbox);
                 if let Some(session) = snapshot.session {
@@ -994,6 +1096,7 @@ impl VoiceWorkflow {
         state.session = Some(WorkflowSession {
             session_id: item.task_id.clone(),
             recording_session_id: String::new(),
+            streaming_transcription: false,
         });
         let created_at_ms = item.created_at_ms;
         state.transcription = Some(history_item_to_transcription_result(item));
@@ -1108,6 +1211,7 @@ impl VoiceWorkflow {
         let session = WorkflowSession {
             session_id: session_id.into(),
             recording_session_id: recording_session_id.into(),
+            streaming_transcription: true,
         };
         state.phase = WorkflowPhase::Recording;
         state.session = Some(session.clone());
@@ -1137,6 +1241,7 @@ impl VoiceWorkflow {
         state.session = Some(WorkflowSession {
             session_id: transcript_id.to_string(),
             recording_session_id: String::new(),
+            streaming_transcription: true,
         });
         state.transcription = None;
         state.rewrite = None;
@@ -1165,6 +1270,7 @@ impl VoiceWorkflow {
         state.session = Some(WorkflowSession {
             session_id: transcript_id.to_string(),
             recording_session_id: String::new(),
+            streaming_transcription: true,
         });
         state.transcription = None;
         state.rewrite = None;
@@ -1178,6 +1284,7 @@ impl VoiceWorkflow {
         &self,
         transcript_id: &str,
         recording_session_id: &str,
+        streaming_transcription: bool,
     ) -> WorkflowResult<()> {
         let mut state = self.state.lock().unwrap();
         if state.phase != WorkflowPhase::Recording {
@@ -1197,6 +1304,7 @@ impl VoiceWorkflow {
             ));
         }
         session.recording_session_id = recording_session_id.to_string();
+        session.streaming_transcription = streaming_transcription;
         Ok(())
     }
 
@@ -1284,6 +1392,7 @@ impl VoiceWorkflow {
         state.session = Some(WorkflowSession {
             session_id: transcript_id,
             recording_session_id: String::new(),
+            streaming_transcription: false,
         });
         state.transcription = Some(result);
         state.rewrite = None;
@@ -1322,6 +1431,11 @@ impl VoiceWorkflow {
                 .as_ref()
                 .map(|session| session.recording_session_id.clone())
                 .unwrap_or_default(),
+            streaming_transcription: state
+                .session
+                .as_ref()
+                .map(|session| session.streaming_transcription)
+                .unwrap_or(false),
         });
         state.insert_previous_phase = None;
         state.last_error = None;

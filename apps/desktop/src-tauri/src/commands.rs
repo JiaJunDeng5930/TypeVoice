@@ -6,6 +6,7 @@ use crate::insertion::{InsertResult, InsertTextRequest};
 use crate::record_input_cache::RecordInputCacheState;
 use crate::rewrite::{RewriteResult, RewriteTextRequest};
 use crate::transcription::{TranscribeFixtureRequest, TranscriptionResult, TranscriptionService};
+use crate::transcription_actor::TranscriptionActor;
 use crate::ui_events::UiEventMailbox;
 use crate::voice_workflow::{
     VoiceWorkflow, WorkflowApplyEventRequest, WorkflowCommandRequest, WorkflowError, WorkflowView,
@@ -57,6 +58,7 @@ pub fn record_transcribe_start(
     runtime: State<'_, RuntimeState>,
     workflow: State<'_, VoiceWorkflow>,
     audio: State<'_, RecordingRegistry>,
+    streaming_actor: State<'_, TranscriptionActor>,
     mailbox: State<'_, UiEventMailbox>,
     record_input_cache: State<'_, RecordInputCacheState>,
     req: RecordTranscribeStartRequest,
@@ -65,6 +67,7 @@ pub fn record_transcribe_start(
         .start_record_transcribe(
             &runtime,
             &audio,
+            &streaming_actor,
             &mailbox,
             &record_input_cache,
             normalize_task_id(req.task_id)?,
@@ -85,6 +88,7 @@ pub async fn workflow_command(
     workflow: State<'_, VoiceWorkflow>,
     audio: State<'_, RecordingRegistry>,
     transcriber: State<'_, TranscriptionService>,
+    streaming_actor: State<'_, TranscriptionActor>,
     mailbox: State<'_, UiEventMailbox>,
     record_input_cache: State<'_, RecordInputCacheState>,
     task_state: State<'_, crate::task_manager::TaskManager>,
@@ -95,6 +99,7 @@ pub async fn workflow_command(
             &runtime,
             &audio,
             &transcriber,
+            &streaming_actor,
             &mailbox,
             &record_input_cache,
             &task_state,
@@ -139,6 +144,7 @@ pub fn record_transcribe_cancel(
     workflow: State<'_, VoiceWorkflow>,
     audio: State<'_, RecordingRegistry>,
     transcriber: State<'_, TranscriptionService>,
+    streaming_actor: State<'_, TranscriptionActor>,
     mailbox: State<'_, UiEventMailbox>,
     req: RecordTranscribeCancelRequest,
 ) -> Result<(), String> {
@@ -146,6 +152,7 @@ pub fn record_transcribe_cancel(
         .cancel_record_transcribe(
             &audio,
             &transcriber,
+            &streaming_actor,
             &mailbox,
             req.session_id,
             req.transcript_id,

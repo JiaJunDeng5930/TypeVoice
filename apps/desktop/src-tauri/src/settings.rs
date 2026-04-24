@@ -319,6 +319,8 @@ pub fn resolve_asr_provider(s: &Settings) -> String {
         .to_ascii_lowercase();
     if value == "remote" {
         "remote".to_string()
+    } else if value == "doubao" {
+        "doubao".to_string()
     } else {
         "local".to_string()
     }

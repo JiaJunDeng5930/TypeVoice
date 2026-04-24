@@ -188,6 +188,32 @@ impl UiEvent {
         }
     }
 
+    pub fn partial(
+        task_id: impl Into<String>,
+        text_delta: impl Into<String>,
+        text: impl Into<String>,
+        sequence: u64,
+    ) -> Self {
+        Self {
+            kind: "transcription.partial".to_string(),
+            effect: "displayOnly".to_string(),
+            event_id: new_event_id(),
+            sequence: next_sequence(),
+            task_id: Some(task_id.into()),
+            stage: Some("Transcribe".to_string()),
+            status: Some("recording".to_string()),
+            message: "partial transcription".to_string(),
+            elapsed_ms: None,
+            error_code: None,
+            payload: Some(serde_json::json!({
+                "textDelta": text_delta.into(),
+                "text": text.into(),
+                "sequence": sequence,
+            })),
+            ts_ms: now_ms(),
+        }
+    }
+
     pub fn state_failed(
         task_id: impl Into<String>,
         stage: impl Into<String>,

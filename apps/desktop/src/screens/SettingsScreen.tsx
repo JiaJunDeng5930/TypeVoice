@@ -33,6 +33,7 @@ const REASONING: PixelSelectOption[] = [
 
 const ASR_PROVIDERS: PixelSelectOption[] = [
   { value: "local", label: "local (on-device)" },
+  { value: "doubao", label: "doubao streaming" },
   { value: "remote", label: "remote (cloud)" },
 ];
 
@@ -103,6 +104,8 @@ export function SettingsScreen({
   const [remoteAsrModel, setRemoteAsrModel] = useState("");
   const [remoteAsrConcurrency, setRemoteAsrConcurrency] = useState("4");
   const [remoteAsrKeyDraft, setRemoteAsrKeyDraft] = useState("");
+  const [doubaoAppKeyDraft, setDoubaoAppKeyDraft] = useState("");
+  const [doubaoAccessKeyDraft, setDoubaoAccessKeyDraft] = useState("");
   const [asrPreprocessTrimEnabled, setAsrPreprocessTrimEnabled] = useState(false);
   const [asrPreprocessThresholdDb, setAsrPreprocessThresholdDb] = useState("-50");
   const [asrPreprocessStartMs, setAsrPreprocessStartMs] = useState("300");
@@ -147,7 +150,13 @@ export function SettingsScreen({
   useEffect(() => {
     if (!settings) return;
     setAsrModel(settings.asr_model ?? "");
-    setAsrProvider(settings.asr_provider === "remote" ? "remote" : "local");
+    setAsrProvider(
+      settings.asr_provider === "remote"
+        ? "remote"
+        : settings.asr_provider === "doubao"
+          ? "doubao"
+          : "local",
+    );
     setRemoteAsrUrl(settings.remote_asr_url?.trim() || "https://api.server/transcribe");
     setRemoteAsrModel(settings.remote_asr_model ?? "");
     {
@@ -320,7 +329,7 @@ export function SettingsScreen({
   }
 
   async function saveAsr() {
-    const provider = asrProvider === "remote" ? "remote" : "local";
+    const provider = asrProvider === "remote" ? "remote" : asrProvider === "doubao" ? "doubao" : "local";
     const concurrencyNum = Number(remoteAsrConcurrency);
     if (provider === "remote" && !remoteAsrUrl.trim()) {
       pushToast("REMOTE ASR URL REQUIRED", "danger");
@@ -611,6 +620,41 @@ export function SettingsScreen({
     }
   }
 
+  async function setDoubaoAsrCredentials() {
+    const appKey = doubaoAppKeyDraft.trim();
+    const accessKey = doubaoAccessKeyDraft.trim();
+    if (!appKey || !accessKey) return;
+    try {
+      await gateway.invoke("set_doubao_asr_credentials", { appKey, accessKey });
+      setDoubaoAppKeyDraft("");
+      setDoubaoAccessKeyDraft("");
+      pushToast("DOUBAO KEY SAVED", "ok");
+    } catch {
+      pushToast("DOUBAO KEY SAVE FAILED", "danger");
+    }
+  }
+
+  async function clearDoubaoAsrCredentials() {
+    try {
+      await gateway.invoke("clear_doubao_asr_credentials");
+      pushToast("DOUBAO KEY CLEARED", "ok");
+    } catch {
+      pushToast("DOUBAO KEY CLEAR FAILED", "danger");
+    }
+  }
+
+  async function checkDoubaoAsrCredentials() {
+    try {
+      const st = (await gateway.invoke("doubao_asr_credentials_status")) as ApiKeyStatus;
+      pushToast(
+        st.configured ? "DOUBAO KEY OK" : "DOUBAO KEY MISSING",
+        st.configured ? "ok" : "danger",
+      );
+    } catch {
+      pushToast("DOUBAO KEY CHECK FAILED", "danger");
+    }
+  }
+
   async function clearHistory() {
     try {
       await gateway.invoke("history_clear");
@@ -692,6 +736,9 @@ export function SettingsScreen({
   ]);
 
   const asrStatusText = useMemo(() => {
+    if (asrProvider === "doubao") {
+      return "DOUBAO STREAMING  wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async";
+    }
     if (asrProvider === "remote") {
       return `REMOTE ${remoteAsrUrl.trim() || "https://api.server/transcribe"}`;
     }
@@ -736,6 +783,35 @@ export function SettingsScreen({
               onChange={setAsrModel}
               placeholder="asr_model (local dir or HF repo id)"
             />
+          ) : asrProvider === "doubao" ? (
+            <>
+              <div className="sectionTitle" style={{ marginTop: 8 }}>
+                DOUBAO ASR KEY
+              </div>
+              <PixelInput
+                value={doubaoAppKeyDraft}
+                onChange={setDoubaoAppKeyDraft}
+                placeholder="App Key (or env TYPEVOICE_DOUBAO_ASR_APP_KEY)"
+              />
+              <PixelInput
+                value={doubaoAccessKeyDraft}
+                onChange={setDoubaoAccessKeyDraft}
+                placeholder="Access Key (or env TYPEVOICE_DOUBAO_ASR_ACCESS_KEY)"
+              />
+              <div className="row" style={{ justifyContent: "flex-end" }}>
+                <PixelButton
+                  onClick={setDoubaoAsrCredentials}
+                  tone="accent"
+                  disabled={!doubaoAppKeyDraft.trim() || !doubaoAccessKeyDraft.trim()}
+                >
+                  SAVE KEY
+                </PixelButton>
+                <PixelButton onClick={clearDoubaoAsrCredentials} tone="danger">
+                  CLEAR KEY
+                </PixelButton>
+                <PixelButton onClick={checkDoubaoAsrCredentials}>CHECK KEY</PixelButton>
+              </div>
+            </>
           ) : (
             <>
               <PixelInput

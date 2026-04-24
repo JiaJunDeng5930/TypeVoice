@@ -51,6 +51,7 @@ export function MainScreen({
   const [workflow, setWorkflow] = useState<WorkflowView>(EMPTY_WORKFLOW_VIEW);
   const [hover, setHover] = useState(false);
   const [lastHover, setLastHover] = useState(false);
+  const [liveTranscript, setLiveTranscript] = useState("");
 
   useEffect(() => {
     (async () => {
@@ -94,9 +95,18 @@ export function MainScreen({
     (async () => {
       const unlistenUiEvent = await client.listenUiEvent(async (ev) => {
         if (!ev || ev.kind === "audio.level") return;
+        if (ev.kind === "transcription.partial") {
+          const partial = transcriptionPartialPayload(ev.payload);
+          if (partial?.text) setLiveTranscript(partial.text);
+          return;
+        }
         if (ev.kind === "workflow.state") {
           const next = workflowViewFromPayload(ev.payload);
-          if (next) setWorkflow(next);
+          if (next) {
+            setWorkflow(next);
+            const phase = String(next.phase || "").toLowerCase();
+            if (phase === "recording") setLiveTranscript("");
+          }
           return;
         }
         if (ev.effect === "stateChanging") {
@@ -113,6 +123,7 @@ export function MainScreen({
               payload: ev.payload,
             });
             setWorkflow(next);
+            if (ev.kind === "transcription.completed") setLiveTranscript("");
             handleStateChangingEvent(ev, pushToast, onHistoryChanged);
           } catch (err) {
             const diag = buildDiagnostic(err, "WORKFLOW EVENT FAILED");
@@ -135,6 +146,7 @@ export function MainScreen({
           return;
         }
         if (ev.kind === "transcription.completed") {
+          setLiveTranscript("");
           pushToast("TRANSCRIBED", "ok");
           onHistoryChanged();
           return;
@@ -192,7 +204,7 @@ export function MainScreen({
 
   const phase = String(workflow.phase || "idle").toLowerCase();
   const hint = workflow.primaryLabel || "START";
-  const lastText = workflow.lastText || "";
+  const lastText = liveTranscript || workflow.lastText || "";
   const lastMeta = workflow.lastCreatedAtMs
     ? new Date(workflow.lastCreatedAtMs).toLocaleString()
     : "NO LAST RESULT";
@@ -343,6 +355,12 @@ function insertionPayload(payload: unknown): {
     autoPasteOk: raw.autoPasteOk === true,
     errorCode: optionalString(raw.errorCode),
   };
+}
+
+function transcriptionPartialPayload(payload: unknown): { text: string } | null {
+  if (!payload || typeof payload !== "object") return null;
+  const raw = payload as Record<string, unknown>;
+  return { text: String(raw.text || "") };
 }
 
 function optionalString(value: unknown): string | null {

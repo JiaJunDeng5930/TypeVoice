@@ -3,12 +3,16 @@ use std::{
     io::Read,
     path::PathBuf,
     process::{Child, ChildStderr, ChildStdout, Stdio},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
 
 use crate::record_input_cache::RecordInputCacheState;
 use crate::subprocess::CommandNoConsoleExt;
+use crate::transcription_actor::{StreamingSessionConfig, TranscriptionActor};
 use crate::ui_events::{UiEvent, UiEventMailbox};
 use crate::{data_dir, obs, pipeline};
 
@@ -38,6 +42,7 @@ struct ActiveRecording {
     child: Option<Child>,
     started_at: Instant,
     meter_join: Option<std::thread::JoinHandle<()>>,
+    finish_on_eof: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone)]
@@ -97,6 +102,8 @@ impl RecordingRegistry {
     pub fn start_recording(
         &self,
         mailbox: &UiEventMailbox,
+        transcriber: Option<&TranscriptionActor>,
+        streaming_config: Option<StreamingSessionConfig>,
         record_input_cache: &RecordInputCacheState,
         task_id: Option<String>,
     ) -> Result<String, CaptureError> {
@@ -210,7 +217,16 @@ impl RecordingRegistry {
                 return Err(err);
             }
         };
-        let meter_join = spawn_meter_thread(mailbox.clone(), session_id.clone(), stdout);
+        let finish_on_eof = Arc::new(AtomicBool::new(false));
+        let meter_join = spawn_meter_thread(
+            mailbox.clone(),
+            transcriber.cloned(),
+            task_id.clone(),
+            session_id.clone(),
+            stdout,
+            streaming_config.map(|config| config.chunk_bytes),
+            finish_on_eof.clone(),
+        );
 
         std::thread::sleep(Duration::from_millis(120));
         match child.try_wait() {
@@ -255,6 +271,7 @@ impl RecordingRegistry {
                 child: Some(child),
                 started_at: Instant::now(),
                 meter_join: Some(meter_join),
+                finish_on_eof,
             });
         }
         span.ok(Some(serde_json::json!({
@@ -307,6 +324,7 @@ impl RecordingRegistry {
             .child
             .as_mut()
             .ok_or_else(|| CaptureError::new("E_RECORD_STOP_FAILED", "recorder process missing"))?;
+        active.finish_on_eof.store(true, Ordering::SeqCst);
         if let Some(stdin) = child.stdin.as_mut() {
             let _ = std::io::Write::write_all(stdin, b"q\n");
             let _ = std::io::Write::flush(stdin);
@@ -460,6 +478,7 @@ impl RecordingRegistry {
             child: None,
             started_at: Instant::now(),
             meter_join: None,
+            finish_on_eof: Arc::new(AtomicBool::new(false)),
         });
         Ok(())
     }
@@ -488,16 +507,23 @@ impl RecordingRegistry {
 
 fn spawn_meter_thread(
     mailbox: UiEventMailbox,
+    transcriber: Option<TranscriptionActor>,
+    task_id: Option<String>,
     recording_id: String,
     mut stdout: ChildStdout,
+    chunk_bytes: Option<usize>,
+    finish_on_eof: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         const WINDOW_SAMPLES: usize = 800;
         let mut read_buf = [0_u8; 4096];
+        let mut chunk = Vec::with_capacity(chunk_bytes.unwrap_or(0).max(1));
+        let mut sequence = 1_u64;
         let mut carry_low_byte: Option<u8> = None;
         let mut sum_sq = 0.0_f64;
         let mut max_abs = 0_i32;
         let mut sample_count = 0_usize;
+        let task_id = task_id.unwrap_or_else(|| recording_id.clone());
 
         loop {
             let n = match stdout.read(&mut read_buf) {
@@ -505,6 +531,15 @@ fn spawn_meter_thread(
                 Ok(v) => v,
                 Err(_) => break,
             };
+            if let (Some(transcriber), Some(chunk_bytes)) = (transcriber.as_ref(), chunk_bytes) {
+                chunk.extend_from_slice(&read_buf[..n]);
+                while chunk.len() >= chunk_bytes && chunk_bytes > 0 {
+                    let rest = chunk.split_off(chunk_bytes);
+                    let pcm = std::mem::replace(&mut chunk, rest);
+                    let _ = transcriber.send_audio_chunk(&task_id, sequence, pcm, false);
+                    sequence += 1;
+                }
+            }
 
             let mut idx = 0_usize;
             if let Some(low) = carry_low_byte.take() {
@@ -542,6 +577,19 @@ fn spawn_meter_thread(
             }
         }
 
+        if finish_on_eof.load(Ordering::SeqCst) {
+            let Some(transcriber) = transcriber.as_ref() else {
+                mailbox.send(UiEvent::audio_level(recording_id, 0.0, 0.0));
+                return;
+            };
+            if !chunk.is_empty() {
+                let pcm = std::mem::take(&mut chunk);
+                let _ = transcriber.send_audio_chunk(&task_id, sequence, pcm, true);
+            } else {
+                let _ = transcriber.send_audio_chunk(&task_id, sequence, Vec::new(), true);
+            }
+            let _ = transcriber.finish_session(&task_id);
+        }
         mailbox.send(UiEvent::audio_level(recording_id, 0.0, 0.0));
     })
 }

@@ -8,6 +8,7 @@ mod context_capture;
 mod context_capture_windows;
 mod context_pack;
 mod data_dir;
+mod doubao_asr;
 mod export;
 mod history;
 mod hotkeys;
@@ -29,6 +30,7 @@ mod task_manager;
 mod templates;
 mod toolchain;
 mod transcription;
+mod transcription_actor;
 mod ui_events;
 mod voice_tasks;
 mod voice_workflow;
@@ -523,6 +525,57 @@ fn remote_asr_api_key_status() -> Result<ApiKeyStatus, String> {
     Ok(st)
 }
 
+#[tauri::command]
+fn set_doubao_asr_credentials(app_key: &str, access_key: &str) -> Result<(), String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(
+        &dir,
+        None,
+        "CMD.set_doubao_asr_credentials",
+        Some(serde_json::json!({
+            "app_key_chars": app_key.len(),
+            "access_key_chars": access_key.len(),
+        })),
+    );
+    match doubao_asr::set_credentials(app_key, access_key) {
+        Ok(()) => {
+            span.ok(None);
+            Ok(())
+        }
+        Err(e) => {
+            span.err_anyhow("auth", "E_CMD_SET_DOUBAO_ASR_CREDENTIALS", &e, None);
+            Err(e.to_string())
+        }
+    }
+}
+
+#[tauri::command]
+fn clear_doubao_asr_credentials() -> Result<(), String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(&dir, None, "CMD.clear_doubao_asr_credentials", None);
+    match doubao_asr::clear_credentials() {
+        Ok(()) => {
+            span.ok(None);
+            Ok(())
+        }
+        Err(e) => {
+            span.err_anyhow("auth", "E_CMD_CLEAR_DOUBAO_ASR_CREDENTIALS", &e, None);
+            Err(e.to_string())
+        }
+    }
+}
+
+#[tauri::command]
+fn doubao_asr_credentials_status() -> Result<ApiKeyStatus, String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(&dir, None, "CMD.doubao_asr_credentials_status", None);
+    let st = doubao_asr::credentials_status();
+    span.ok(Some(
+        serde_json::json!({"configured": st.configured, "source": st.source, "reason": st.reason}),
+    ));
+    Ok(st)
+}
+
 fn history_db_path() -> Result<std::path::PathBuf, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).ok();
@@ -903,7 +956,9 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             obs::startup::mark_best_effort("setup_enter");
-            app.manage(ui_events::UiEventMailbox::new(app.handle().clone()));
+            let mailbox = ui_events::UiEventMailbox::new(app.handle().clone());
+            app.manage(transcription_actor::TranscriptionActor::new(mailbox.clone()));
+            app.manage(mailbox);
 
             // Small always-on-top overlay window for hotkey-driven UX.
             // Keep it hidden by default; the frontend will invoke overlay_set_state to show/hide.
@@ -1023,6 +1078,9 @@ pub fn run() {
             set_remote_asr_api_key,
             clear_remote_asr_api_key,
             remote_asr_api_key_status,
+            set_doubao_asr_credentials,
+            clear_doubao_asr_credentials,
+            doubao_asr_credentials_status,
             history_append,
             history_list,
             history_clear,

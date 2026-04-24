@@ -52,6 +52,7 @@ fn spawn_primary_workflow_command<R: Runtime>(
         let workflow = app.state::<crate::voice_workflow::VoiceWorkflow>();
         let audio = app.state::<crate::audio_capture::RecordingRegistry>();
         let transcriber = app.state::<crate::transcription::TranscriptionService>();
+        let streaming_actor = app.state::<crate::transcription_actor::TranscriptionActor>();
         let mailbox = app.state::<crate::ui_events::UiEventMailbox>();
         let record_input_cache = app.state::<crate::record_input_cache::RecordInputCacheState>();
         let task_state = app.state::<crate::task_manager::TaskManager>();
@@ -60,6 +61,7 @@ fn spawn_primary_workflow_command<R: Runtime>(
                 &runtime,
                 &audio,
                 &transcriber,
+                &streaming_actor,
                 &mailbox,
                 &record_input_cache,
                 &task_state,
