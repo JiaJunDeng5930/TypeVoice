@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { defaultTauriGateway } from "./infra/runtimePorts";
+import type { UiEvent } from "./types";
 
 type OverlayState = {
   visible: boolean;
@@ -99,9 +100,11 @@ export default function OverlayApp() {
   useEffect(() => {
     let unlisten: null | (() => void) = null;
     (async () => {
-      unlisten = await defaultTauriGateway.listen<OverlayAudioLevelEvent>(
-        "tv_overlay_audio_level",
-        (next) => {
+      unlisten = await defaultTauriGateway.listen<UiEvent>(
+        "ui_event",
+        (event) => {
+          if (!event || event.kind !== "audio.level") return;
+          const next = audioLevelFromUiEvent(event);
           if (!next) return;
           const current = stateRef.current;
           if (!current.visible || !isRecordingStatus(current.status)) return;
@@ -148,4 +151,15 @@ export default function OverlayApp() {
       {st.detail ? <div className="overlayDetail">{st.detail}</div> : null}
     </div>
   );
+}
+
+function audioLevelFromUiEvent(event: UiEvent): OverlayAudioLevelEvent | null {
+  if (!event.payload || typeof event.payload !== "object") return null;
+  const payload = event.payload as Record<string, unknown>;
+  return {
+    recordingId: String(payload.recordingId || ""),
+    rms: typeof payload.rms === "number" ? payload.rms : 0,
+    peak: typeof payload.peak === "number" ? payload.peak : 0,
+    tsMs: event.tsMs,
+  };
 }

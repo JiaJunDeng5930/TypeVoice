@@ -9,6 +9,52 @@ export type TaskEvent = {
   step_id?: string | null;
 };
 
+export type UiEvent = {
+  kind: string;
+  taskId?: string | null;
+  stage?: string | null;
+  status?: "started" | "completed" | "failed" | "cancelled" | "recording" | null;
+  message: string;
+  elapsedMs?: number | null;
+  errorCode?: string | null;
+  payload?: unknown;
+  tsMs: number;
+};
+
+export type RecordTranscribeStartResult = {
+  sessionId: string;
+};
+
+export type TranscriptionMetrics = {
+  rtf: number;
+  deviceUsed: string;
+  preprocessMs: number;
+  asrMs: number;
+};
+
+export type TranscriptionResult = {
+  transcriptId: string;
+  asrText: string;
+  finalText: string;
+  metrics: TranscriptionMetrics;
+  historyId: string;
+};
+
+export type RewriteResult = {
+  transcriptId: string;
+  finalText: string;
+  rewriteMs: number;
+  templateId?: string | null;
+};
+
+export type InsertResult = {
+  copied: boolean;
+  autoPasteAttempted: boolean;
+  autoPasteOk: boolean;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+};
+
 export type TaskDone = {
   task_id: string;
   asr_text: string;

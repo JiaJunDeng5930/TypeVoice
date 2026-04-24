@@ -184,6 +184,56 @@ pub fn list(db_path: &Path, limit: i64, before_ms: Option<i64>) -> Result<Vec<Hi
     }
 }
 
+pub fn update_final_text(
+    db_path: &Path,
+    task_id: &str,
+    final_text: &str,
+    template_id: Option<&str>,
+) -> Result<()> {
+    let data_dir = db_path.parent().unwrap_or_else(|| Path::new("."));
+    let span = Span::start(
+        data_dir,
+        Some(task_id),
+        "History",
+        "HISTORY.update_final_text",
+        Some(serde_json::json!({
+            "template_id": template_id,
+            "final_chars": final_text.len(),
+        })),
+    );
+    let c = match conn(db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            span.err_anyhow("db", "E_HISTORY_CONN", &e, None);
+            return Err(e);
+        }
+    };
+    let r = c.execute(
+        r#"
+        UPDATE history
+        SET final_text = ?2, template_id = ?3
+        WHERE task_id = ?1
+        "#,
+        params![task_id, final_text, template_id],
+    );
+    match r {
+        Ok(0) => {
+            let ae = anyhow::anyhow!("E_HISTORY_NOT_FOUND: task_id not found");
+            span.err_anyhow("db", "E_HISTORY_NOT_FOUND", &ae, None);
+            Err(ae)
+        }
+        Ok(_) => {
+            span.ok(None);
+            Ok(())
+        }
+        Err(e) => {
+            let ae = anyhow::anyhow!(e).context("update history final_text failed");
+            span.err_anyhow("db", "E_HISTORY_UPDATE", &ae, None);
+            Err(ae)
+        }
+    }
+}
+
 pub fn clear(db_path: &Path) -> Result<()> {
     let data_dir = db_path.parent().unwrap_or_else(|| Path::new("."));
     let span = Span::start(data_dir, None, "History", "HISTORY.clear", None);
@@ -204,5 +254,37 @@ pub fn clear(db_path: &Path) -> Result<()> {
             span.err_anyhow("db", "E_HISTORY_CLEAR", &ae, None);
             Err(ae)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_final_text_changes_existing_history_row() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let db = tmp.path().join("history.sqlite3");
+        append(
+            &db,
+            &HistoryItem {
+                task_id: "task-1".to_string(),
+                created_at_ms: 1,
+                asr_text: "raw".to_string(),
+                final_text: "raw".to_string(),
+                template_id: None,
+                rtf: 0.4,
+                device_used: "cuda".to_string(),
+                preprocess_ms: 10,
+                asr_ms: 20,
+            },
+        )
+        .expect("append");
+
+        update_final_text(&db, "task-1", "rewritten", Some("template-1")).expect("update");
+
+        let rows = list(&db, 10, None).expect("list");
+        assert_eq!(rows[0].final_text, "rewritten");
+        assert_eq!(rows[0].template_id.as_deref(), Some("template-1"));
     }
 }

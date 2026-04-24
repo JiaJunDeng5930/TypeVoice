@@ -39,7 +39,7 @@
 - 取消烟雾测试（在转录阶段触发一次取消）
 - 断言：`cancel_latency_ms <= 300`
 - 断言：转录计算实际停止（不继续占用 GPU）
-- 导出契约测试（`export_text`）
+- 插入契约测试（`insert_text`）
 - 断言：复制成功时 `copied=true`
 - 断言：`auto_paste_enabled=false` 时 `auto_paste_attempted=false`
 - 断言：自动粘贴失败返回结构化 `error_code`（不允许静默失败）
@@ -57,7 +57,7 @@
 
 - 全部单元测试
 - 可调试性契约检查（完整）
-  - 断言：失败 `task_event` 含 `task_id`/`stage`/`status`/`error_code`/`message`。
+- 断言：失败 `ui_event` 含 `taskId`/`stage`/`status`/`errorCode`/`message`。
   - 断言：失败 `trace` 含 `error.code` 与 `error.message`，可按 `task_id` 聚合。
   - 断言：`metrics.jsonl` 结构化记录可逐行解析，且 `type` 字段稳定可用于聚合。
 - ASR 性能套件（`fixtures/zh_10s.ogg`、`fixtures/zh_60s.ogg`、`fixtures/zh_5m.ogg`）

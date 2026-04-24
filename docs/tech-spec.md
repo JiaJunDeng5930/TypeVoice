@@ -1,258 +1,115 @@
-# TypeVoice 技术规格（冻结中）
+# TypeVoice 技术规格
 
-状态：冻结中（“待确认/待验证”章节外，其余为实现约束）
+状态：冻结中。
 
-范围：Windows 桌面端 MVP 的系统设计与工程约束。
+范围：Windows 桌面端的系统设计与工程约束。
 
-## 1. 总体架构（MVP）
+## 1. 总体架构
 
-实现目标：将“录音、预处理、ASR、改写、历史记录、复制、自动粘贴”组成可取消、可观察、可扩展的本地 Pipeline。
+系统由前端显式编排，后端提供细粒度命令。后端业务模块按职责拆分：
 
-推荐模块划分（逻辑划分，不代表最终目录结构必须一致）：
+- `commands`：Tauri 命令入口。
+- `audio_capture`：录音会话、音频产物、系统采集适配。
+- `transcription`：统一语音转录模块，选择本地或 API provider。
+- `rewrite`：LLM 改写。
+- `insertion`：复制和自动写入。
+- `ui_events`：前端显示事件 actor。
+- `settings`、`templates`、`history`、`obs`：配置、模板、历史、日志指标。
 
-- App Shell（Tauri + Web UI）
-- UI 层：录音控制、状态展示、模板编辑、历史记录、设置页
-- 后端桥接层：向 UI 暴露命令与事件（开始/结束/取消、进度、结果）
-- Core Pipeline（Rust）
-- 任务队列与状态机
-- FFmpeg 调用与产物管理
-- ASR Provider（本地，PyTorch CUDA）
-- LLM Provider（在线 API）
-- Storage（本地）
-- 文本历史记录（SQLite 或等价持久化）
-- 模板与设置（本地配置文件 + 安全存储）
+## 2. 命令规范
 
-## 2. Pipeline 规范
+前端只通过以下命令控制核心语音流程：
 
-### 2.1 阶段定义
+- `record_transcribe_start(req) -> { sessionId }`
+- `record_transcribe_stop(req) -> TranscriptionResult`
+- `record_transcribe_cancel(req) -> void`
+- `rewrite_text(req) -> RewriteResult`
+- `insert_text(req) -> InsertResult`
+- `transcribe_fixture(req) -> TranscriptionResult`
 
-- Record：采集音频
-- Preprocess：FFmpeg 预处理，产出标准化音频文件
-- Transcribe：ASR 转录，产出文本
-- Rewrite：调用 LLM API 改写（可选）
-- Persist：写入历史记录（文本与元信息）
-- Export：复制到剪贴板，并按设置执行自动粘贴（默认开启）
+语义：
 
-### 2.2 可取消性
+- 录音和转录属于同一个用户过程，由 start/stop/cancel 控制。
+- 改写由用户单独触发。
+- 插入由用户单独触发。
+- fixtures 转录走统一转录模块。
 
-约束：任意阶段必须支持取消，取消应满足 `docs/base-spec.md` 的交互延迟。
+## 3. 语音转录规范
 
-实现约束：
+统一转录模块负责：
 
-- 每个任务拥有唯一 `task_id`。
-- Pipeline 内部每个阶段必须检查取消信号。
-- 对外部进程的调用（FFmpeg、ASR Runner）必须能终止进程或终止正在执行的作业。
+- FFmpeg 预处理。
+- provider 选择。
+- 取消控制。
+- 结构化阶段事件。
+- 初始历史记录写入。
+- 性能指标记录。
 
-### 2.4 统一命令与配置快照（冻结）
-
-- 启动任务只允许 `start_task(req)` 一个命令入口；不再并存多入口命令。
-- 任务启动时必须生成不可变 `TaskConfigSnapshot`，后续阶段仅消费该快照，禁止运行中回读 settings 形成配置漂移。
-- 热键路径在按下瞬间生成 `task_id` 并注入预采样上下文；上下文生命周期并入该 `task_id`，进入终态或显式 abort 后必须释放，禁止悬挂。
-- 主录音链路由后端命令托管（`start_backend_recording` / `stop_backend_recording` / `abort_backend_recording`）；`stop_backend_recording` 仅产出 `recording_asset_id`，任务启动统一经 `start_task(req)` 并消费该资产。
-- `recording_asset_id` 必须具备短时租约与自动清理语义，避免“停止录音后未启动任务”造成中间产物悬挂。
-
-### 2.5 Export 约束（冻结）
-
-- 后端提供统一导出命令 `export_text`，负责“复制 + 自动粘贴”。
-- 自动粘贴默认开启，可通过设置项 `auto_paste_enabled` 关闭。
-- 粘贴动作禁止依赖快捷键模拟；必须使用平台能力：
-  - Windows：通过 `SendInput + KEYEVENTF_UNICODE` 直接提交 Unicode 文本输入（不使用 `WM_PASTE`）。
-  - Linux：AT-SPI 可访问性接口对焦点可编辑对象写入文本。
-- 自动粘贴失败必须返回结构化错误码与摘要，且不影响任务文本产出与历史持久化。
-
-### 2.3 产物与缓存
-
-- 音频中间产物为临时文件，任务完成后默认清理。
-- 历史记录只保存文本与元信息，不保存音频。
-- 若为了调试需要保留音频，必须是开发模式显式开关，且默认关闭。
-
-## 3. FFmpeg 预处理规范（冻结）
-
-### 3.1 分发形态
-
-- 安装包内置 FFmpeg 工具链（`ffmpeg` / `ffprobe`），运行时路径通过
-  `apps/desktop/src-tauri/toolchain/ffmpeg_manifest.json` 固定定位。
-- 当前固定版本：`7.0.2`。
-- 当前固定来源：
-  - Windows：`GyanD/codexffmpeg` release archive
-  - Linux：`johnvansickle.com` static build archive
-- 当前内置二进制构建口径为 GPL 路线（包含 `--enable-gpl`，并启用
-  `libx264` / `libx265`）。
-- 工具链下载脚本必须先验证 FFmpeg 官方 release source 的 PGP 签名
-  （`ffmpeg-devel.asc` 对应指纹），再执行预编译二进制下载与 `sha256` 校验。
-- 随包与仓库必须包含第三方许可证与声明文件，统一入口为
-  根目录 `THIRD_PARTY_NOTICES.md`。
-
-### 3.2 输入输出约束
-
-- 输入：录音输出的原始音频文件（容器/编码可由录音实现决定）。
-- 输出：统一为 ASR 友好格式（建议 WAV/PCM 16kHz/mono，最终以 ASR Runner 要求为准）。
-
-### 3.3 失败处理
-
-- 若 FFmpeg 启动失败或返回非零退出码，必须将 stderr 摘要呈现到 UI，并给出“重新安装/修复”的诊断提示。
-
-## 4. ASR 规范（冻结）
-
-### 4.1 模型与后端
+本地 provider：
 
 - 模型：`Qwen/Qwen3-ASR-0.6B`
-- 后端：PyTorch CUDA（强制；不允许 CPU 降级）
-- 允许依赖安装 CUDA 相关运行时与 VC++ Runtime（冻结）
+- 后端：PyTorch CUDA。
+- GPU 不可用时失败。
+- ASR Runner 为常驻 Python daemon。
+- 通信协议为 stdin/stdout JSON。
 
-### 4.2 ASR Runner 进程模型（建议约束）
+API provider：
 
-为降低 Rust 侧直接链接 PyTorch 的复杂度，建议使用独立 ASR Runner 进程：
+- 沿用当前 remote ASR 配置和 API Key 管理。
+- 产出统一 `TranscriptionResult`。
 
-- 形态：单独可执行（或 Python 入口）由 Core Pipeline 启动与管理。
-- 通信：stdin/stdout JSON RPC 或本地 HTTP（MVP 优先选择 stdin/stdout，减少端口与防火墙问题）。
-- 约束：必须返回结构化结果与结构化错误码，禁止只输出人类可读日志。
-- 执行模型：仅允许常驻 daemon 模式；禁止并存一次性进程路径造成行为分叉。
+## 4. 改写规范
 
-### 4.3 输入输出接口（逻辑约束）
+- `rewrite_text` 使用 `transcriptId` 和输入文本执行改写。
+- 模板来自设置或请求参数。
+- 改写成功后更新历史记录。
+- 改写失败返回结构化错误，调用方保留原始转录文本。
 
-输入：
+## 5. 插入规范
 
-- `audio_path`：预处理后的音频文件路径
-- `language`：默认 `zh`
-- `device`：必须为 `cuda`
-- `decode_params`：解码参数（需可配置，默认值在性能 Spike 后冻结）
+- `insert_text` 负责复制和自动写入。
+- 自动写入由设置项 `auto_paste_enabled` 控制。
+- 自动写入失败时返回 `copied=true`、`autoPasteAttempted=true`、`autoPasteOk=false` 和错误信息。
+- Windows 自动写入使用平台输入能力。
+- Linux 自动写入使用 AT-SPI。
 
-输出：
+## 6. 事件规范
 
-- `text`：最终转录文本（含标点与分割，以模型输出为准）
-- `segments`：可选（若模型支持），用于 UI 做更细粒度展示
-- `metrics`
-- `rtf`：RTF
-- `audio_seconds`
-- `elapsed_ms`
-- `device_used`：cuda
-- `model_id` 与 `model_version`
+后端显示事件统一投递到 `ui_event`：
 
-### 4.4 性能与降级
+- `transcription.stage`
+- `transcription.completed`
+- `rewrite.completed`
+- `audio.level`
+- `diagnostic.error`
 
-- 必须在 RTX 4060 Laptop 环境达成 `docs/base-spec.md` 的 RTF 指标。
-- 若 GPU 不可用必须失败（返回结构化错误码并给出诊断提示），不允许降级到 CPU。
+业务模块只持有 `UiEventMailbox`。Tauri `AppHandle.emit` 只在 `ui_events` actor 中集中执行。
 
-## 5. LLM 改写规范（冻结）
+## 7. 存储规范
 
-### 5.1 功能目标
-
-- 纠错：修正错字、标点、断句、术语统一，尽量不改变原意。
-- 表达澄清：对含混、指代不明、口语省略处做更清晰表述，不得编造事实。
-
-### 5.2 提示词模板系统（冻结）
-
-- 模板必须可在 UI 编辑，不需要改源码。
-- 模板至少包含：
-- `id`：模板 id
-- `name`：模板名
-- `system_prompt`：system prompt 文本
-- 支持导入/导出 JSON。
-
-### 5.3 错误处理
-
-- API 失败必须返回结构化错误，并保留 ASR 原文可复制。
-- 失败后允许用户仅重试改写，不必重新跑 ASR。
-
-## 6. 存储规范（冻结）
-
-### 6.1 历史记录
-
-历史记录必须包含：
+历史记录包含：
 
 - `task_id`
 - `created_at_ms`
 - `asr_text`
-- `final_text`（若未启用或失败则可等于 `asr_text`）
-- `template_id`（可选）
+- `final_text`
+- `template_id`
 - `preprocess_ms`
 - `asr_ms`
 - `rtf`
 - `device_used`
 
-### 6.2 配置与模板
+转录完成时创建记录。改写完成时更新记录。音频中间产物默认清理。
 
-- 普通配置（非敏感）：可用本地配置文件（例如 JSON/TOML）。
-- 模板：以独立文件或存储表保存，支持导入导出。
-- 敏感配置（API Key）：必须使用 Windows 安全存储优先。
+## 8. 配置与密钥
 
-#### 6.2.1 LLM 配置项（必须可在 UI 配置）
+普通配置写入 `settings.json`。API Key 使用系统安全存储或环境变量。
 
-普通配置（可落盘到 settings.json）：
+敏感字段不得写入日志。
 
-- `llm_base_url`：API Base URL（例如 `https://api.openai.com/v1`）。允许用户粘贴完整 endpoint（`.../chat/completions`），应用需做归一化。
-- `llm_model`：LLM 模型名（写入 Chat Completions 的 `model` 字段）。
-- `llm_reasoning_effort`：推理等级（写入 Chat Completions 的 `reasoning_effort` 字段）。`default`/空表示“不发送该字段”。
-- `auto_paste_enabled`：是否在导出时自动粘贴（默认 `true`）。
+## 9. 错误和日志
 
-敏感配置（不得明文落盘）：
-
-- `llm_api_key`：仅存 OS Keyring（Windows 凭据管理器优先）；日志中不得出现。
-
-加载优先级（冻结）：
-
-1. `settings.json`（UI 保存的配置）
-2. 环境变量（开发/临时覆盖）：`TYPEVOICE_LLM_BASE_URL`、`TYPEVOICE_LLM_MODEL`、`TYPEVOICE_LLM_API_KEY`
-3. 内置默认值（base_url 默认 `https://api.openai.com/v1`，model 默认 `gpt-4o-mini`）
-
-## 7. 错误模型与日志（冻结）
-
-### 7.1 错误码（建议）
-
-- `E_FFMPEG_NOT_FOUND`
-- `E_FFMPEG_FAILED`
-- `E_MODEL_NOT_INSTALLED`
-- `E_MODEL_CHECKSUM_MISMATCH`
-- `E_ASR_RUNNER_START_FAILED`
-- `E_ASR_FAILED`
-- `E_LLM_FAILED`
-- `E_CANCELLED`
-- `E_EXPORT_EMPTY_TEXT`
-- `E_EXPORT_COPY_FAILED`
-- `E_EXPORT_TARGET_UNAVAILABLE`
-- `E_EXPORT_TARGET_NOT_EDITABLE`
-- `E_EXPORT_PASTE_FAILED`
-
-约束：UI 必须能将错误码映射为用户可理解文案，并提供一条建议动作。
-- 失败提示不得只显示泛化文案（如仅 `ERROR`）；至少展示 `error_code + 摘要 + 建议动作`。
-
-### 7.2 日志约束
-
-- 不记录 API Key。
-- 不记录完整音频内容。
-- 允许记录任务阶段、耗时、错误码与简要错误摘要。
-- `trace` 失败事件必须包含 `error.code` 与 `error.message`，且可按 `task_id` 聚合复盘。
-
-## 8. 模型管理（冻结）
-
-### 8.1 下载与校验（必须）
-
-校验项至少包括：
-
-- 文件完整性校验（hash 或 manifest 校验）
-- 模型目录结构校验（必要文件存在）
-- 版本标识记录（`model_id`、`model_version`、下载时间）
-
-### 8.2 存储位置
-
-- 允许用户选择模型存储目录。
-- 默认建议放在用户数据目录（避免安装目录写权限问题）。
-
-## 9. 分发与依赖（冻结）
-
-- 允许安装包额外安装 VC++ Runtime。
-- 允许安装包额外安装 CUDA 相关依赖。
-- 内置 FFmpeg 随包分发。
-
-## 10. 待确认/待验证
-
-- PyTorch CUDA 的打包策略与 ASR Runner 的分发形式（独立 Python 环境、嵌入式 Python、或其他方式）。
-- 模型下载源与镜像策略。
-
-## 11. 可测试性约束（冻结）
-
-- 后端 `TaskManager` 的外部依赖必须可注入，禁止在构造器内部硬编码不可替换实现。
-- 任务编排过程中涉及文件系统、外部进程、网络、持久化的操作，必须通过依赖接口或函数网关访问。
-- 前端业务组件（Main/Settings/History/Overlay）必须通过运行时端口访问 IPC、事件和浏览器能力，禁止直接耦合到 `@tauri-apps/api` 与 `window.*`。
-- Python ASR runner 不得使用进程级全局可变退出标记；退出状态必须由实例化运行时对象持有。
+- 错误必须包含结构化错误码。
+- UI 显示至少包含错误码和摘要。
+- `trace` 和 `metrics` 继续由 `obs` 模块负责。
+- 业务逻辑层避免吞掉错误，命令层负责控制响应输出。

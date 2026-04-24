@@ -184,10 +184,12 @@ impl HotkeyManager {
             return;
         }
 
-        let capture_required = matches!(
-            crate::settings::resolve_rewrite_start_config(s),
-            Ok((true, Some(_)))
-        );
+        let capture_required = s.rewrite_enabled.unwrap_or(false)
+            && s.rewrite_template_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .is_some();
         let mut registered_now: Vec<String> = Vec::new();
 
         if let Some(ptt) = cfg.ptt.clone() {
@@ -198,8 +200,9 @@ impl HotkeyManager {
                 let (task_id, capture_status, capture_error_code, capture_error_message) =
                     if event.state == ShortcutState::Pressed {
                         let tm = app.state::<crate::task_manager::TaskManager>();
-                        if tm.has_active_task() {
-                            let active_task_id = tm.active_task_id_best_effort();
+                        let transcriber = app.state::<crate::transcription::TranscriptionService>();
+                        if transcriber.has_active_task() {
+                            let active_task_id = transcriber.active_task_id_best_effort();
                             let reason = match active_task_id.as_deref() {
                                 Some(id) => {
                                     format!("E_TASK_ALREADY_ACTIVE: task is already active ({id})")
@@ -316,9 +319,10 @@ impl HotkeyManager {
                     return;
                 }
                 let tm = app.state::<crate::task_manager::TaskManager>();
+                let transcriber = app.state::<crate::transcription::TranscriptionService>();
                 let (task_id, capture_status, capture_error_code, capture_error_message) =
-                    if tm.has_active_task() {
-                        let active_task_id = tm.active_task_id_best_effort();
+                    if transcriber.has_active_task() {
+                        let active_task_id = transcriber.active_task_id_best_effort();
                         let reason = match active_task_id.as_deref() {
                             Some(id) => {
                                 format!("E_TASK_ALREADY_ACTIVE: task is already active ({id})")

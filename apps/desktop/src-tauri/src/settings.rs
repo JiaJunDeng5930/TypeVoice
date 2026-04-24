@@ -235,24 +235,6 @@ pub fn load_settings_strict(data_dir: &Path) -> Result<Settings> {
     Ok(v)
 }
 
-pub fn resolve_rewrite_start_config(s: &Settings) -> Result<(bool, Option<String>)> {
-    let rewrite_enabled = s.rewrite_enabled.ok_or_else(|| {
-        anyhow!("E_SETTINGS_REWRITE_ENABLED_MISSING: rewrite_enabled is required in settings")
-    })?;
-    let template_id = s
-        .rewrite_template_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(ToOwned::to_owned);
-    if rewrite_enabled && template_id.is_none() {
-        return Err(anyhow!(
-            "E_SETTINGS_REWRITE_TEMPLATE_MISSING: rewrite_template_id is required when rewrite_enabled=true"
-        ));
-    }
-    Ok((rewrite_enabled, template_id))
-}
-
 pub fn resolve_auto_paste_enabled(s: &Settings) -> bool {
     s.auto_paste_enabled.unwrap_or(true)
 }
