@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::audio_capture::RecordingRegistry;
 use crate::insertion::{InsertResult, InsertTextRequest};
@@ -7,7 +7,9 @@ use crate::record_input_cache::RecordInputCacheState;
 use crate::rewrite::{RewriteResult, RewriteTextRequest};
 use crate::transcription::{TranscribeFixtureRequest, TranscriptionResult, TranscriptionService};
 use crate::ui_events::UiEventMailbox;
-use crate::voice_workflow::{VoiceWorkflow, WorkflowCommandRequest, WorkflowError, WorkflowView};
+use crate::voice_workflow::{
+    VoiceWorkflow, WorkflowApplyEventRequest, WorkflowCommandRequest, WorkflowError, WorkflowView,
+};
 use crate::{data_dir, RuntimeState};
 
 #[cfg(test)]
@@ -20,6 +22,7 @@ pub fn command_names() -> &'static [&'static str] {
         "insert_text",
         "workflow_snapshot",
         "workflow_command",
+        "workflow_apply_event",
         "transcribe_fixture",
     ]
 }
@@ -77,6 +80,7 @@ pub fn workflow_snapshot(workflow: State<'_, VoiceWorkflow>) -> Result<WorkflowV
 
 #[tauri::command]
 pub async fn workflow_command(
+    app: AppHandle,
     runtime: State<'_, RuntimeState>,
     workflow: State<'_, VoiceWorkflow>,
     audio: State<'_, RecordingRegistry>,
@@ -86,7 +90,7 @@ pub async fn workflow_command(
     task_state: State<'_, crate::task_manager::TaskManager>,
     req: WorkflowCommandRequest,
 ) -> Result<WorkflowView, String> {
-    workflow
+    let outcome = workflow
         .run_command(
             &runtime,
             &audio,
@@ -97,6 +101,21 @@ pub async fn workflow_command(
             req,
         )
         .await
+        .map_err(render_workflow_error)?;
+    if let Some(task) = outcome.task {
+        crate::voice_tasks::spawn(app, task);
+    }
+    Ok(outcome.view)
+}
+
+#[tauri::command]
+pub fn workflow_apply_event(
+    workflow: State<'_, VoiceWorkflow>,
+    mailbox: State<'_, UiEventMailbox>,
+    req: WorkflowApplyEventRequest,
+) -> Result<WorkflowView, String> {
+    workflow
+        .apply_event(&mailbox, req)
         .map_err(render_workflow_error)
 }
 
@@ -213,6 +232,7 @@ mod tests {
         assert!(names.contains(&"insert_text"));
         assert!(names.contains(&"workflow_snapshot"));
         assert!(names.contains(&"workflow_command"));
+        assert!(names.contains(&"workflow_apply_event"));
         assert!(names.contains(&"transcribe_fixture"));
         assert!(!names.contains(&"start_task"));
         assert!(!names.contains(&"export_text"));

@@ -4,6 +4,7 @@ import type {
   RuntimePythonStatus,
   RuntimeToolchainStatus,
   UiEvent,
+  WorkflowApplyEventRequest,
   WorkflowCommand,
   WorkflowView,
 } from "../types";
@@ -14,6 +15,7 @@ export type BackendClient = {
     command: WorkflowCommand;
     taskId?: string | null;
   }): Promise<WorkflowView>;
+  workflowApplyEvent(req: WorkflowApplyEventRequest): Promise<WorkflowView>;
   overlaySetState(state: {
     visible: boolean;
     status: string;
@@ -34,6 +36,9 @@ export function createBackendClient(gateway: TauriGateway = defaultTauriGateway)
     },
     workflowCommand(req) {
       return gateway.invoke<WorkflowView>("workflow_command", { req });
+    },
+    workflowApplyEvent(req) {
+      return gateway.invoke<WorkflowView>("workflow_apply_event", { req });
     },
     overlaySetState(state) {
       return gateway.invoke<void>("overlay_set_state", { state });

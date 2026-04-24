@@ -10,6 +10,7 @@
 
 - `commands`：Tauri 命令入口。
 - `voice_workflow`：核心业务状态机，统一推进录音转录、改写、插入和取消。
+- `voice_tasks`：耗时异步任务执行层。
 - `audio_capture`：录音会话、音频产物、系统采集适配。
 - `transcription`：统一语音转录模块，选择本地或 API provider。
 - `rewrite`：LLM 改写。
@@ -23,11 +24,14 @@
 Frontend
 -> commands
 -> voice_workflow
+-> voice_tasks
 -> audio_capture / transcription / rewrite / insertion
 -> adapters
 ```
 
 核心业务状态只由 `voice_workflow` 持有。设备监听、设备缓存、ASR runner、FFmpeg 进程、事件 mailbox 等边缘资源状态保留在对应模块。
+
+异步结果统一先发给前端。前端收到 `stateChanging` 事件后调用 `workflow_apply_event`，状态机处理后返回 `WorkflowView`，前端据此更新主界面。
 
 ## 2. 命令规范
 
@@ -35,6 +39,7 @@ Frontend
 
 - `workflow_snapshot() -> WorkflowView`
 - `workflow_command(req) -> WorkflowView`
+- `workflow_apply_event(req) -> WorkflowView`
 
 `workflow_command(req)` 的 `command` 取值：
 
@@ -60,8 +65,9 @@ Frontend
 - 插入由用户单独触发。
 - 复制最近结果由用户单独触发。
 - fixtures 转录走统一转录模块。
-- 命令层只调用 `voice_workflow`，具体能力模块由状态机调用。
+- 命令层只调用 `voice_workflow` 接受用户意图，并把返回的异步任务交给 `voice_tasks`。
 - 前端显示使用 `WorkflowView`，其中包含当前阶段、会话 ID、最近结果文本、诊断文本和按钮可用性。
+- 前端转发状态型异步事件时调用 `workflow_apply_event`。
 
 核心状态：
 
@@ -126,8 +132,20 @@ API provider：
 - `audio.level`
 - `diagnostic.error`
 - `workflow.state`
+- `workflow.task.failed`
+- `workflow.task.cancelled`
 
-业务阶段事件由 `voice_workflow` 投递。`audio_capture` 只投递 `audio.level`。Tauri `AppHandle.emit` 只在 `ui_events` actor 中集中执行。
+事件包含：
+
+- `effect`：`displayOnly` 或 `stateChanging`
+- `eventId`：状态型事件去重 ID
+- `sequence`：事件递增序号
+- `taskId`：任务 ID
+- `payload`：完成事件载荷
+
+`displayOnly` 事件只影响界面显示，例如音频电平、阶段进度和后续流式文本片段。`stateChanging` 事件会由前端转发给 `workflow_apply_event`，例如转录完成、改写完成、插入完成、失败和取消。
+
+`voice_tasks` 投递异步任务事件。`audio_capture` 只投递 `audio.level`。Tauri `AppHandle.emit` 只在 `ui_events` actor 中集中执行。
 
 ## 7. 存储规范
 

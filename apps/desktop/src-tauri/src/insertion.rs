@@ -10,7 +10,7 @@ pub struct InsertTextRequest {
     pub text: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InsertResult {
     pub copied: bool,

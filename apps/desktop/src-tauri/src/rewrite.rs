@@ -15,7 +15,7 @@ pub struct RewriteTextRequest {
     pub template_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RewriteResult {
     pub transcript_id: String,

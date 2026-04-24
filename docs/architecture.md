@@ -6,16 +6,18 @@
 
 - Frontend：React UI，只负责交互、显示和发送用户意图命令。
 - Commands：Tauri 命令入口，负责参数映射、状态注入和调用核心状态机。
-- Core Modules：`voice_workflow`、`audio_capture`、`transcription`、`rewrite`、`insertion`、`ui_events`。
+- Core Modules：`voice_workflow`、`voice_tasks`、`audio_capture`、`transcription`、`rewrite`、`insertion`、`ui_events`。
 - Adapters：本地 ASR runner、API ASR、FFmpeg、LLM API、平台输入、存储、系统音频设备。
 
 依赖方向：
 
-- 前端通过 typed backend client 调用 `workflow_snapshot` 和 `workflow_command`。
+- 前端通过 typed backend client 调用 `workflow_snapshot`、`workflow_command` 和 `workflow_apply_event`。
 - 命令层只推进 `voice_workflow`。
-- `voice_workflow` 持有核心业务状态，并调用录音、转录、改写、插入能力模块。
+- `voice_workflow` 持有核心业务状态，并把耗时动作交给 `voice_tasks`。
+- `voice_tasks` 调用录音、转录、改写、插入能力模块，并把异步结果投递给前端。
 - 能力模块依赖端口或适配器。
-- 核心业务阶段事件由 `voice_workflow` 发入 `UiEventMailbox`，由 `ui_events` actor 统一投递 `ui_event`。
+- 前端收到状态型异步事件后调用 `workflow_apply_event`，状态机返回新的 `WorkflowView`。
+- 显示事件和状态型事件都发入 `UiEventMailbox`，由 `ui_events` actor 统一投递 `ui_event`。
 - `audio_capture` 继续直接投递 `audio.level`，因为音频电平是录音资源采样事件。
 
 ## 2. 核心模块
@@ -27,8 +29,9 @@
 - 作为后端唯一核心业务状态机。
 - 持有当前 `phase`、会话 ID、录音 session ID、转录结果、改写结果、hotkey 预采集上下文和最近错误。
 - 统一校验合法流转，非法操作返回结构化错误码。
-- 调用 `audio_capture`、`transcription`、`rewrite`、`insertion` 完成具体动作。
-- 投递录音开始、录音完成、转录开始、转录完成、改写完成、插入完成、取消和失败事件。
+- 用户命令进入进行中阶段后返回 `WorkflowView`。
+- 接收前端转发的状态型事件，并据此完成、取消或失败当前任务。
+- 用 `taskId` 和事件 ID 校验异步事件，避免过期结果覆盖当前状态。
 
 状态：
 
@@ -56,7 +59,17 @@
 - `record_transcribe_start(req) -> { sessionId }`
 - `record_transcribe_cancel(req) -> void`
 
-### 2.3 transcription
+### 2.3 voice_tasks
+
+职责：
+
+- 作为耗时异步任务执行层。
+- 停止录音后调用转录模块。
+- 调用改写和插入模块。
+- 任务过程中投递 `displayOnly` 事件。
+- 任务完成、失败、取消时投递 `stateChanging` 事件给前端。
+
+### 2.4 transcription
 
 职责：
 
@@ -75,7 +88,7 @@ Provider：
 - `record_transcribe_stop(req) -> TranscriptionResult`
 - `transcribe_fixture(req) -> TranscriptionResult`
 
-### 2.4 rewrite
+### 2.5 rewrite
 
 职责：
 
@@ -88,7 +101,7 @@ Provider：
 
 - `rewrite_text(req) -> RewriteResult`
 
-### 2.5 insertion
+### 2.6 insertion
 
 职责：
 
@@ -99,13 +112,14 @@ Provider：
 
 - `insert_text(req) -> InsertResult`
 
-### 2.6 ui_events
+### 2.7 ui_events
 
 职责：
 
 - 提供 `UiEventMailbox`。
 - 启动 actor，从 mailbox 读取事件并投递给前端 `ui_event`。
-- 事件覆盖 workflow 状态快照、音频电平、转录阶段、转录完成、改写完成、插入结果和诊断错误。
+- 事件覆盖 workflow 状态快照、音频电平、任务进度、转录完成、改写完成、插入结果、取消和诊断错误。
+- 每个事件包含 `effect`，取值为 `displayOnly` 或 `stateChanging`。
 
 ## 3. 前端交互
 
@@ -118,6 +132,12 @@ Provider：
 
 前端显示来自 `WorkflowView` 的按钮文案、禁用状态、最近结果和诊断文本。
 
+前端事件处理：
+
+- `displayOnly` 事件只更新界面过程显示。
+- `stateChanging` 事件调用 `workflow_apply_event`。
+- `workflow_apply_event` 返回的 `WorkflowView` 是主界面状态来源。
+
 ## 4. 数据契约
 
 核心结果类型：
@@ -126,6 +146,7 @@ Provider：
 - `RewriteResult { transcriptId, finalText, rewriteMs, templateId }`
 - `InsertResult { copied, autoPasteAttempted, autoPasteOk, errorCode, errorMessage }`
 - `WorkflowView { phase, taskId, recordingSessionId, lastTranscriptId, lastAsrText, lastText, lastCreatedAtMs, diagnosticCode, diagnosticLine, primaryLabel, primaryDisabled, canRewrite, canInsert, canCopy }`
+- `UiEvent { kind, effect, eventId, sequence, taskId, stage, status, message, elapsedMs, errorCode, payload, tsMs }`
 
 历史记录规则：
 

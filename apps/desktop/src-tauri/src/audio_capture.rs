@@ -3,7 +3,7 @@ use std::{
     io::Read,
     path::PathBuf,
     process::{Child, ChildStderr, ChildStdout, Stdio},
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -54,17 +54,18 @@ struct RegistryInner {
     assets: HashMap<String, RecordedAsset>,
 }
 
+#[derive(Clone)]
 pub struct RecordingRegistry {
-    inner: Mutex<RegistryInner>,
+    inner: Arc<Mutex<RegistryInner>>,
 }
 
 impl RecordingRegistry {
     pub fn new() -> Self {
         Self {
-            inner: Mutex::new(RegistryInner {
+            inner: Arc::new(Mutex::new(RegistryInner {
                 active: None,
                 assets: HashMap::new(),
-            }),
+            })),
         }
     }
 

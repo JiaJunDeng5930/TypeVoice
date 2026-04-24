@@ -9,6 +9,7 @@ import type {
   RuntimePythonStatus,
   RuntimeToolchainStatus,
   Settings,
+  UiEvent,
   WorkflowCommand,
   WorkflowView,
 } from "../types";
@@ -91,14 +92,36 @@ export function MainScreen({
     };
 
     (async () => {
-      const unlistenUiEvent = await client.listenUiEvent((ev) => {
+      const unlistenUiEvent = await client.listenUiEvent(async (ev) => {
         if (!ev || ev.kind === "audio.level") return;
         if (ev.kind === "workflow.state") {
           const next = workflowViewFromPayload(ev.payload);
           if (next) setWorkflow(next);
           return;
         }
+        if (ev.effect === "stateChanging") {
+          try {
+            const eventId = optionalString(ev.eventId);
+            if (!eventId) throw new Error("E_UI_EVENT_ID_MISSING: eventId is required");
+            const next = await client.workflowApplyEvent({
+              eventId,
+              kind: ev.kind,
+              taskId: optionalString(ev.taskId),
+              status: optionalString(ev.status),
+              message: ev.message,
+              errorCode: optionalString(ev.errorCode),
+              payload: ev.payload,
+            });
+            setWorkflow(next);
+            handleStateChangingEvent(ev, pushToast, onHistoryChanged);
+          } catch (err) {
+            const diag = buildDiagnostic(err, "WORKFLOW EVENT FAILED");
+            pushToast(diag.title, "danger");
+          }
+          return;
+        }
         if (ev.status === "failed") {
+          if (ev.effect === "displayOnly" && ev.kind !== "diagnostic.error") return;
           const title = ev.stage === "Rewrite"
             ? "REWRITE FAILED"
             : ev.stage === "Insert"
@@ -247,6 +270,44 @@ export function MainScreen({
       </div>
     </div>
   );
+}
+
+function handleStateChangingEvent(
+  ev: UiEvent,
+  pushToast: (msg: string, tone?: "default" | "ok" | "danger") => void,
+  onHistoryChanged: () => void,
+) {
+  if (ev.status === "failed") {
+    const title = ev.stage === "Rewrite"
+      ? "REWRITE FAILED"
+      : ev.stage === "Insert"
+        ? "INSERT FAILED"
+        : "TRANSCRIBE FAILED";
+    pushToast(title, "danger");
+    return;
+  }
+  if (ev.status === "cancelled") {
+    pushToast("CANCELLED", "default");
+    return;
+  }
+  if (ev.kind === "transcription.completed") {
+    pushToast("TRANSCRIBED", "ok");
+    onHistoryChanged();
+    return;
+  }
+  if (ev.kind === "rewrite.completed") {
+    pushToast("REWRITTEN", "ok");
+    onHistoryChanged();
+    return;
+  }
+  if (ev.kind === "insertion.completed") {
+    const inserted = insertionPayload(ev.payload);
+    if (inserted?.autoPasteAttempted && !inserted.autoPasteOk) {
+      pushToast(`AUTO PASTE FAILED: ${inserted.errorCode || "E_EXPORT_PASTE_FAILED"}`, "danger");
+    } else {
+      pushToast(inserted?.autoPasteAttempted ? "COPIED + PASTED" : "COPIED", "ok");
+    }
+  }
 }
 
 function workflowViewFromPayload(payload: unknown): WorkflowView | null {

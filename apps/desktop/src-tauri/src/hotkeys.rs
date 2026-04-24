@@ -69,25 +69,32 @@ fn spawn_primary_workflow_command<R: Runtime>(
                 },
             )
             .await;
-        if let Err(err) = result {
-            let message = err.render();
-            crate::obs::event_err(
-                &data_dir,
-                None,
-                "Hotkeys",
-                "HK.workflow_command_failed",
-                "logic",
-                &err.code,
-                &message,
-                Some(serde_json::json!({
-                    "kind": kind,
-                    "state": state,
-                    "shortcut": shortcut,
-                })),
-            );
-            mailbox.send(crate::ui_events::UiEvent::error(
-                "hotkey", err.code, message,
-            ));
+        match result {
+            Ok(outcome) => {
+                if let Some(task) = outcome.task {
+                    crate::voice_tasks::spawn(app.clone(), task);
+                }
+            }
+            Err(err) => {
+                let message = err.render();
+                crate::obs::event_err(
+                    &data_dir,
+                    None,
+                    "Hotkeys",
+                    "HK.workflow_command_failed",
+                    "logic",
+                    &err.code,
+                    &message,
+                    Some(serde_json::json!({
+                        "kind": kind,
+                        "state": state,
+                        "shortcut": shortcut,
+                    })),
+                );
+                mailbox.send(crate::ui_events::UiEvent::error(
+                    "hotkey", err.code, message,
+                ));
+            }
         }
     });
 }

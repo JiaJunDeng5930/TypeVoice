@@ -11,6 +11,9 @@ export type TaskEvent = {
 
 export type UiEvent = {
   kind: string;
+  effect?: "displayOnly" | "stateChanging" | null;
+  eventId?: string | null;
+  sequence?: number | null;
   taskId?: string | null;
   stage?: string | null;
   status?: "started" | "completed" | "failed" | "cancelled" | "recording" | null;
@@ -19,6 +22,16 @@ export type UiEvent = {
   errorCode?: string | null;
   payload?: unknown;
   tsMs: number;
+};
+
+export type WorkflowApplyEventRequest = {
+  eventId: string;
+  kind: string;
+  taskId?: string | null;
+  status?: string | null;
+  message: string;
+  errorCode?: string | null;
+  payload?: unknown;
 };
 
 export type RecordTranscribeStartResult = {

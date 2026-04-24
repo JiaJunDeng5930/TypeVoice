@@ -30,6 +30,7 @@ mod templates;
 mod toolchain;
 mod transcription;
 mod ui_events;
+mod voice_tasks;
 mod voice_workflow;
 
 use history::HistoryItem;
@@ -1008,6 +1009,7 @@ pub fn run() {
             commands::insert_text,
             commands::workflow_snapshot,
             commands::workflow_command,
+            commands::workflow_apply_event,
             commands::transcribe_fixture,
             abort_pending_task,
             list_templates,

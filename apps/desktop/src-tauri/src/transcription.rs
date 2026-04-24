@@ -56,7 +56,7 @@ impl ProviderKind {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptionMetrics {
     pub rtf: f64,
@@ -65,7 +65,7 @@ pub struct TranscriptionMetrics {
     pub asr_ms: u128,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptionResult {
     pub transcript_id: String,

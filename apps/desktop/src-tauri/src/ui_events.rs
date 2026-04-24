@@ -1,9 +1,14 @@
-use std::sync::mpsc;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    mpsc,
+};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 pub const UI_EVENT_CHANNEL: &str = "ui_event";
+
+static EVENT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiEventStatus {
@@ -28,6 +33,9 @@ impl UiEventStatus {
 #[serde(rename_all = "camelCase")]
 pub struct UiEvent {
     pub kind: String,
+    pub effect: String,
+    pub event_id: String,
+    pub sequence: u64,
     pub task_id: Option<String>,
     pub stage: Option<String>,
     pub status: Option<String>,
@@ -66,6 +74,9 @@ impl UiEvent {
     ) -> Self {
         Self {
             kind: "transcription.stage".to_string(),
+            effect: "displayOnly".to_string(),
+            event_id: new_event_id(),
+            sequence: next_sequence(),
             task_id: Some(task_id.into()),
             stage: Some(stage.into()),
             status: Some(status.as_str().to_string()),
@@ -84,6 +95,9 @@ impl UiEvent {
     ) -> Self {
         Self {
             kind: "diagnostic.error".to_string(),
+            effect: "displayOnly".to_string(),
+            event_id: new_event_id(),
+            sequence: next_sequence(),
             task_id: Some(task_id.into()),
             stage: None,
             status: Some("failed".to_string()),
@@ -101,8 +115,30 @@ impl UiEvent {
         message: impl Into<String>,
         payload: serde_json::Value,
     ) -> Self {
+        Self::completed_with_effect(task_id, kind, message, payload, "displayOnly")
+    }
+
+    pub fn state_completed(
+        task_id: impl Into<String>,
+        kind: impl Into<String>,
+        message: impl Into<String>,
+        payload: serde_json::Value,
+    ) -> Self {
+        Self::completed_with_effect(task_id, kind, message, payload, "stateChanging")
+    }
+
+    fn completed_with_effect(
+        task_id: impl Into<String>,
+        kind: impl Into<String>,
+        message: impl Into<String>,
+        payload: serde_json::Value,
+        effect: impl Into<String>,
+    ) -> Self {
         Self {
             kind: kind.into(),
+            effect: effect.into(),
+            event_id: new_event_id(),
+            sequence: next_sequence(),
             task_id: Some(task_id.into()),
             stage: None,
             status: Some("completed".to_string()),
@@ -117,6 +153,9 @@ impl UiEvent {
     pub fn workflow_state(payload: impl Serialize) -> Self {
         Self {
             kind: "workflow.state".to_string(),
+            effect: "displayOnly".to_string(),
+            event_id: new_event_id(),
+            sequence: next_sequence(),
             task_id: None,
             stage: Some("Workflow".to_string()),
             status: None,
@@ -131,6 +170,9 @@ impl UiEvent {
     pub fn audio_level(recording_id: impl Into<String>, rms: f64, peak: f64) -> Self {
         Self {
             kind: "audio.level".to_string(),
+            effect: "displayOnly".to_string(),
+            event_id: new_event_id(),
+            sequence: next_sequence(),
             task_id: None,
             stage: Some("Record".to_string()),
             status: Some("recording".to_string()),
@@ -142,6 +184,45 @@ impl UiEvent {
                 "rms": rms.clamp(0.0, 1.0),
                 "peak": peak.clamp(0.0, 1.0),
             })),
+            ts_ms: now_ms(),
+        }
+    }
+
+    pub fn state_failed(
+        task_id: impl Into<String>,
+        stage: impl Into<String>,
+        code: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: "workflow.task.failed".to_string(),
+            effect: "stateChanging".to_string(),
+            event_id: new_event_id(),
+            sequence: next_sequence(),
+            task_id: Some(task_id.into()),
+            stage: Some(stage.into()),
+            status: Some("failed".to_string()),
+            message: message.into(),
+            elapsed_ms: None,
+            error_code: Some(code.into()),
+            payload: None,
+            ts_ms: now_ms(),
+        }
+    }
+
+    pub fn state_cancelled(task_id: impl Into<String>, stage: impl Into<String>) -> Self {
+        Self {
+            kind: "workflow.task.cancelled".to_string(),
+            effect: "stateChanging".to_string(),
+            event_id: new_event_id(),
+            sequence: next_sequence(),
+            task_id: Some(task_id.into()),
+            stage: Some(stage.into()),
+            status: Some("cancelled".to_string()),
+            message: "cancelled".to_string(),
+            elapsed_ms: None,
+            error_code: None,
+            payload: None,
             ts_ms: now_ms(),
         }
     }
@@ -238,6 +319,14 @@ fn now_ms() -> i64 {
         Ok(dur) => dur.as_millis() as i64,
         Err(_) => 0,
     }
+}
+
+fn new_event_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+fn next_sequence() -> u64 {
+    EVENT_SEQUENCE.fetch_add(1, Ordering::Relaxed)
 }
 
 #[cfg(test)]
