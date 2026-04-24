@@ -3,14 +3,12 @@ use tauri::State;
 
 use crate::audio_capture::RecordingRegistry;
 use crate::insertion::{InsertResult, InsertTextRequest};
-use crate::ports::PortError;
 use crate::record_input_cache::RecordInputCacheState;
 use crate::rewrite::{RewriteResult, RewriteTextRequest};
-use crate::transcription::{
-    TranscribeFixtureRequest, TranscriptionInput, TranscriptionResult, TranscriptionService,
-};
+use crate::transcription::{TranscribeFixtureRequest, TranscriptionResult, TranscriptionService};
 use crate::ui_events::UiEventMailbox;
-use crate::{data_dir, insertion, rewrite, RuntimeState};
+use crate::voice_workflow::{VoiceWorkflow, WorkflowError};
+use crate::{data_dir, RuntimeState};
 
 #[cfg(test)]
 pub fn command_names() -> &'static [&'static str] {
@@ -52,122 +50,95 @@ pub struct RecordTranscribeCancelRequest {
 #[tauri::command]
 pub fn record_transcribe_start(
     runtime: State<'_, RuntimeState>,
+    workflow: State<'_, VoiceWorkflow>,
     audio: State<'_, RecordingRegistry>,
     mailbox: State<'_, UiEventMailbox>,
     record_input_cache: State<'_, RecordInputCacheState>,
     req: RecordTranscribeStartRequest,
 ) -> Result<RecordTranscribeStartResult, String> {
-    ensure_toolchain_ready(&runtime)?;
-    let session_id = audio
-        .start_recording(
+    let session_id = workflow
+        .start_record_transcribe(
+            &runtime,
+            &audio,
             &mailbox,
             &record_input_cache,
             normalize_task_id(req.task_id)?,
         )
-        .map_err(|e| e.render())?;
+        .map_err(render_workflow_error)?;
     Ok(RecordTranscribeStartResult { session_id })
 }
 
 #[tauri::command]
 pub async fn record_transcribe_stop(
     runtime: State<'_, RuntimeState>,
+    workflow: State<'_, VoiceWorkflow>,
     audio: State<'_, RecordingRegistry>,
     transcriber: State<'_, TranscriptionService>,
     mailbox: State<'_, UiEventMailbox>,
     req: RecordTranscribeStopRequest,
 ) -> Result<TranscriptionResult, String> {
-    let asset = audio
-        .stop_recording(&req.session_id)
-        .map_err(|e| e.render())?;
-    let consumed = audio.take_asset(&asset.asset_id).unwrap_or(asset);
-    if let Err(e) = ensure_runtime_ready(&runtime) {
-        let _ = std::fs::remove_file(&consumed.output_path);
-        return Err(e);
-    }
-    transcriber
-        .transcribe_audio(
-            &mailbox,
-            TranscriptionInput {
-                task_id: consumed.task_id,
-                input_path: consumed.output_path,
-                record_elapsed_ms: consumed.record_elapsed_ms,
-                record_label: "Record (backend)".to_string(),
-            },
-        )
+    workflow
+        .stop_record_transcribe(&runtime, &audio, &transcriber, &mailbox, &req.session_id)
         .await
-        .map_err(render_port_error)
+        .map_err(render_workflow_error)
 }
 
 #[tauri::command]
 pub fn record_transcribe_cancel(
+    workflow: State<'_, VoiceWorkflow>,
     audio: State<'_, RecordingRegistry>,
     transcriber: State<'_, TranscriptionService>,
-    _mailbox: State<'_, UiEventMailbox>,
+    mailbox: State<'_, UiEventMailbox>,
     req: RecordTranscribeCancelRequest,
 ) -> Result<(), String> {
-    let mut result: Result<(), String> = Ok(());
-    if audio.has_active_recording() {
-        result = audio
-            .abort_recording(req.session_id.clone())
-            .map_err(|e| e.render());
-    }
-    if transcriber.has_active_task() {
-        result = transcriber
-            .cancel(req.transcript_id.as_deref())
-            .map_err(render_port_error);
-    }
-    result
+    workflow
+        .cancel_record_transcribe(
+            &audio,
+            &transcriber,
+            &mailbox,
+            req.session_id,
+            req.transcript_id,
+        )
+        .map_err(render_workflow_error)
 }
 
 #[tauri::command]
 pub async fn transcribe_fixture(
     runtime: State<'_, RuntimeState>,
+    workflow: State<'_, VoiceWorkflow>,
     transcriber: State<'_, TranscriptionService>,
     mailbox: State<'_, UiEventMailbox>,
     req: TranscribeFixtureRequest,
 ) -> Result<TranscriptionResult, String> {
-    ensure_runtime_ready(&runtime)?;
-    transcriber
-        .transcribe_fixture(&mailbox, req)
+    workflow
+        .transcribe_fixture(&runtime, &transcriber, &mailbox, req)
         .await
-        .map_err(render_port_error)
+        .map_err(render_workflow_error)
 }
 
 #[tauri::command]
 pub async fn rewrite_text(
+    workflow: State<'_, VoiceWorkflow>,
     mailbox: State<'_, UiEventMailbox>,
     task_state: State<'_, crate::task_manager::TaskManager>,
     req: RewriteTextRequest,
 ) -> Result<RewriteResult, String> {
-    rewrite::rewrite_text(&mailbox, &task_state, req)
+    workflow
+        .rewrite_text(&mailbox, &task_state, req)
         .await
-        .map_err(render_port_error)
+        .map_err(render_workflow_error)
 }
 
 #[tauri::command]
-pub async fn insert_text(req: InsertTextRequest) -> Result<InsertResult, String> {
-    insertion::insert_text(req).await.map_err(render_port_error)
-}
-
-fn ensure_toolchain_ready(runtime: &RuntimeState) -> Result<(), String> {
-    let tc = runtime.get_toolchain();
-    if !tc.ready {
-        return Err(tc
-            .message
-            .unwrap_or_else(|| "E_TOOLCHAIN_NOT_READY: toolchain is not ready".to_string()));
-    }
-    Ok(())
-}
-
-fn ensure_runtime_ready(runtime: &RuntimeState) -> Result<(), String> {
-    ensure_toolchain_ready(runtime)?;
-    let py = runtime.get_python();
-    if !py.ready {
-        return Err(py
-            .message
-            .unwrap_or_else(|| "E_PYTHON_NOT_READY: python runtime is not ready".to_string()));
-    }
-    Ok(())
+pub async fn insert_text(
+    workflow: State<'_, VoiceWorkflow>,
+    mailbox: State<'_, UiEventMailbox>,
+    req: InsertTextRequest,
+) -> Result<InsertResult, String> {
+    workflow
+        .insert_text(&mailbox, req)
+        .await
+        .map_err(render_workflow_error)
 }
 
 fn normalize_task_id(task_id: Option<String>) -> Result<Option<String>, String> {
@@ -183,7 +154,7 @@ fn normalize_task_id(task_id: Option<String>) -> Result<Option<String>, String> 
     Ok(Some(parsed.to_string()))
 }
 
-fn render_port_error(err: PortError) -> String {
+fn render_workflow_error(err: WorkflowError) -> String {
     format!("{}: {}", err.code, err.message)
 }
 

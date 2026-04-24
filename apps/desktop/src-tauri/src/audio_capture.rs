@@ -68,10 +68,6 @@ impl RecordingRegistry {
         }
     }
 
-    pub fn has_active_recording(&self) -> bool {
-        self.inner.lock().unwrap().active.is_some()
-    }
-
     pub fn cleanup_expired_assets(&self, max_age: Duration) {
         let mut g = self.inner.lock().unwrap();
         let expired_ids: Vec<String> = g

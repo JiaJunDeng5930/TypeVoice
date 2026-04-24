@@ -200,9 +200,9 @@ impl HotkeyManager {
                 let (task_id, capture_status, capture_error_code, capture_error_message) =
                     if event.state == ShortcutState::Pressed {
                         let tm = app.state::<crate::task_manager::TaskManager>();
-                        let transcriber = app.state::<crate::transcription::TranscriptionService>();
-                        if transcriber.has_active_task() {
-                            let active_task_id = transcriber.active_task_id_best_effort();
+                        let workflow = app.state::<crate::voice_workflow::VoiceWorkflow>();
+                        if workflow.has_active_task() {
+                            let active_task_id = workflow.active_task_id_best_effort();
                             let reason = match active_task_id.as_deref() {
                                 Some(id) => {
                                     format!("E_TASK_ALREADY_ACTIVE: task is already active ({id})")
@@ -232,17 +232,24 @@ impl HotkeyManager {
                                 Some(reason),
                             )
                         } else {
-                            match tm.open_hotkey_task(&data_dir_buf, &ctx_cfg, capture_required) {
+                            match workflow.open_hotkey_task(
+                                &tm,
+                                &data_dir_buf,
+                                &ctx_cfg,
+                                capture_required,
+                            ) {
                                 Ok(id) => (Some(id), Some("ok".to_string()), None, None),
                                 Err(e) => {
-                                    crate::obs::event_err_anyhow(
+                                    let code = e.code.clone();
+                                    let message = e.render();
+                                    crate::obs::event_err(
                                         &data_dir_buf,
                                         None,
                                         "Hotkeys",
                                         "HK.task_open_failed",
                                         "logic",
-                                        "E_HOTKEY_TASK_OPEN",
-                                        &e,
+                                        &code,
+                                        &message,
                                         Some(serde_json::json!({
                                             "kind": "ptt",
                                             "state": "Pressed",
@@ -250,12 +257,7 @@ impl HotkeyManager {
                                             "capture_required": capture_required,
                                         })),
                                     );
-                                    (
-                                        None,
-                                        Some("err".to_string()),
-                                        Some("E_HOTKEY_TASK_OPEN".to_string()),
-                                        Some(e.to_string()),
-                                    )
+                                    (None, Some("err".to_string()), Some(code), Some(message))
                                 }
                             }
                         }
@@ -319,10 +321,10 @@ impl HotkeyManager {
                     return;
                 }
                 let tm = app.state::<crate::task_manager::TaskManager>();
-                let transcriber = app.state::<crate::transcription::TranscriptionService>();
+                let workflow = app.state::<crate::voice_workflow::VoiceWorkflow>();
                 let (task_id, capture_status, capture_error_code, capture_error_message) =
-                    if transcriber.has_active_task() {
-                        let active_task_id = transcriber.active_task_id_best_effort();
+                    if workflow.has_active_task() {
+                        let active_task_id = workflow.active_task_id_best_effort();
                         let reason = match active_task_id.as_deref() {
                             Some(id) => {
                                 format!("E_TASK_ALREADY_ACTIVE: task is already active ({id})")
@@ -352,17 +354,24 @@ impl HotkeyManager {
                             Some(reason),
                         )
                     } else {
-                        match tm.open_hotkey_task(&data_dir_buf, &ctx_cfg, capture_required) {
+                        match workflow.open_hotkey_task(
+                            &tm,
+                            &data_dir_buf,
+                            &ctx_cfg,
+                            capture_required,
+                        ) {
                             Ok(id) => (Some(id), Some("ok".to_string()), None, None),
                             Err(e) => {
-                                crate::obs::event_err_anyhow(
+                                let code = e.code.clone();
+                                let message = e.render();
+                                crate::obs::event_err(
                                     &data_dir_buf,
                                     None,
                                     "Hotkeys",
                                     "HK.task_open_failed",
                                     "logic",
-                                    "E_HOTKEY_TASK_OPEN",
-                                    &e,
+                                    &code,
+                                    &message,
                                     Some(serde_json::json!({
                                         "kind": "toggle",
                                         "state": "Pressed",
@@ -370,12 +379,7 @@ impl HotkeyManager {
                                         "capture_required": capture_required,
                                     })),
                                 );
-                                (
-                                    None,
-                                    Some("err".to_string()),
-                                    Some("E_HOTKEY_TASK_OPEN".to_string()),
-                                    Some(e.to_string()),
-                                )
+                                (None, Some("err".to_string()), Some(code), Some(message))
                             }
                         }
                     };

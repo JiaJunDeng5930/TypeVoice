@@ -5,20 +5,44 @@
 ## 1. 分层与依赖方向
 
 - Frontend：React UI，只负责交互、显示和命令编排。
-- Commands：Tauri 命令入口，负责参数映射、运行时检查和调用业务模块。
-- Core Modules：`audio_capture`、`transcription`、`rewrite`、`insertion`、`ui_events`。
+- Commands：Tauri 命令入口，负责参数映射、状态注入和调用核心状态机。
+- Core Modules：`voice_workflow`、`audio_capture`、`transcription`、`rewrite`、`insertion`、`ui_events`。
 - Adapters：本地 ASR runner、API ASR、FFmpeg、LLM API、平台输入、存储、系统音频设备。
 
 依赖方向：
 
 - 前端通过 typed backend client 调用后端命令。
-- 命令层依赖业务模块。
-- 业务模块依赖端口或适配器。
-- 会影响前端显示的模块只依赖 `UiEventMailbox`，由 `ui_events` actor 统一投递 `ui_event`。
+- 命令层只推进 `voice_workflow`。
+- `voice_workflow` 持有核心业务状态，并调用录音、转录、改写、插入能力模块。
+- 能力模块依赖端口或适配器。
+- 核心业务阶段事件由 `voice_workflow` 发入 `UiEventMailbox`，由 `ui_events` actor 统一投递 `ui_event`。
+- `audio_capture` 继续直接投递 `audio.level`，因为音频电平是录音资源采样事件。
 
 ## 2. 核心模块
 
-### 2.1 audio_capture
+### 2.1 voice_workflow
+
+职责：
+
+- 作为后端唯一核心业务状态机。
+- 持有当前 `phase`、会话 ID、录音 session ID、转录结果、改写结果、hotkey 预采集上下文和最近错误。
+- 统一校验合法流转，非法操作返回结构化错误码。
+- 调用 `audio_capture`、`transcription`、`rewrite`、`insertion` 完成具体动作。
+- 投递录音开始、录音完成、转录开始、转录完成、改写完成、插入完成、取消和失败事件。
+
+状态：
+
+- `Idle`
+- `Recording`
+- `Transcribing`
+- `Transcribed`
+- `Rewriting`
+- `Rewritten`
+- `Inserting`
+- `Cancelled`
+- `Failed`
+
+### 2.2 audio_capture
 
 职责：
 
@@ -27,17 +51,18 @@
 - 通过 Windows dshow 适配器采集音频。
 - 通过 `UiEventMailbox` 投递音频电平事件。
 
-命令入口：
+状态机调用：
 
 - `record_transcribe_start(req) -> { sessionId }`
 - `record_transcribe_cancel(req) -> void`
 
-### 2.2 transcription
+### 2.3 transcription
 
 职责：
 
 - 提供统一语音转录能力。
 - 管理预处理、取消、转录 provider 选择、历史初始写入、性能指标。
+- 保留 ASR runner、取消 token、子进程句柄等边缘资源状态。
 - 依赖本地 provider 和 API provider。
 
 Provider：
@@ -45,35 +70,36 @@ Provider：
 - Local：常驻 Python ASR runner，强制 CUDA。
 - Remote：API 语音转录 provider，沿用当前 remote ASR 能力。
 
-命令入口：
+状态机调用：
 
 - `record_transcribe_stop(req) -> TranscriptionResult`
 - `transcribe_fixture(req) -> TranscriptionResult`
 
-### 2.3 rewrite
+### 2.4 rewrite
 
 职责：
 
 - 独立执行文本改写。
 - 读取模板、上下文和术语表。
+- 接收 `voice_workflow` 传入的 hotkey 预采集上下文。
 - 成功后更新同一条历史记录的 `final_text` 与 `template_id`。
 
-命令入口：
+状态机调用：
 
 - `rewrite_text(req) -> RewriteResult`
 
-### 2.4 insertion
+### 2.5 insertion
 
 职责：
 
 - 统一管理复制和自动写入目标窗口。
 - 自动写入失败时保留复制成功状态，并返回结构化错误。
 
-命令入口：
+状态机调用：
 
 - `insert_text(req) -> InsertResult`
 
-### 2.5 ui_events
+### 2.6 ui_events
 
 职责：
 

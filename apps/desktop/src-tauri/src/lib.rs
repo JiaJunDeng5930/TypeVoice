@@ -30,6 +30,7 @@ mod templates;
 mod toolchain;
 mod transcription;
 mod ui_events;
+mod voice_workflow;
 
 use history::HistoryItem;
 use llm::ApiKeyStatus;
@@ -304,7 +305,10 @@ fn runtime_python_status(
 }
 
 #[tauri::command]
-fn abort_pending_task(state: tauri::State<TaskManager>, task_id: &str) -> Result<(), String> {
+fn abort_pending_task(
+    workflow: tauri::State<voice_workflow::VoiceWorkflow>,
+    task_id: &str,
+) -> Result<(), String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let span = cmd_span(
         &dir,
@@ -316,7 +320,7 @@ fn abort_pending_task(state: tauri::State<TaskManager>, task_id: &str) -> Result
         span.ok(Some(serde_json::json!({"removed": false})));
         return Ok(());
     }
-    let removed = state.abort_pending_task(task_id.trim());
+    let removed = workflow.abort_pending_task(task_id.trim());
     span.ok(Some(serde_json::json!({"removed": removed})));
     Ok(())
 }
@@ -862,6 +866,7 @@ pub fn run() {
     obs::startup::mark_best_effort("context_generated");
     tauri::Builder::default()
         .manage(TaskManager::new())
+        .manage(voice_workflow::VoiceWorkflow::new())
         .manage(transcription::TranscriptionService::new())
         .manage(audio_capture::RecordingRegistry::new())
         .manage(RuntimeState::new())

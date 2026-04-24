@@ -3,7 +3,6 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 
 use crate::ports::{PortError, PortResult};
-use crate::ui_events::{UiEvent, UiEventMailbox, UiEventStatus};
 use crate::{
     context_capture, context_pack, data_dir, history, llm, settings, task_manager, templates,
 };
@@ -26,8 +25,8 @@ pub struct RewriteResult {
 }
 
 pub async fn rewrite_text(
-    mailbox: &UiEventMailbox,
     task_state: &task_manager::TaskManager,
+    pre_captured_context: Option<context_pack::ContextSnapshot>,
     req: RewriteTextRequest,
 ) -> PortResult<RewriteResult> {
     let data_dir =
@@ -72,7 +71,13 @@ pub async fn rewrite_text(
     let template = templates::get_template(&data_dir, &template_id)
         .map_err(|e| PortError::from_message("E_TEMPLATE_NOT_FOUND", e.to_string()))?;
     let ctx_cfg = context_capture::config_from_settings(&s);
-    let ctx_snap = rewrite_context(task_state, &data_dir, task_id, &ctx_cfg);
+    let ctx_snap = rewrite_context(
+        task_state,
+        &data_dir,
+        task_id,
+        &ctx_cfg,
+        pre_captured_context,
+    );
     let prepared = context_pack::prepare(&req.text, &ctx_snap, &ctx_cfg.budget);
     let policy = llm::RewriteContextPolicy {
         include_history: ctx_cfg.include_history,
@@ -89,12 +94,6 @@ pub async fn rewrite_text(
         &[]
     };
 
-    mailbox.send(UiEvent::stage(
-        task_id,
-        "Rewrite",
-        UiEventStatus::Started,
-        "llm",
-    ));
     let started = Instant::now();
     let final_text = match llm::rewrite_with_context(
         &data_dir,
@@ -110,14 +109,6 @@ pub async fn rewrite_text(
         Ok(v) => v,
         Err(e) => {
             let err = PortError::from_message("E_LLM_FAILED", e.to_string());
-            mailbox.send(UiEvent::stage_with_elapsed(
-                task_id,
-                "Rewrite",
-                UiEventStatus::Failed,
-                err.message.clone(),
-                Some(started.elapsed().as_millis()),
-                Some(err.code.clone()),
-            ));
             return Err(err);
         }
     };
@@ -129,26 +120,12 @@ pub async fn rewrite_text(
         Some(&template_id),
     )
     .map_err(|e| PortError::from_message("E_HISTORY_UPDATE", e.to_string()))?;
-    mailbox.send(UiEvent::stage_with_elapsed(
-        task_id,
-        "Rewrite",
-        UiEventStatus::Completed,
-        "ok",
-        Some(rewrite_ms),
-        None,
-    ));
     let result = RewriteResult {
         transcript_id: task_id.to_string(),
         final_text,
         rewrite_ms,
         template_id: Some(template_id),
     };
-    mailbox.send(UiEvent::completed(
-        task_id,
-        "rewrite.completed",
-        "rewrite completed",
-        serde_json::to_value(&result).unwrap_or_default(),
-    ));
     Ok(result)
 }
 
@@ -157,9 +134,10 @@ fn rewrite_context(
     data_dir: &std::path::Path,
     task_id: &str,
     ctx_cfg: &context_capture::ContextConfig,
+    pre_captured_context: Option<context_pack::ContextSnapshot>,
 ) -> context_pack::ContextSnapshot {
     let mut capture_cfg = ctx_cfg.clone();
-    let pre = task_state.take_pending_hotkey_context_for_rewrite(task_id);
+    let pre = pre_captured_context;
     if pre.is_some() {
         capture_cfg.include_prev_window_screenshot = false;
         capture_cfg.include_prev_window_meta = false;

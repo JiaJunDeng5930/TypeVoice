@@ -1,14 +1,7 @@
-use std::{
-    collections::HashMap,
-    path::Path,
-    sync::{Arc, Mutex},
-    time::{SystemTime, UNIX_EPOCH},
-};
-
-use anyhow::{anyhow, Result};
-use uuid::Uuid;
+use std::{path::Path, sync::Arc};
 
 use crate::{context_capture, context_pack};
+use anyhow::{anyhow, Result};
 
 pub trait ContextCollector: Send + Sync {
     fn warmup_best_effort(&self);
@@ -53,22 +46,14 @@ impl ContextCollector for context_capture::ContextService {
     }
 }
 
-#[derive(Debug, Clone)]
-struct PendingHotkeyContext {
-    created_at_ms: i64,
-    pre_captured_context: context_pack::ContextSnapshot,
-}
-
 #[derive(Clone)]
 pub struct TaskManager {
-    pending_hotkey_contexts: Arc<Mutex<HashMap<String, PendingHotkeyContext>>>,
     ctx: Arc<dyn ContextCollector>,
 }
 
 impl TaskManager {
     pub fn new() -> Self {
         Self {
-            pending_hotkey_contexts: Arc::new(Mutex::new(HashMap::new())),
             ctx: Arc::new(context_capture::ContextService::new()),
         }
     }
@@ -77,50 +62,15 @@ impl TaskManager {
         self.ctx.warmup_best_effort();
     }
 
-    pub fn open_hotkey_task(
+    pub fn capture_hotkey_context(
         &self,
         data_dir: &Path,
         context_cfg: &context_capture::ContextConfig,
-        capture_required: bool,
-    ) -> Result<String> {
-        self.cleanup_orphan_pending_hotkey_contexts(60_000);
-
-        let task_id = Uuid::new_v4().to_string();
-        if capture_required {
-            let capture_id = self.ctx.capture_hotkey_context_now(data_dir, context_cfg)?;
-            let pre_captured_context = self
-                .ctx
-                .take_hotkey_context_once(&capture_id)
-                .ok_or_else(|| anyhow!("failed to retrieve hotkey context payload"))?;
-            let mut g = self.pending_hotkey_contexts.lock().unwrap();
-            g.insert(
-                task_id.clone(),
-                PendingHotkeyContext {
-                    created_at_ms: now_ms(),
-                    pre_captured_context,
-                },
-            );
-        }
-        Ok(task_id)
-    }
-
-    pub fn take_pending_hotkey_context_for_rewrite(
-        &self,
-        task_id: &str,
-    ) -> Option<context_pack::ContextSnapshot> {
-        let mut g = self.pending_hotkey_contexts.lock().unwrap();
-        g.remove(task_id).map(|ctx| ctx.pre_captured_context)
-    }
-
-    pub fn abort_pending_task(&self, task_id: &str) -> bool {
-        let mut g = self.pending_hotkey_contexts.lock().unwrap();
-        g.remove(task_id).is_some()
-    }
-
-    pub fn cleanup_orphan_pending_hotkey_contexts(&self, max_age_ms: i64) {
-        let now = now_ms();
-        let mut g = self.pending_hotkey_contexts.lock().unwrap();
-        g.retain(|_, v| now.saturating_sub(v.created_at_ms) <= max_age_ms);
+    ) -> Result<context_pack::ContextSnapshot> {
+        let capture_id = self.ctx.capture_hotkey_context_now(data_dir, context_cfg)?;
+        self.ctx
+            .take_hotkey_context_once(&capture_id)
+            .ok_or_else(|| anyhow!("failed to retrieve hotkey context payload"))
     }
 
     pub fn capture_snapshot_best_effort_with_config(
@@ -140,16 +90,11 @@ impl Default for TaskManager {
     }
 }
 
-fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
 
     #[derive(Default)]
     struct FakeContext {
@@ -191,24 +136,17 @@ mod tests {
 
     fn manager_with_fake_context() -> TaskManager {
         TaskManager {
-            pending_hotkey_contexts: Arc::new(Mutex::new(HashMap::new())),
             ctx: Arc::new(FakeContext::default()),
         }
     }
 
     #[test]
-    fn pending_hotkey_context_is_consumed_once() {
+    fn hotkey_context_capture_returns_snapshot() {
         let manager = manager_with_fake_context();
         let dir = tempfile::tempdir().expect("tempdir");
-        let task_id = manager
-            .open_hotkey_task(dir.path(), &context_capture::ContextConfig::default(), true)
-            .expect("open");
 
         assert!(manager
-            .take_pending_hotkey_context_for_rewrite(&task_id)
-            .is_some());
-        assert!(manager
-            .take_pending_hotkey_context_for_rewrite(&task_id)
-            .is_none());
+            .capture_hotkey_context(dir.path(), &context_capture::ContextConfig::default())
+            .is_ok());
     }
 }

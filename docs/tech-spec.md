@@ -9,12 +9,25 @@
 系统由前端显式编排，后端提供细粒度命令。后端业务模块按职责拆分：
 
 - `commands`：Tauri 命令入口。
+- `voice_workflow`：核心业务状态机，统一推进录音转录、改写、插入和取消。
 - `audio_capture`：录音会话、音频产物、系统采集适配。
 - `transcription`：统一语音转录模块，选择本地或 API provider。
 - `rewrite`：LLM 改写。
 - `insertion`：复制和自动写入。
 - `ui_events`：前端显示事件 actor。
 - `settings`、`templates`、`history`、`obs`：配置、模板、历史、日志指标。
+
+调用方向：
+
+```text
+Frontend
+-> commands
+-> voice_workflow
+-> audio_capture / transcription / rewrite / insertion
+-> adapters
+```
+
+核心业务状态只由 `voice_workflow` 持有。设备监听、设备缓存、ASR runner、FFmpeg 进程、事件 mailbox 等边缘资源状态保留在对应模块。
 
 ## 2. 命令规范
 
@@ -33,6 +46,19 @@
 - 改写由用户单独触发。
 - 插入由用户单独触发。
 - fixtures 转录走统一转录模块。
+- 命令层只调用 `voice_workflow`，具体能力模块由状态机调用。
+
+核心状态：
+
+- `Idle`
+- `Recording`
+- `Transcribing`
+- `Transcribed`
+- `Rewriting`
+- `Rewritten`
+- `Inserting`
+- `Cancelled`
+- `Failed`
 
 ## 3. 语音转录规范
 
@@ -41,9 +67,9 @@
 - FFmpeg 预处理。
 - provider 选择。
 - 取消控制。
-- 结构化阶段事件。
 - 初始历史记录写入。
 - 性能指标记录。
+- ASR provider 生命周期和进程句柄管理。
 
 本地 provider：
 
@@ -64,6 +90,7 @@ API provider：
 - 模板来自设置或请求参数。
 - 改写成功后更新历史记录。
 - 改写失败返回结构化错误，调用方保留原始转录文本。
+- hotkey 预采集上下文由 `voice_workflow` 保存，并在改写时一次性传入。
 
 ## 5. 插入规范
 
@@ -83,7 +110,7 @@ API provider：
 - `audio.level`
 - `diagnostic.error`
 
-业务模块只持有 `UiEventMailbox`。Tauri `AppHandle.emit` 只在 `ui_events` actor 中集中执行。
+业务阶段事件由 `voice_workflow` 投递。`audio_capture` 只投递 `audio.level`。Tauri `AppHandle.emit` 只在 `ui_events` actor 中集中执行。
 
 ## 7. 存储规范
 

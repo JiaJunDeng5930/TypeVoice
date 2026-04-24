@@ -28,6 +28,11 @@
 
 - Windows 编译闸门（当改动涉及 `apps/desktop/src-tauri` 的 Windows/Tauri 相关代码时）：在 Windows PowerShell 中运行 `.\scripts\windows\windows_compile_gate.ps1`，必须通过。
 - 单元测试（仅纯逻辑、无 GPU/无网络部分）
+- 核心状态机测试（`voice_workflow`）
+  - 断言：初始状态为 `Idle`
+  - 断言：录音、转录、改写、插入、取消的合法流转成功
+  - 断言：重复开始、session 不匹配、非法阶段操作返回结构化错误码
+  - 断言：hotkey 预采集上下文只消费一次
 - 可调试性契约检查（自动化）
   - 断言：并发写入下 `trace.jsonl` 每行可 JSON 解析。
   - 断言：并发写入下 `metrics.jsonl` 每行可 JSON 解析，且包含 `type` 与 `ts_ms`。

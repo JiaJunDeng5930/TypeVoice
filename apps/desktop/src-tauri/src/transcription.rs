@@ -9,7 +9,6 @@ use tokio_util::sync::CancellationToken;
 
 use crate::obs::{metrics, schema::MetricsRecord};
 use crate::ports::{PortError, PortResult};
-use crate::ui_events::{UiEvent, UiEventMailbox, UiEventStatus};
 use crate::{asr_service, data_dir, history, pipeline, remote_asr, settings};
 
 #[cfg(windows)]
@@ -19,6 +18,25 @@ use crate::subprocess::CommandNoConsoleExt;
 pub enum ProviderKind {
     Local,
     Remote,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum MetricStageStatus {
+    Started,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl MetricStageStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Started => "started",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
 }
 
 impl ProviderKind {
@@ -121,18 +139,6 @@ impl TranscriptionService {
         }
     }
 
-    pub fn has_active_task(&self) -> bool {
-        self.inner.lock().unwrap().is_some()
-    }
-
-    pub fn active_task_id_best_effort(&self) -> Option<String> {
-        self.inner
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|task| task.task_id.clone())
-    }
-
     pub fn warmup_asr_best_effort(&self) {
         if !env_bool_default_true("TYPEVOICE_ASR_RESIDENT") {
             return;
@@ -204,26 +210,21 @@ impl TranscriptionService {
 
     pub async fn transcribe_fixture(
         &self,
-        mailbox: &UiEventMailbox,
         req: TranscribeFixtureRequest,
     ) -> PortResult<TranscriptionResult> {
         let input_path = pipeline::fixture_path(&req.fixture_name)
             .map_err(|e| PortError::from_message("E_FIXTURE_NOT_FOUND", e.to_string()))?;
-        self.transcribe_audio(
-            mailbox,
-            TranscriptionInput {
-                task_id: req.task_id,
-                input_path,
-                record_elapsed_ms: 0,
-                record_label: "Record (fixture)".to_string(),
-            },
-        )
+        self.transcribe_audio(TranscriptionInput {
+            task_id: req.task_id,
+            input_path,
+            record_elapsed_ms: 0,
+            record_label: "Record (fixture)".to_string(),
+        })
         .await
     }
 
     pub async fn transcribe_audio(
         &self,
-        mailbox: &UiEventMailbox,
         input: TranscriptionInput,
     ) -> PortResult<TranscriptionResult> {
         let data_dir = data_dir::data_dir()
@@ -253,7 +254,7 @@ impl TranscriptionService {
         }
 
         let result = self
-            .transcribe_audio_inner(&data_dir, mailbox, task_id.clone(), input, opts)
+            .transcribe_audio_inner(&data_dir, task_id.clone(), input, opts)
             .await;
         self.clear_active(&task_id);
         result
@@ -262,28 +263,25 @@ impl TranscriptionService {
     async fn transcribe_audio_inner(
         &self,
         data_dir: &Path,
-        mailbox: &UiEventMailbox,
         task_id: String,
         input: TranscriptionInput,
         opts: TranscriptionOptions,
     ) -> PortResult<TranscriptionResult> {
-        emit_stage(
-            mailbox,
+        emit_stage_metric(
             data_dir,
             &task_id,
             "Record",
-            UiEventStatus::Completed,
+            MetricStageStatus::Completed,
             input.record_label.clone(),
             Some(input.record_elapsed_ms),
             None,
         );
         if self.is_cancelled(&task_id) {
-            emit_stage(
-                mailbox,
+            emit_stage_metric(
                 data_dir,
                 &task_id,
                 "Record",
-                UiEventStatus::Cancelled,
+                MetricStageStatus::Cancelled,
                 "cancelled",
                 None,
                 Some("E_CANCELLED"),
@@ -291,12 +289,11 @@ impl TranscriptionService {
             return Err(PortError::new("E_CANCELLED", "cancelled"));
         }
 
-        emit_stage(
-            mailbox,
+        emit_stage_metric(
             data_dir,
             &task_id,
             "Preprocess",
-            UiEventStatus::Started,
+            MetricStageStatus::Started,
             if opts.preprocess.silence_trim_enabled {
                 "ffmpeg (silence_trim)"
             } else {
@@ -320,15 +317,14 @@ impl TranscriptionService {
             Ok(ms) => ms,
             Err(e) => {
                 let _ = pipeline::cleanup_audio_artifacts(&input.input_path, &wav_path);
-                emit_stage(
-                    mailbox,
+                emit_stage_metric(
                     data_dir,
                     &task_id,
                     "Preprocess",
                     if e.code == "E_CANCELLED" {
-                        UiEventStatus::Cancelled
+                        MetricStageStatus::Cancelled
                     } else {
-                        UiEventStatus::Failed
+                        MetricStageStatus::Failed
                     },
                     e.message.clone(),
                     None,
@@ -337,23 +333,21 @@ impl TranscriptionService {
                 return Err(e);
             }
         };
-        emit_stage(
-            mailbox,
+        emit_stage_metric(
             data_dir,
             &task_id,
             "Preprocess",
-            UiEventStatus::Completed,
+            MetricStageStatus::Completed,
             "ok",
             Some(preprocess_ms),
             None,
         );
 
-        emit_stage(
-            mailbox,
+        emit_stage_metric(
             data_dir,
             &task_id,
             "Transcribe",
-            UiEventStatus::Started,
+            MetricStageStatus::Started,
             if opts.provider == ProviderKind::Remote {
                 "asr(remote)"
             } else {
@@ -369,15 +363,14 @@ impl TranscriptionService {
             Ok(v) => v,
             Err(e) => {
                 let _ = pipeline::cleanup_audio_artifacts(&input.input_path, &wav_path);
-                emit_stage(
-                    mailbox,
+                emit_stage_metric(
                     data_dir,
                     &task_id,
                     "Transcribe",
                     if e.code == "E_CANCELLED" {
-                        UiEventStatus::Cancelled
+                        MetricStageStatus::Cancelled
                     } else {
-                        UiEventStatus::Failed
+                        MetricStageStatus::Failed
                     },
                     e.message.clone(),
                     None,
@@ -387,12 +380,11 @@ impl TranscriptionService {
             }
         };
         let _ = pipeline::cleanup_audio_artifacts(&input.input_path, &wav_path);
-        emit_stage(
-            mailbox,
+        emit_stage_metric(
             data_dir,
             &task_id,
             "Transcribe",
-            UiEventStatus::Completed,
+            MetricStageStatus::Completed,
             format!("rtf={:.3}", transcript.rtf),
             Some(transcript.asr_ms),
             None,
@@ -406,12 +398,6 @@ impl TranscriptionService {
         };
         let result = TranscriptionResult::new(&task_id, transcript.text.clone(), metrics);
         append_history(data_dir, &result)?;
-        mailbox.send(UiEvent::completed(
-            &task_id,
-            "transcription.completed",
-            "transcription completed",
-            serde_json::to_value(&result).unwrap_or_default(),
-        ));
         emit_perf_metrics(
             data_dir,
             &task_id,
@@ -693,38 +679,23 @@ fn append_history(data_dir: &Path, result: &TranscriptionResult) -> PortResult<(
     .map_err(|e| PortError::from_message("E_PERSIST_FAILED", e.to_string()))
 }
 
-fn emit_stage(
-    mailbox: &UiEventMailbox,
+fn emit_stage_metric(
     data_dir: &Path,
     task_id: &str,
     stage: &str,
-    status: UiEventStatus,
+    status: MetricStageStatus,
     message: impl Into<String>,
     elapsed_ms: Option<u128>,
     error_code: Option<&str>,
 ) {
     let message = message.into();
-    mailbox.send(UiEvent::stage_with_elapsed(
-        task_id,
-        stage,
-        status,
-        message.clone(),
-        elapsed_ms,
-        error_code.map(ToOwned::to_owned),
-    ));
     let _ = metrics::emit(
         data_dir,
         MetricsRecord::TaskEvent {
             ts_ms: now_ms(),
             task_id: task_id.to_string(),
             stage: stage.to_string(),
-            status: match status {
-                UiEventStatus::Started => "started",
-                UiEventStatus::Completed => "completed",
-                UiEventStatus::Failed => "failed",
-                UiEventStatus::Cancelled => "cancelled",
-            }
-            .to_string(),
+            status: status.as_str().to_string(),
             elapsed_ms,
             error_code: error_code.map(ToOwned::to_owned),
             message,
