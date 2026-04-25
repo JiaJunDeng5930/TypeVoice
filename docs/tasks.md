@@ -32,5 +32,5 @@
   - 支持复制与自动粘贴。
 
 - [x] 6. 验证体系
-  - `typevoice-tools verify quick`：编译、关键单测、FFmpeg 参数契约、FFmpeg 取消验证。
-  - `typevoice-tools verify full`：编译、完整 Rust 单测、fixtures 预处理验证。
+  - `cargo xtask verify quick`：编译、关键单测、FFmpeg 参数契约、FFmpeg 取消验证。
+  - `cargo xtask verify full`：编译、完整 Rust 单测、fixtures 预处理验证。

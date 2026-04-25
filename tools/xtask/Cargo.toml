@@ -1,5 +1,5 @@
 [package]
-name = "typevoice-tools"
+name = "xtask"
 version = "0.1.0"
 edition = "2021"
 

@@ -11,7 +11,7 @@ Thanks for your interest in TypeVoice.
 
 1. Install dependencies:
    - `cd apps/desktop && npm ci`
-   - `cd /path/to/TypeVoice && cargo run --locked --manifest-path tools/typevoice-tools/Cargo.toml -- fixtures download`
+   - `cd /path/to/TypeVoice && cargo xtask fixtures download`
 2. Start desktop app:
    - `cd apps/desktop && npm run tauri dev`
 
@@ -19,9 +19,9 @@ Thanks for your interest in TypeVoice.
 
 Run at repo root:
 
-- `cargo test --locked --manifest-path tools/typevoice-tools/Cargo.toml`
-- `cargo run --locked --manifest-path tools/typevoice-tools/Cargo.toml -- verify quick`
-- `cargo run --locked --manifest-path tools/typevoice-tools/Cargo.toml -- verify full`
+- `cargo test --locked -p xtask`
+- `cargo xtask verify quick`
+- `cargo xtask verify full`
 
 ## Pull Request Guidelines
 

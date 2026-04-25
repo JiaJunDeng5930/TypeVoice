@@ -18,8 +18,7 @@
 - 配置文件：`.github/dependabot.yml`
 - 监控范围：
   - `npm`：`/apps/desktop`
-  - `cargo`：`/apps/desktop/src-tauri`
-  - `cargo`：`/tools/typevoice-tools`
+  - `cargo`：`/`
 
 ## 当前策略
 

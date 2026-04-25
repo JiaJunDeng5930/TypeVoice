@@ -38,13 +38,13 @@ jobs:
             librsvg2-dev \
             patchelf
       - name: Cargo check
-        working-directory: apps/desktop/src-tauri
-        run: cargo check --locked
-      - name: Cargo test desktop
-        working-directory: apps/desktop/src-tauri
-        run: cargo test --locked
-      - name: Cargo test tools
-        run: cargo test --locked --manifest-path tools/typevoice-tools/Cargo.toml
+        run: cargo check --locked --workspace
+      - name: Cargo test
+        run: cargo test --locked --workspace
+      - name: Prepare Linux FFmpeg toolchain
+        run: cargo xtask toolchain ffmpeg --platform linux-x86_64
+      - name: Xtask quick verify
+        run: cargo xtask verify quick
 
   web:
     runs-on: ubuntu-latest

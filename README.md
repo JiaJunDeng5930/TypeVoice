@@ -22,7 +22,7 @@ npm ci
 
 ```bash
 cd /path/to/TypeVoice
-cargo run --locked -p typevoice-tools -- fixtures download
+cargo xtask fixtures download
 ```
 
 ### 3) 启动桌面应用
@@ -37,9 +37,9 @@ npm run tauri dev
 在仓库根目录执行：
 
 ```bash
-cargo test --locked -p typevoice-tools
-cargo run --locked -p typevoice-tools -- verify quick
-cargo run --locked -p typevoice-tools -- verify full
+cargo test --locked -p xtask
+cargo xtask verify quick
+cargo xtask verify full
 ```
 
 说明：`verify quick` / `verify full` 会按 `scripts/fixtures_manifest.json`

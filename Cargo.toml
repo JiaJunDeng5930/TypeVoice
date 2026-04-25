@@ -8,7 +8,7 @@ members = [
   "crates/typevoice-platform",
   "crates/typevoice-providers",
   "crates/typevoice-engine",
-  "tools/typevoice-tools",
+  "tools/xtask",
 ]
 
 [profile.dev]

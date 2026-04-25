@@ -12,7 +12,7 @@
 - 固定样本音频：`fixtures/` 下的 `zh_10s.ogg`、`zh_60s.ogg`、`zh_5m.ogg`。
   - 音频本体不提交到 git。
   - 下载地址与 `sha256` 固化在 `scripts/fixtures_manifest.json`。
-  - `typevoice-tools verify quick/full` 会在运行前自动下载并校验缺失样本。
+  - `cargo xtask verify quick/full` 会在运行前自动下载并校验缺失样本。
 - 结构化指标：每次验证输出关键指标、成功/失败与错误码。
 
 ## 3. `quick`

@@ -15,7 +15,7 @@ This project redistributes and/or integrates third-party components.
 - License notice:
   - Current bundled builds are GPL route builds (`--enable-gpl` with `libx264/libx265`), therefore distributed under GPLv3-or-later terms for those binaries.
 - Supply-chain verification:
-  - Toolchain scripts verify FFmpeg upstream source archive signature against
+  - `cargo xtask toolchain ffmpeg` verifies FFmpeg upstream source archive signature against
     `https://ffmpeg.org/ffmpeg-devel.asc` and pinned fingerprint
     `FCF986EA15E6E293A5644F10B4322F04D67658D8` before consuming prebuilt binaries.
   - Verification metadata is pinned in `apps/desktop/src-tauri/toolchain/ffmpeg_manifest.json`.
@@ -29,6 +29,6 @@ This project redistributes and/or integrates third-party components.
 This repository also uses third-party dependencies from:
 - npm (`apps/desktop/package-lock.json`)
 - Cargo (`apps/desktop/src-tauri/Cargo.lock`)
-- Cargo (`tools/typevoice-tools/Cargo.lock`)
+- Cargo (`Cargo.lock`)
 
 Their licenses are governed by each upstream package.

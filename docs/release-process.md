@@ -12,9 +12,9 @@
 
 - 更新 `CHANGELOG.md`。
 - 通过仓库验证命令：
-  - `cargo test --locked -p typevoice-tools`
-  - `cargo run --locked -p typevoice-tools -- verify quick`
-  - `cargo run --locked -p typevoice-tools -- verify full`（环境允许时）
+  - `cargo test --locked -p xtask`
+  - `cargo xtask verify quick`
+  - `cargo xtask verify full`（环境允许时）
 - 确认许可证与第三方声明文件仍然完整：
   - `LICENSE`
   - `THIRD_PARTY_NOTICES.md`

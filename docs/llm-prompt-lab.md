@@ -2,14 +2,14 @@
 
 目标：把“测试 LLM 返回 -> 调整 prompt -> 再测”的流程固化为可复用的脚本，不做自动判定（人工判断输出是否符合预期）。
 
-工具：`typevoice-tools llm-prompt-lab`
+工具：`cargo xtask llm-prompt-lab`
 
 ## 1. 基本用法
 
 最小示例（只发 transcript）：
 
 ```bash
-cargo run --locked -p typevoice-tools -- llm-prompt-lab \
+cargo xtask llm-prompt-lab \
   --base-url http://api.server/v1/chat/completions \
   --model gpt-5.3-codex \
   --reasoning-effort medium \
@@ -29,7 +29,7 @@ cargo run --locked -p typevoice-tools -- llm-prompt-lab \
 当前 app 行为（一个 user message 内同时含 transcript + context）：
 
 ```bash
-cargo run --locked -p typevoice-tools -- llm-prompt-lab \
+cargo xtask llm-prompt-lab \
   --base-url http://api.server/v1 \
   --model gpt-5.3-codex \
   --reasoning-effort medium \
@@ -44,7 +44,7 @@ cargo run --locked -p typevoice-tools -- llm-prompt-lab \
 对比模式（拆成两条 user message：第一条只给 transcript，第二条只给 context，并带“不要复述上下文”的固定前缀）：
 
 ```bash
-cargo run --locked -p typevoice-tools -- llm-prompt-lab \
+cargo xtask llm-prompt-lab \
   --base-url http://api.server/v1 \
   --model gpt-5.3-codex \
   --reasoning-effort medium \
@@ -64,7 +64,7 @@ cargo run --locked -p typevoice-tools -- llm-prompt-lab \
 
 ```bash
 export EDITOR=vim
-cargo run --locked -p typevoice-tools -- llm-prompt-lab \
+cargo xtask llm-prompt-lab \
   --base-url http://api.server/v1 \
   --model gpt-5.3-codex \
   --reasoning-effort medium \

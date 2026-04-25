@@ -9,8 +9,8 @@
 - `apps/desktop/`: Tauri desktop app.
 - `apps/desktop/src/`: React + TypeScript UI.
 - `apps/desktop/src-tauri/src/`: Rust backend (FFmpeg orchestration, settings, LLM, ASR providers).
-- `tools/typevoice-tools/`: Rust CLI utilities for verification, fixtures, and LLM prompt experiments.
-- `scripts/`: Windows gate scripts and fixture manifest.
+- `tools/xtask/`: Rust automation entrypoint for verification, fixtures, toolchain setup, gates, and LLM prompt experiments.
+- `scripts/`: fixture manifest.
 - `docs/`: frozen specs/gates; treat docs as the source of truth for MVP constraints.
 
 Local-only artifacts (gitignored): `fixtures/` (audio), `models/` (downloaded model), `tmp/`, `metrics/`.
@@ -24,19 +24,19 @@ Local-only artifacts (gitignored): `fixtures/` (audio), `models/` (downloaded mo
   - `npm run build`: `tsc` typecheck + Vite build.
 - Verification gates:
   - Windows one-command gate below is the primary gate.
-  - Rust tools are available through `tools/typevoice-tools`.
-  - `cargo run --locked -p typevoice-tools -- verify quick`
-  - `cargo run --locked -p typevoice-tools -- verify full`
+  - Rust automation is available through `tools/xtask`.
+  - `cargo xtask verify quick`
+  - `cargo xtask verify full`
 - Windows one-command gate:
-  - `powershell -ExecutionPolicy Bypass -File .\\scripts\\windows\\windows_gate.ps1`
+  - `cargo xtask gate windows`
 
 ## 固定动作（每次功能实现后必须执行）
 
 - 先提交：按 Conventional Commit 规范提交本次变更。
 - 同步 Windows 工作区到最新源码后按文档一键网关编译并启动链路：
-  - `powershell -ExecutionPolicy Bypass -File .\\scripts\\windows\\windows_gate.ps1`
-- `windows_gate.ps1` 会执行 `npm run tauri dev`；若在 WSL 下触发 Windows 命令，使用：
-  - `/mnt/c/Windows/System32/cmd.exe /d /c "cd /d D:\\Projects\\TypeVoice\\apps\\desktop && set RUST_BACKTRACE=1 && set RUST_LOG=debug && npm run tauri dev"`
+  - `cargo xtask gate windows`
+- 若在 WSL 下触发 Windows 命令，使用：
+  - `/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Set-Location D:\\Projects\\TypeVoice; cargo xtask gate windows"`
 
 ## 文档命令零偏移禁制令（最高优先级）
 
@@ -77,7 +77,7 @@ Local-only artifacts (gitignored): `fixtures/` (audio), `models/` (downloaded mo
 ## Testing Guidelines
 
 - Run Rust tests: `cargo test --locked --workspace` from the workspace root.
-- Run tools tests: `cargo test --locked -p typevoice-tools`.
+- Run xtask tests: `cargo test --locked -p xtask`.
 - Run frontend build: `npm run build` in `apps/desktop/`.
 
 ## Commit & Pull Request Guidelines
@@ -103,17 +103,16 @@ Local-only artifacts (gitignored): `fixtures/` (audio), `models/` (downloaded mo
 |.github:{ISSUE_TEMPLATE/,workflows/,dependabot.yml,PULL_REQUEST_TEMPLATE.md,release.yml}
 |apps:{desktop/}
 |docs:{architecture.md,base-spec.md,fixtures-sources.md,index.md,llm-prompt-lab.md,perf-spike.md,privacy-data-flow.md,release-process.md,repository-automation.md,roadmap.md,tasks.md,tech-spec.md,verification.md,windows-dev.md,windows-gate.md}
-|scripts:{windows/,download_ffmpeg_toolchain.sh,fixtures_manifest.json}
-|tools:{typevoice-tools/}
+|scripts:{fixtures_manifest.json}
+|tools:{xtask/}
 |.github/ISSUE_TEMPLATE:{bug_report.md,config.yml,feature_request.md}
 |.github/workflows:{ci.yml,codeql.yml,scorecards.yml}
 |apps/desktop:{public/,src-tauri/,src/,.gitignore,index.html,package-lock.json,package.json,README.md,tsconfig.json,tsconfig.node.json,vite.config.ts}
-|scripts/windows:{download_ffmpeg_toolchain.ps1,run-latest.ps1,windows_compile_gate.ps1,windows_gate.ps1}
 |apps/desktop/public:{fonts/,tauri.svg,vite.svg}
 |apps/desktop/src:{assets/,domain/,infra/,lib/,screens/,styles/,ui/,App.tsx,main.tsx,OverlayApp.tsx,types.ts,vite-env.d.ts}
 |apps/desktop/src-tauri:{.cargo/,capabilities/,gen/,icons/,src/,toolchain/,.gitignore,build.rs,Cargo.lock,Cargo.toml,tauri.conf.json}
-|tools/typevoice-tools:{src/,Cargo.lock,Cargo.toml}
-|tools/typevoice-tools/src:{main.rs}
+|tools/xtask:{src/,Cargo.toml}
+|tools/xtask/src:{main.rs}
 |apps/desktop/public/fonts:{OFL.txt,Silkscreen-Bold.ttf,Silkscreen-Regular.ttf}
 |apps/desktop/src-tauri/.cargo:{config.toml}
 |apps/desktop/src-tauri/capabilities:{default.json}
