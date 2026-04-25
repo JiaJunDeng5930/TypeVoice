@@ -156,7 +156,7 @@ Provider：
 
 ## 5. 验证约束
 
-- 后端必须通过 `cargo check --locked`。
+- 后端必须通过 `cargo check --locked --workspace`。
 - 前端必须通过 `npm run build`。
 - Rust 验证工具和后端 Rust 单测保持通过。
 - Windows 一键网关仍作为功能实现后的最终验证入口。

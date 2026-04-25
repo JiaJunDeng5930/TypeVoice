@@ -45,11 +45,11 @@ fn repo_root() -> Result<PathBuf> {
     if let Ok(p) = std::env::var("TYPEVOICE_REPO_ROOT") {
         return Ok(PathBuf::from(p));
     }
-    // CARGO_MANIFEST_DIR = .../TypeVoice/apps/desktop/src-tauri
+    // CARGO_MANIFEST_DIR = .../TypeVoice/crates/typevoice-platform
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let root = dir
         .ancestors()
-        .nth(3)
+        .nth(2)
         .ok_or_else(|| anyhow!("failed to locate repo root from CARGO_MANIFEST_DIR"))?;
     Ok(root.to_path_buf())
 }

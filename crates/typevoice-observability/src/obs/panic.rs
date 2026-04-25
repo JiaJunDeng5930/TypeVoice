@@ -21,7 +21,7 @@ pub fn install_best_effort() {
         })
         .to_string();
 
-        if let Ok(dir) = crate::data_dir::data_dir() {
+        if let Some(dir) = crate::obs::runtime_data_dir() {
             let _ = std::fs::create_dir_all(&dir);
             let path = panic_trace_path(&dir);
             if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {

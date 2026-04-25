@@ -25,8 +25,8 @@ Local-only artifacts (gitignored): `fixtures/` (audio), `models/` (downloaded mo
 - Verification gates:
   - Windows one-command gate below is the primary gate.
   - Rust tools are available through `tools/typevoice-tools`.
-  - `cargo run --locked --manifest-path tools/typevoice-tools/Cargo.toml -- verify quick`
-  - `cargo run --locked --manifest-path tools/typevoice-tools/Cargo.toml -- verify full`
+  - `cargo run --locked -p typevoice-tools -- verify quick`
+  - `cargo run --locked -p typevoice-tools -- verify full`
 - Windows one-command gate:
   - `powershell -ExecutionPolicy Bypass -File .\\scripts\\windows\\windows_gate.ps1`
 
@@ -72,12 +72,12 @@ Local-only artifacts (gitignored): `fixtures/` (audio), `models/` (downloaded mo
 
 - Follow existing style; keep diffs small and readable.
 - TypeScript: strict mode is enabled; prefer explicit types at boundaries; components `PascalCase.tsx`.
-- Rust: run `cargo fmt` (in `apps/desktop/src-tauri/`) before submitting.
+- Rust: run `cargo fmt --all` from the workspace root before submitting.
 
 ## Testing Guidelines
 
-- Run Rust tests: `cargo test --locked` in `apps/desktop/src-tauri/`.
-- Run tools tests: `cargo test --locked --manifest-path tools/typevoice-tools/Cargo.toml`.
+- Run Rust tests: `cargo test --locked --workspace` from the workspace root.
+- Run tools tests: `cargo test --locked -p typevoice-tools`.
 - Run frontend build: `npm run build` in `apps/desktop/`.
 
 ## Commit & Pull Request Guidelines

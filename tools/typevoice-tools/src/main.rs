@@ -14,6 +14,9 @@ use reqwest::blocking::Client;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use typevoice_core::context_pack::{
+    self, ContextBudget, ContextSnapshot, HistorySnippet, PrevWindowInfo,
+};
 
 #[derive(Parser)]
 #[command(name = "typevoice-tools")]
@@ -881,6 +884,12 @@ fn build_messages(
     max_chars_clipboard: usize,
 ) -> Vec<Value> {
     let mut messages = vec![json!({"role": "system", "content": system_prompt})];
+    let snapshot = context_snapshot_from_inputs(ctx);
+    let budget = context_budget_from_limits(
+        max_history_items,
+        max_chars_per_history,
+        max_chars_clipboard,
+    );
     let context_text = format_inline_context(
         ctx,
         max_history_items,
@@ -889,9 +898,7 @@ fn build_messages(
     );
     match inject_mode {
         InjectMode::InlineOneUser => {
-            let user = format!("### TRANSCRIPT\n{}\n\n{}", transcript.trim(), context_text)
-                .trim()
-                .to_string();
+            let user = context_pack::prepare(transcript, &snapshot, &budget).user_text;
             messages.push(json!({"role": "user", "content": user}));
         }
         InjectMode::TwoUserMessages => {
@@ -904,6 +911,51 @@ fn build_messages(
         }
     }
     messages
+}
+
+fn context_snapshot_from_inputs(ctx: &ContextInputs) -> ContextSnapshot {
+    ContextSnapshot {
+        recent_history: ctx
+            .history_lines
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, line)| {
+                let text = line.trim();
+                if text.is_empty() {
+                    return None;
+                }
+                Some(HistorySnippet {
+                    created_at_ms: idx as i64,
+                    asr_text: text.to_string(),
+                    final_text: text.to_string(),
+                    template_id: None,
+                })
+            })
+            .collect(),
+        clipboard_text: ctx.clipboard.clone(),
+        prev_window: match (&ctx.prev_title, &ctx.prev_process) {
+            (None, None) => None,
+            (title, process) => Some(PrevWindowInfo {
+                title: title.clone(),
+                process_image: process.clone(),
+            }),
+        },
+        screenshot: None,
+    }
+}
+
+fn context_budget_from_limits(
+    max_history_items: usize,
+    max_chars_per_history: usize,
+    max_chars_clipboard: usize,
+) -> ContextBudget {
+    ContextBudget {
+        max_history_items,
+        max_chars_per_history_item: max_chars_per_history,
+        max_chars_clipboard,
+        max_total_context_chars: 100_000,
+        ..ContextBudget::default()
+    }
 }
 
 fn format_inline_context(

@@ -1,36 +1,19 @@
-mod audio_capture;
-mod audio_device_notifications_windows;
-mod audio_devices_windows;
 mod commands;
-mod context_capture;
+pub use typevoice_core::{context_pack, ports};
+pub use typevoice_engine::{
+    audio_capture, rewrite, task_manager, transcription, transcription_actor, ui_events,
+    voice_tasks, voice_workflow, RuntimeState,
+};
+pub use typevoice_observability::obs;
 #[cfg(windows)]
-mod context_capture_windows;
-mod context_pack;
-mod data_dir;
-mod doubao_asr;
-mod export;
-mod history;
+pub use typevoice_platform::context_capture_windows;
+pub use typevoice_platform::{
+    audio_device_notifications_windows, audio_devices_windows, context_capture, export, insertion,
+    pipeline, record_input, record_input_cache, subprocess, toolchain,
+};
+pub use typevoice_providers::{doubao_asr, llm, remote_asr};
+pub use typevoice_storage::{data_dir, history, settings, templates};
 mod hotkeys;
-mod insertion;
-mod llm;
-mod obs;
-mod pipeline;
-mod ports;
-mod record_input;
-mod record_input_cache;
-mod remote_asr;
-mod rewrite;
-mod safe_print;
-mod settings;
-mod subprocess;
-mod task_manager;
-mod templates;
-mod toolchain;
-mod transcription;
-mod transcription_actor;
-mod ui_events;
-mod voice_tasks;
-mod voice_workflow;
 
 use history::HistoryItem;
 use llm::ApiKeyStatus;
@@ -41,27 +24,6 @@ use task_manager::TaskManager;
 use tauri::Emitter;
 use tauri::Manager;
 use templates::PromptTemplate;
-
-pub(crate) struct RuntimeState {
-    toolchain: std::sync::Mutex<toolchain::ToolchainStatus>,
-}
-
-impl RuntimeState {
-    fn new() -> Self {
-        Self {
-            toolchain: std::sync::Mutex::new(toolchain::ToolchainStatus::pending()),
-        }
-    }
-
-    fn set_toolchain(&self, st: toolchain::ToolchainStatus) {
-        let mut g = self.toolchain.lock().unwrap();
-        *g = st;
-    }
-
-    pub(crate) fn get_toolchain(&self) -> toolchain::ToolchainStatus {
-        self.toolchain.lock().unwrap().clone()
-    }
-}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct OverlayState {

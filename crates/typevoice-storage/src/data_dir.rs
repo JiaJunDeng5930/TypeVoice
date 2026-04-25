@@ -10,7 +10,7 @@ pub fn data_dir() -> Result<PathBuf> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let root = dir
         .ancestors()
-        .nth(3)
+        .nth(2)
         .ok_or_else(|| anyhow!("failed to locate repo root"))?;
     Ok(root.join("tmp").join("typevoice-data"))
 }

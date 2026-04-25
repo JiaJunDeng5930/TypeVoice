@@ -85,7 +85,15 @@ fn current_spec() -> Result<&'static PlatformSpec> {
 }
 
 fn source_toolchain_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir
+        .ancestors()
+        .nth(2)
+        .unwrap_or(manifest_dir.as_path());
+    repo_root
+        .join("apps")
+        .join("desktop")
+        .join("src-tauri")
         .join("toolchain")
         .join("bin")
 }

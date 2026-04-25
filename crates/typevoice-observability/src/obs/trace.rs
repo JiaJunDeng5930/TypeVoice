@@ -51,7 +51,7 @@ fn clamp_chars(s: &str, max_chars: usize) -> String {
     out
 }
 
-pub(crate) fn redact_user_paths(s: &str) -> String {
+pub fn redact_user_paths(s: &str) -> String {
     fn scrub_after(hay: &str, marker: &str, sep: char) -> String {
         let mut out = String::with_capacity(hay.len());
         let mut idx = 0usize;

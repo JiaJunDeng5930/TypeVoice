@@ -3,7 +3,7 @@
 ## CI
 
 - 配置文件：`.github/workflows/ci.yml`
-- `rust` job 运行在 `ubuntu-latest`，在执行 `cargo check --locked` 之前必须先安装 Tauri Linux 构建依赖：
+- `rust` job 运行在 `ubuntu-latest`，在执行 `cargo check --locked --workspace` 之前必须先安装 Tauri Linux 构建依赖：
   - `libglib2.0-dev`
   - `libgtk-3-dev`
   - `libwebkit2gtk-4.1-dev`

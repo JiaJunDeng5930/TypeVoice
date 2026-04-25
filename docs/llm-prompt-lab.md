@@ -9,7 +9,7 @@
 最小示例（只发 transcript）：
 
 ```bash
-cargo run --locked --manifest-path tools/typevoice-tools/Cargo.toml -- llm-prompt-lab \
+cargo run --locked -p typevoice-tools -- llm-prompt-lab \
   --base-url http://api.server/v1/chat/completions \
   --model gpt-5.3-codex \
   --reasoning-effort medium \
@@ -29,7 +29,7 @@ cargo run --locked --manifest-path tools/typevoice-tools/Cargo.toml -- llm-promp
 当前 app 行为（一个 user message 内同时含 transcript + context）：
 
 ```bash
-cargo run --locked --manifest-path tools/typevoice-tools/Cargo.toml -- llm-prompt-lab \
+cargo run --locked -p typevoice-tools -- llm-prompt-lab \
   --base-url http://api.server/v1 \
   --model gpt-5.3-codex \
   --reasoning-effort medium \
@@ -44,7 +44,7 @@ cargo run --locked --manifest-path tools/typevoice-tools/Cargo.toml -- llm-promp
 对比模式（拆成两条 user message：第一条只给 transcript，第二条只给 context，并带“不要复述上下文”的固定前缀）：
 
 ```bash
-cargo run --locked --manifest-path tools/typevoice-tools/Cargo.toml -- llm-prompt-lab \
+cargo run --locked -p typevoice-tools -- llm-prompt-lab \
   --base-url http://api.server/v1 \
   --model gpt-5.3-codex \
   --reasoning-effort medium \
@@ -64,7 +64,7 @@ cargo run --locked --manifest-path tools/typevoice-tools/Cargo.toml -- llm-promp
 
 ```bash
 export EDITOR=vim
-cargo run --locked --manifest-path tools/typevoice-tools/Cargo.toml -- llm-prompt-lab \
+cargo run --locked -p typevoice-tools -- llm-prompt-lab \
   --base-url http://api.server/v1 \
   --model gpt-5.3-codex \
   --reasoning-effort medium \

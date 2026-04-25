@@ -13,7 +13,7 @@ pub struct AudioEndpointInfo {
 #[cfg(windows)]
 mod imp {
     use super::{AudioEndpointInfo, DefaultCaptureRole};
-    use windows::core::{Interface, HRESULT, HSTRING, PWSTR};
+    use windows::core::{HRESULT, HSTRING, PWSTR};
     use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
     use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
     use windows::Win32::Media::Audio::{
