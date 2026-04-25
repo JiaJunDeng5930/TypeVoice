@@ -3,7 +3,6 @@ import { defaultTauriGateway, type TauriGateway } from "../infra/runtimePorts";
 import type {
   ApiKeyStatus,
   AudioCaptureDevice,
-  ModelStatus,
   PromptTemplate,
   Settings,
 } from "../types";
@@ -32,7 +31,6 @@ const REASONING: PixelSelectOption[] = [
 ];
 
 const ASR_PROVIDERS: PixelSelectOption[] = [
-  { value: "local", label: "local (on-device)" },
   { value: "doubao", label: "doubao streaming" },
   { value: "remote", label: "remote (cloud)" },
 ];
@@ -98,8 +96,7 @@ export function SettingsScreen({
   onHistoryCleared,
   gateway = defaultTauriGateway,
 }: Props) {
-  const [asrModel, setAsrModel] = useState("");
-  const [asrProvider, setAsrProvider] = useState("local");
+  const [asrProvider, setAsrProvider] = useState("doubao");
   const [remoteAsrUrl, setRemoteAsrUrl] = useState("https://api.server/transcribe");
   const [remoteAsrModel, setRemoteAsrModel] = useState("");
   const [remoteAsrConcurrency, setRemoteAsrConcurrency] = useState("4");
@@ -135,8 +132,6 @@ export function SettingsScreen({
     useState(true);
   const [rewriteIncludeGlossary, setRewriteIncludeGlossary] = useState(true);
 
-  const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
-
   const [templates, setTemplates] = useState<PromptTemplate[]>([]);
   const [tplId, setTplId] = useState("");
   const [tplDraft, setTplDraft] = useState("");
@@ -149,13 +144,10 @@ export function SettingsScreen({
 
   useEffect(() => {
     if (!settings) return;
-    setAsrModel(settings.asr_model ?? "");
     setAsrProvider(
       settings.asr_provider === "remote"
         ? "remote"
-        : settings.asr_provider === "doubao"
-          ? "doubao"
-          : "local",
+        : "doubao",
     );
     setRemoteAsrUrl(settings.remote_asr_url?.trim() || "https://api.server/transcribe");
     setRemoteAsrModel(settings.remote_asr_model ?? "");
@@ -227,7 +219,6 @@ export function SettingsScreen({
 
   useEffect(() => {
     (async () => {
-      await refreshModelStatus();
       await refreshTemplates();
       await refreshAudioCaptureDevices();
     })();
@@ -308,28 +299,8 @@ export function SettingsScreen({
     }
   }
 
-  async function refreshModelStatus() {
-    try {
-      const st = (await gateway.invoke("asr_model_status")) as ModelStatus;
-      setModelStatus(st);
-    } catch {
-      setModelStatus(null);
-    }
-  }
-
-  async function downloadModel() {
-    pushToast("DOWNLOADING...", "default");
-    try {
-      const st = (await gateway.invoke("download_asr_model")) as ModelStatus;
-      setModelStatus(st);
-      pushToast(st.ok ? "MODEL OK" : "MODEL FAILED", st.ok ? "ok" : "danger");
-    } catch {
-      pushToast("MODEL FAILED", "danger");
-    }
-  }
-
   async function saveAsr() {
-    const provider = asrProvider === "remote" ? "remote" : asrProvider === "doubao" ? "doubao" : "local";
+    const provider = asrProvider === "remote" ? "remote" : "doubao";
     const concurrencyNum = Number(remoteAsrConcurrency);
     if (provider === "remote" && !remoteAsrUrl.trim()) {
       pushToast("REMOTE ASR URL REQUIRED", "danger");
@@ -342,7 +313,6 @@ export function SettingsScreen({
     const normalizedConcurrency = Math.max(1, Math.min(16, Math.round(concurrencyNum)));
     try {
       await savePatch({
-        asr_model: asrModel.trim() ? asrModel.trim() : null,
         asr_provider: provider,
         remote_asr_url: remoteAsrUrl.trim() ? remoteAsrUrl.trim() : null,
         remote_asr_model: remoteAsrModel.trim() ? remoteAsrModel.trim() : null,
@@ -350,7 +320,6 @@ export function SettingsScreen({
       });
       setRemoteAsrConcurrency(String(normalizedConcurrency));
       pushToast("SAVED", "ok");
-      await refreshModelStatus();
     } catch {
       pushToast("SAVE FAILED", "danger");
     }
@@ -739,51 +708,19 @@ export function SettingsScreen({
     if (asrProvider === "doubao") {
       return "DOUBAO STREAMING  wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async";
     }
-    if (asrProvider === "remote") {
-      return `REMOTE ${remoteAsrUrl.trim() || "https://api.server/transcribe"}`;
-    }
-    if (!modelStatus) return "UNKNOWN";
-
-    const version = modelStatus.model_version ? `  ${modelStatus.model_version}` : "";
-    const location = `  ${modelStatus.model_dir}`;
-
-    if (modelStatus.ok) {
-      switch (modelStatus.reason) {
-        case "manifest.json_missing":
-          return `OK${version}  manifest.json_missing (integrity checks skipped, ASR still usable)${location}`;
-        case "remote_model_not_locally_verified":
-          return `OK${version}  remote model id, not locally verified${location}`;
-        case null:
-        case undefined:
-          return `OK${version}${location}`;
-        default:
-          return `OK${version}  ${modelStatus.reason}${location}`;
-      }
-    }
-
-    return `FAILED${version}  ${modelStatus.reason || ""}${location}`;
-  }, [asrProvider, modelStatus, remoteAsrUrl]);
+    return `REMOTE ${remoteAsrUrl.trim() || "https://api.server/transcribe"}`;
+  }, [asrProvider, remoteAsrUrl]);
 
   return (
     <div className="stack">
       <div className="card">
         <div className="sectionTitle">ASR</div>
         <div className="row">
-          <PixelButton onClick={downloadModel} tone="accent" disabled={asrProvider !== "local"}>
-            DOWNLOAD
-          </PixelButton>
-          <PixelButton onClick={refreshModelStatus}>REFRESH</PixelButton>
           <div className="muted">{asrStatusText}</div>
         </div>
         <div style={{ marginTop: 12 }} className="stack">
           <PixelSelect value={asrProvider} onChange={setAsrProvider} options={ASR_PROVIDERS} />
-          {asrProvider === "local" ? (
-            <PixelInput
-              value={asrModel}
-              onChange={setAsrModel}
-              placeholder="asr_model (local dir or HF repo id)"
-            />
-          ) : asrProvider === "doubao" ? (
+          {asrProvider === "doubao" ? (
             <>
               <div className="sectionTitle" style={{ marginTop: 8 }}>
                 DOUBAO ASR KEY

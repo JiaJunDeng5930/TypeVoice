@@ -24,18 +24,11 @@ This project redistributes and/or integrates third-party components.
   - `https://johnvansickle.com/ffmpeg/release-source/`
   - Upstream FFmpeg legal page: `https://ffmpeg.org/legal.html`
 
-## Qwen3-ASR Model
-
-- Component: `Qwen/Qwen3-ASR-0.6B`
-- Download script: `scripts/download_asr_model.py`
-- Source: `https://huggingface.co/Qwen/Qwen3-ASR-0.6B`
-- Declared license: `Apache-2.0`
-
 ## npm/cargo/pip dependencies
 
 This repository also uses third-party dependencies from:
 - npm (`apps/desktop/package-lock.json`)
 - Cargo (`apps/desktop/src-tauri/Cargo.lock`)
-- pip (`requirements.txt`, `requirements-asr.txt`)
+- pip (`requirements.txt`)
 
 Their licenses are governed by each upstream package.

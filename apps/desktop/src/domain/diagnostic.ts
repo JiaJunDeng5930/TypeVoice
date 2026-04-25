@@ -36,7 +36,6 @@ function titleForCode(code: string, fallback: string): string {
   if (code === "E_TOOLCHAIN_NOT_READY") return "TOOLCHAIN NOT READY";
   if (code === "E_TOOLCHAIN_CHECKSUM_MISMATCH") return "TOOLCHAIN CHECKSUM ERROR";
   if (code === "E_TOOLCHAIN_VERSION_MISMATCH") return "TOOLCHAIN VERSION ERROR";
-  if (code === "E_PYTHON_NOT_READY") return "PYTHON NOT READY";
   if (code === "E_CONTEXT_CAPTURE_REQUIRED") return "CONTEXT CAPTURE REQUIRED";
   if (code === "E_CONTEXT_CAPTURE_NOT_FOUND") return "CONTEXT CAPTURE EXPIRED";
   if (code === "E_CONTEXT_CAPTURE_INVALID") return "CONTEXT CAPTURE INVALID";
@@ -53,11 +52,10 @@ function titleForCode(code: string, fallback: string): string {
 
 function actionHintForCode(code: string): string {
   if (code.startsWith("E_TOOLCHAIN_")) return "RUN WINDOWS GATE TO REPAIR TOOLCHAIN";
-  if (code === "E_PYTHON_NOT_READY") return "CHECK PYTHON ENV (.venv / TYPEVOICE_PYTHON)";
   if (code.startsWith("E_RECORD_")) return "CHECK MICROPHONE INPUT SPEC / DEVICE";
   if (code.startsWith("E_FFMPEG_")) return "CHECK FFMPEG TOOLCHAIN";
   if (code.startsWith("E_ASR_") || code === "E_MODEL_LOAD_FAILED") {
-    return "CHECK ASR MODEL + CUDA RUNTIME";
+    return "CHECK ASR PROVIDER SETTINGS";
   }
   if (code.startsWith("HTTP_")) return "CHECK LLM ENDPOINT / API KEY";
   if (code === "E_HOTKEY_EVENT_INCOMPLETE") return "CHECK HOTKEY EVENT PAYLOAD IN TRACE.JSONL";

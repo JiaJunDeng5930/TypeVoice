@@ -193,35 +193,6 @@ pub fn cleanup_audio_artifacts(input_audio: &Path, wav_path: &Path) -> Result<()
     Ok(())
 }
 
-pub fn resolve_asr_model_id(data_dir: &Path) -> Result<String> {
-    // Priority:
-    // 1) Settings in data dir
-    // 2) Local repo models/Qwen3-ASR-0.6B
-    // 3) Env override TYPEVOICE_ASR_MODEL
-    // 4) Default HF repo id
-    if let Ok(s) = crate::settings::load_settings(data_dir) {
-        if let Some(m) = s.asr_model {
-            if !m.trim().is_empty() {
-                return Ok(m);
-            }
-        }
-    }
-
-    let root = repo_root()?;
-    let local = root.join("models").join("Qwen3-ASR-0.6B");
-    if local.exists() {
-        return Ok(local.display().to_string());
-    }
-
-    if let Ok(m) = std::env::var("TYPEVOICE_ASR_MODEL") {
-        if !m.trim().is_empty() {
-            return Ok(m);
-        }
-    }
-
-    Ok("Qwen/Qwen3-ASR-0.6B".to_string())
-}
-
 pub fn preprocess_ffmpeg_cancellable(
     data_dir: &Path,
     task_id: &str,

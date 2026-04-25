@@ -6,7 +6,7 @@
 
 - 本地录音 -> FFmpeg 预处理 -> ASR 转写 -> 可选 LLM 改写 -> 复制/自动粘贴
 - 历史记录仅保存文本与元信息，不保存音频
-- 支持本地 ASR（默认）与远程 ASR（可选）
+- 支持 Doubao 流式 ASR 与远程 HTTP ASR
 - 提供 `quick/full` 验证脚本
 
 ## 快速开始
@@ -18,29 +18,21 @@ cd apps/desktop
 npm ci
 ```
 
-### 2) 准备 Python 环境
+### 2) 准备 Python 验证环境
 
 ```bash
 cd /path/to/TypeVoice
 python3 -m venv .venv
 ./.venv/bin/python -m pip install -r requirements.txt
-# 需要本地 ASR 时再安装运行时依赖
-./.venv/bin/python -m pip install -r requirements-asr.txt
 ```
 
-### 3) 下载本地 ASR 模型（可选）
-
-```bash
-./.venv/bin/python scripts/download_asr_model.py
-```
-
-### 4) 下载验证 fixtures（建议）
+### 3) 下载验证 fixtures（建议）
 
 ```bash
 ./.venv/bin/python scripts/download_fixtures.py
 ```
 
-### 5) 启动桌面应用
+### 4) 启动桌面应用
 
 ```bash
 cd apps/desktop
@@ -71,8 +63,8 @@ Windows 一键门禁参见 [docs/windows-gate.md](./docs/windows-gate.md)。
 
 ## 隐私与数据流
 
-- 默认本地 ASR：音频在本机处理，不上传音频。
-- 启用远程 ASR：音频会发送到你配置的远程 ASR 服务。
+- 使用 Doubao 流式 ASR：录音音频会发送到 Doubao ASR 服务。
+- 使用远程 HTTP ASR：音频会发送到你配置的远程 ASR 服务。
 - 启用 LLM 改写：仅发送转写文本与必要上下文，不发送音频。
 - API Key 存储在系统安全存储（keyring）中，不写入日志。
 

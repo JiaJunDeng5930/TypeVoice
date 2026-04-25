@@ -9,15 +9,15 @@ use tokio_util::sync::CancellationToken;
 
 use crate::obs::{metrics, schema::MetricsRecord};
 use crate::ports::{PortError, PortResult};
-use crate::{asr_service, data_dir, history, pipeline, remote_asr, settings};
+use crate::{data_dir, history, pipeline, remote_asr, settings};
 
 #[cfg(windows)]
 use crate::subprocess::CommandNoConsoleExt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderKind {
-    Local,
     Remote,
+    Doubao,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -44,14 +44,14 @@ impl ProviderKind {
         if raw.trim().eq_ignore_ascii_case("remote") {
             Self::Remote
         } else {
-            Self::Local
+            Self::Doubao
         }
     }
 
     fn as_str(self) -> &'static str {
         match self {
-            Self::Local => "local",
             Self::Remote => "remote",
+            Self::Doubao => "doubao",
         }
     }
 }
@@ -122,68 +122,18 @@ struct ActiveTranscription {
     task_id: String,
     token: CancellationToken,
     ffmpeg_pid: Arc<Mutex<Option<u32>>>,
-    asr_pid: Arc<Mutex<Option<u32>>>,
 }
 
 #[derive(Clone)]
 pub struct TranscriptionService {
     inner: Arc<Mutex<Option<ActiveTranscription>>>,
-    asr: Arc<asr_service::AsrService>,
 }
 
 impl TranscriptionService {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(None)),
-            asr: Arc::new(asr_service::AsrService::new()),
         }
-    }
-
-    pub fn warmup_asr_best_effort(&self) {
-        if !env_bool_default_true("TYPEVOICE_ASR_RESIDENT") {
-            return;
-        }
-        let this = self.clone();
-        let _ = std::thread::Builder::new()
-            .name("asr_warmup".to_string())
-            .spawn(move || {
-                if let Ok(dir) = data_dir::data_dir() {
-                    let s = settings::load_settings(&dir).unwrap_or_default();
-                    if settings::resolve_asr_provider(&s) != "local" {
-                        return;
-                    }
-                    let _ = this.asr.ensure_started(&dir);
-                }
-            });
-    }
-
-    pub fn restart_asr_best_effort(&self, reason: &str) {
-        if !env_bool_default_true("TYPEVOICE_ASR_RESIDENT") {
-            return;
-        }
-        let this = self.clone();
-        let reason = reason.to_string();
-        let _ = std::thread::Builder::new()
-            .name("asr_restart".to_string())
-            .spawn(move || {
-                if let Ok(dir) = data_dir::data_dir() {
-                    let s = settings::load_settings(&dir).unwrap_or_default();
-                    if settings::resolve_asr_provider(&s) != "local" {
-                        return;
-                    }
-                    let _ = this.asr.restart(&dir, &reason);
-                }
-            });
-    }
-
-    pub fn kill_asr_best_effort(&self, reason: &str) {
-        let asr = self.asr.clone();
-        let reason = reason.to_string();
-        let _ = std::thread::Builder::new()
-            .name("asr_kill".to_string())
-            .spawn(move || {
-                asr.kill_best_effort(&reason);
-            });
     }
 
     pub fn cancel(&self, task_id: Option<&str>) -> PortResult<()> {
@@ -200,9 +150,6 @@ impl TranscriptionService {
         }
         active.token.cancel();
         if let Some(pid) = *active.ffmpeg_pid.lock().unwrap() {
-            let _ = kill_pid(pid);
-        }
-        if let Some(pid) = *active.asr_pid.lock().unwrap() {
             let _ = kill_pid(pid);
         }
         Ok(())
@@ -249,7 +196,6 @@ impl TranscriptionService {
                 task_id: task_id.clone(),
                 token: CancellationToken::new(),
                 ffmpeg_pid: Arc::new(Mutex::new(None)),
-                asr_pid: Arc::new(Mutex::new(None)),
             });
         }
 
@@ -348,11 +294,7 @@ impl TranscriptionService {
             &task_id,
             "Transcribe",
             MetricStageStatus::Started,
-            if opts.provider == ProviderKind::Remote {
-                "asr(remote)"
-            } else {
-                "asr(local)"
-            },
+            format!("asr({})", opts.provider.as_str()),
             None,
             None,
         );
@@ -405,7 +347,6 @@ impl TranscriptionService {
             &opts.preprocess,
             preprocess_ms,
             &transcript,
-            self.asr.warmup_ms(),
         );
         Ok(result)
     }
@@ -464,8 +405,10 @@ impl TranscriptionService {
             self.run_remote_transcriber(data_dir, task_id, wav_path, opts)
                 .await
         } else {
-            self.run_local_transcriber(data_dir, task_id, wav_path)
-                .await
+            Err(PortError::new(
+                "E_DOUBAO_FIXTURE_UNSUPPORTED",
+                "doubao transcription is available through streaming recording",
+            ))
         }
     }
 
@@ -489,7 +432,7 @@ impl TranscriptionService {
                 rtf: v.metrics.rtf,
                 device_used: "remote".to_string(),
                 asr_ms: v.metrics.elapsed_ms.max(0) as u128,
-                runner_elapsed_ms: v.metrics.elapsed_ms,
+                provider_elapsed_ms: v.metrics.elapsed_ms,
                 audio_seconds: v.metrics.audio_seconds,
                 model_id: v.metrics.model_id,
                 model_version: v.metrics.model_version,
@@ -498,84 +441,6 @@ impl TranscriptionService {
             }),
             Err(e) if e.code == "E_CANCELLED" => Err(PortError::new("E_CANCELLED", e.message)),
             Err(e) => Err(PortError::new(&e.code, e.message)),
-        }
-    }
-
-    async fn run_local_transcriber(
-        &self,
-        data_dir: &Path,
-        task_id: &str,
-        wav_path: &Path,
-    ) -> PortResult<ProviderTranscript> {
-        let active = self.active_for_task(task_id)?;
-        let data_dir = data_dir.to_path_buf();
-        let task_id2 = task_id.to_string();
-        let wav_path = wav_path.to_path_buf();
-        let asr = self.asr.clone();
-        let join = tokio::task::spawn_blocking(move || {
-            let (resp, wall_ms) = asr.transcribe(
-                &data_dir,
-                &task_id2,
-                &wav_path,
-                "Chinese",
-                &active.token,
-                &active.asr_pid,
-            )?;
-            if !resp.ok {
-                let code = resp
-                    .error
-                    .as_ref()
-                    .map(|e| e.code.as_str())
-                    .unwrap_or("E_ASR_FAILED");
-                let message = resp
-                    .error
-                    .as_ref()
-                    .map(|e| e.message.as_str())
-                    .unwrap_or("asr failed");
-                return Err(anyhow::anyhow!("{code}: {message}"));
-            }
-            let text = resp.text.clone().unwrap_or_default();
-            if text.trim().is_empty() {
-                return Err(anyhow::anyhow!("E_ASR_EMPTY_TEXT: empty transcription"));
-            }
-            let metrics = resp
-                .metrics
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("E_ASR_METRICS_MISSING: missing metrics"))?;
-            if metrics.device_used != "cuda" {
-                return Err(anyhow::anyhow!(
-                    "E_ASR_DEVICE: device_not_cuda:{}",
-                    metrics.device_used
-                ));
-            }
-            Ok::<_, anyhow::Error>(ProviderTranscript {
-                text,
-                rtf: metrics.rtf,
-                device_used: metrics.device_used,
-                asr_ms: wall_ms,
-                runner_elapsed_ms: metrics.elapsed_ms,
-                audio_seconds: metrics.audio_seconds,
-                model_id: metrics.model_id,
-                model_version: metrics.model_version,
-                remote_slice_count: None,
-                remote_concurrency_used: None,
-            })
-        })
-        .await;
-        match join {
-            Ok(Ok(v)) => Ok(v),
-            Ok(Err(e)) => {
-                let message = e.to_string();
-                if message.contains("cancelled") {
-                    Err(PortError::new("E_CANCELLED", "cancelled"))
-                } else {
-                    Err(PortError::from_message("E_ASR_FAILED", message))
-                }
-            }
-            Err(e) => Err(PortError::new(
-                "E_INTERNAL",
-                format!("transcribe_join_failed:{e}"),
-            )),
         }
     }
 
@@ -635,7 +500,7 @@ struct ProviderTranscript {
     rtf: f64,
     device_used: String,
     asr_ms: u128,
-    runner_elapsed_ms: i64,
+    provider_elapsed_ms: i64,
     audio_seconds: f64,
     model_id: String,
     model_version: Option<String>,
@@ -710,11 +575,10 @@ fn emit_perf_metrics(
     preprocess_cfg: &pipeline::PreprocessConfig,
     preprocess_ms: u128,
     transcript: &ProviderTranscript,
-    warmup_ms: Option<i64>,
 ) {
     let overhead_ms_u128 = transcript
         .asr_ms
-        .saturating_sub(transcript.runner_elapsed_ms.max(0) as u128);
+        .saturating_sub(transcript.provider_elapsed_ms.max(0) as u128);
     let _ = metrics::emit(
         data_dir,
         MetricsRecord::TaskDone {
@@ -733,8 +597,8 @@ fn emit_perf_metrics(
             audio_seconds: transcript.audio_seconds,
             preprocess_ms,
             asr_roundtrip_ms: transcript.asr_ms,
-            asr_runner_elapsed_ms: transcript.runner_elapsed_ms,
-            asr_overhead_ms: overhead_ms_u128.min(u64::MAX as u128) as u64,
+            asr_provider_elapsed_ms: transcript.provider_elapsed_ms,
+            asr_transport_overhead_ms: overhead_ms_u128.min(u64::MAX as u128) as u64,
             rtf: transcript.rtf,
             rewrite_ms: None,
             device_used: transcript.device_used.clone(),
@@ -746,19 +610,8 @@ fn emit_perf_metrics(
             asr_preprocess_threshold_db: preprocess_cfg.silence_threshold_db,
             asr_preprocess_trim_start_ms: preprocess_cfg.silence_trim_start_ms,
             asr_preprocess_trim_end_ms: preprocess_cfg.silence_trim_end_ms,
-            asr_warmup_ms: warmup_ms,
         },
     );
-}
-
-fn env_bool_default_true(key: &str) -> bool {
-    match std::env::var(key) {
-        Ok(v) => {
-            let t = v.trim().to_ascii_lowercase();
-            !(t == "0" || t == "false" || t == "no" || t == "off")
-        }
-        Err(_) => true,
-    }
 }
 
 fn now_ms() -> i64 {
@@ -806,10 +659,10 @@ mod tests {
             ProviderKind::Remote
         );
         assert_eq!(
-            ProviderKind::from_settings_value("local"),
-            ProviderKind::Local
+            ProviderKind::from_settings_value("doubao"),
+            ProviderKind::Doubao
         );
-        assert_eq!(ProviderKind::from_settings_value(""), ProviderKind::Local);
+        assert_eq!(ProviderKind::from_settings_value(""), ProviderKind::Doubao);
     }
 
     #[test]

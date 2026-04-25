@@ -39,12 +39,13 @@ Info "running: cargo check (Windows compile gate)"
 Push-Location "apps/desktop/src-tauri"
 try {
   # On UNC paths (e.g. \\wsl.localhost\...), Rust incremental lock files may fail on Windows.
-  # Use a local target dir and disable incremental mode for deterministic compile-gate behavior.
-  if (-not $env:CARGO_TARGET_DIR) {
-    $env:CARGO_TARGET_DIR = Join-Path $env:TEMP "typevoice-target"
+  # Use a local target dir only for UNC workspaces.
+  $cwd = (Get-Location).Path
+  if ((-not $env:CARGO_TARGET_DIR) -and $cwd.StartsWith("\\")) {
+    $env:CARGO_TARGET_DIR = Join-Path $env:TEMP ("typevoice-target-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $env:CARGO_TARGET_DIR | Out-Null
   }
   $env:CARGO_INCREMENTAL = "0"
-  New-Item -ItemType Directory -Force -Path $env:CARGO_TARGET_DIR | Out-Null
   cargo check --locked
   if ($LASTEXITCODE -ne 0) {
     Fail ("cargo check failed (exit_code=" + $LASTEXITCODE + ")")

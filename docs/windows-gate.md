@@ -55,10 +55,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows\windows_compile_gate.
 
 What it does:
 
-- Creates repo-local venv (`.venv`) and installs Python deps (including Torch CUDA wheels).
-- Downloads ASR model into `models/Qwen3-ASR-0.6B` (gitignored).
 - Installs `apps/desktop` npm deps via `npm ci`.
-- Runs `verify_quick` and `verify_full`.
+- Runs `npm run build`.
+- Runs Rust tests.
 - Starts `npm run tauri dev`.
 
 ## Optional Speed-Up: sccache (Rust Compile Cache)
@@ -75,7 +74,6 @@ cargo install sccache
 
 The script intentionally fails fast if any of these are missing:
 
-- `python`, `node`, `npm`, `cargo` are not in PATH.
-- `gpg` is not in PATH (required for FFmpeg upstream release signature verification).
+- `node`, `npm`, `cargo` are not in PATH.
+- `gpg.exe` is unavailable (required for FFmpeg upstream release signature verification).
 - bundled FFmpeg toolchain download/checksum validation fails.
-- `torch.cuda.is_available()` is `False` after installing Torch wheels.

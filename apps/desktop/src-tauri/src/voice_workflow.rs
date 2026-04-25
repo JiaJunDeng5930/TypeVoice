@@ -1761,16 +1761,7 @@ fn ensure_toolchain_ready(runtime: &RuntimeState) -> WorkflowResult<()> {
 }
 
 fn ensure_runtime_ready(runtime: &RuntimeState) -> WorkflowResult<()> {
-    ensure_toolchain_ready(runtime)?;
-    let py = runtime.get_python();
-    if !py.ready {
-        return Err(WorkflowError::from_message(
-            "E_PYTHON_NOT_READY",
-            py.message
-                .unwrap_or_else(|| "python runtime is not ready".to_string()),
-        ));
-    }
-    Ok(())
+    ensure_toolchain_ready(runtime)
 }
 
 #[cfg(test)]

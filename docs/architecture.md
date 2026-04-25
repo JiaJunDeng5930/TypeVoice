@@ -7,7 +7,7 @@
 - Frontend：React UI，只负责交互、显示和发送用户意图命令。
 - Commands：Tauri 命令入口，负责参数映射、状态注入和调用核心状态机。
 - Core Modules：`voice_workflow`、`voice_tasks`、`audio_capture`、`transcription`、`rewrite`、`insertion`、`ui_events`。
-- Adapters：本地 ASR runner、API ASR、FFmpeg、LLM API、平台输入、存储、系统音频设备。
+- Adapters：Doubao ASR、远程 HTTP ASR、FFmpeg、LLM API、平台输入、存储、系统音频设备。
 
 依赖方向：
 
@@ -75,13 +75,13 @@
 
 - 提供统一语音转录能力。
 - 管理预处理、取消、转录 provider 选择、历史初始写入、性能指标。
-- 保留 ASR runner、取消 token、子进程句柄等边缘资源状态。
-- 依赖本地 provider 和 API provider。
+- 保留取消 token、子进程句柄等边缘资源状态。
+- 依赖 Doubao provider 和远程 HTTP provider。
 
 Provider：
 
-- Local：常驻 Python ASR runner，强制 CUDA。
-- Remote：API 语音转录 provider，沿用当前 remote ASR 能力。
+- Doubao：WebSocket 流式语音转录 provider。
+- Remote：HTTP API 语音转录 provider。
 
 状态机调用：
 

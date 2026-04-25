@@ -1,91 +1,52 @@
 # TypeVoice 分级验证规格
 
-目标：为“自用工具”定义轻量、可复现的验收机制。发布合规、审计留档、面向人类的详细报告均不在本规格范围内。
+目标：为自用工具定义轻量、可复现的验收机制。
 
-## 1. 分级与时间预算（冻结）
+## 1. 分级与时间预算
 
 - `quick`：快速验证，单次 <= 60 秒，用于每个新 commit 前后。
 - `full`：全量验证，单次 <= 10 分钟，用于多日累积改动后的整体确认。
 
-## 2. 通用度量对象（冻结）
+## 2. 通用度量对象
 
 - 固定样本音频：`fixtures/` 下的 `zh_10s.ogg`、`zh_60s.ogg`、`zh_5m.ogg`。
   - 音频本体不提交到 git。
   - 下载地址与 `sha256` 固化在 `scripts/fixtures_manifest.json`。
   - `verify_quick.py` / `verify_full.py` 会在运行前自动下载并校验缺失样本。
-- 结构化指标：每次验证输出关键指标（RTF、device_used、cancel_latency_ms、成功/失败与错误码）。只需要机器可读记录 + 控制台摘要，不需要长报告。
+- 结构化指标：每次验证输出关键指标、成功/失败与错误码。
 
-## 3. 关键约束（冻结）
-
-- 不允许降级到 CPU：验证中若 `device_used != cuda`，视为失败（除非显式进入“诊断模式”，诊断模式不作为 Gate）。
-- `full` 验证默认不调用真实 LLM API（避免网络波动与费用），但允许提供可选 `llm_smoke` 开关做一次真实连通性检查。
-
-## 4. `quick`（<=60s）
-
-目标：尽快发现“明显坏了”的问题（跑偏到 CPU、输出为空、取消失效、模板系统崩）。
+## 3. `quick`
 
 必须包含：
 
-- Windows 编译闸门（当改动涉及 `apps/desktop/src-tauri` 的 Windows/Tauri 相关代码时）：在 Windows PowerShell 中运行 `.\scripts\windows\windows_compile_gate.ps1`，必须通过。
-- 单元测试（仅纯逻辑、无 GPU/无网络部分）
-- 核心状态机测试（`voice_workflow`）
-  - 断言：初始状态为 `Idle`
-  - 断言：录音、转录、改写、插入、取消的合法流转成功
-  - 断言：重复开始、session 不匹配、非法阶段操作返回结构化错误码
-  - 断言：hotkey 预采集上下文只消费一次
-- 可调试性契约检查（自动化）
-  - 断言：并发写入下 `trace.jsonl` 每行可 JSON 解析。
-  - 断言：并发写入下 `metrics.jsonl` 每行可 JSON 解析，且包含 `type` 与 `ts_ms`。
-  - 断言：ASR 启动失败路径保留结构化错误码（不退化为 EOF 类错误）。
-- ASR 烟雾测试（`fixtures/zh_10s.ogg`）
-- 断言：`text` 非空
-- 断言：`device_used == cuda`
-- 断言：输出包含 `rtf` 指标
-- 取消烟雾测试（在转录阶段触发一次取消）
-- 断言：`cancel_latency_ms <= 300`
-- 断言：转录计算实际停止（不继续占用 GPU）
-- 插入契约测试（`insert_text`）
-- 断言：复制成功时 `copied=true`
-- 断言：`auto_paste_enabled=false` 时 `auto_paste_attempted=false`
-- 断言：自动粘贴失败返回结构化 `error_code`（不允许静默失败）
+- Rust 后端编译检查。
+- 可调试性契约检查。
+- Python 快速单元测试。
+- FFmpeg 预处理取消验证。
 
 输出：
 
-- 控制台一行摘要：PASS/FAIL + `rtf` + `device_used` + `cancel_latency_ms`
-- 追加一条结构化记录（JSONL 或等价格式）
+- 控制台一行摘要：PASS/FAIL + `cancel_ffmpeg_ms`。
+- 追加一条结构化记录到 `metrics/verify.jsonl`。
 
-## 5. `full`（<=10min）
-
-目标：覆盖性能阈值、取消、资源释放与常见失败路径，确保自用体验稳定。
+## 4. `full`
 
 必须包含：
 
-- 全部单元测试
-- 可调试性契约检查（完整）
-- 断言：失败 `ui_event` 含 `taskId`/`stage`/`status`/`errorCode`/`message`。
-  - 断言：失败 `trace` 含 `error.code` 与 `error.message`，可按 `task_id` 聚合。
-  - 断言：`metrics.jsonl` 结构化记录可逐行解析，且 `type` 字段稳定可用于聚合。
-- ASR 性能套件（`fixtures/zh_10s.ogg`、`fixtures/zh_60s.ogg`、`fixtures/zh_5m.ogg`）
-- 断言：`device_used == cuda`（任一用例跑到 CPU 视为失败）
-- 断言：RTF 达到基础规格阈值（见 `docs/base-spec.md`）
-- 取消覆盖：至少覆盖预处理阶段与转录阶段各一次
-- 断言：`cancel_latency_ms <= 300` 且计算停止
-- 稳定性轻压测（时间盒）：建议 3 分钟循环转录 `zh_10s.ogg`
-- 断言：0 crash、0 hang、失败率为 0
-- 断言：临时目录无堆积（任务结束后应清理）
-- 手工跨平台导出验证（Windows + Linux）
-- 断言：同一构建版本在 Windows 与 Linux 均可完成“复制 + 自动粘贴（直接 Unicode 文本输入，非快捷键）”
-- 断言：当目标控件不可编辑时，返回显式失败码（不静默跳过）
-- 隐私/安全轻检查
-- 断言：默认不保存音频（任务后无音频残留）
-- 断言：日志与配置中不出现 API Key 明文（简单检索规则即可）
-
-可选项（不默认启用）：
-
-- `llm_smoke`：真实调用一次 LLM API，只验证连通性与失败回退（失败时仍能复制 ASR 原文）。
-  - 前置条件：已在 UI 内配置 LLM API Base URL / Model / 推理等级（可选）并设置 API Key（Keyring）。
-  - 验收点：HTTP 2xx 且输出非空；若返回 4xx/5xx 也必须以 `E_LLM_FAILED` 失败并保留 ASR 原文可复制。
+- Rust 后端编译检查。
+- 可调试性契约检查。
+- 全部 Python 单元测试。
+- 三条 fixture 的 FFmpeg 预处理验证。
+- FFmpeg 预处理取消验证。
 
 输出：
 
-- 控制台摘要 + 结构化记录（同 `quick`）
+- 控制台摘要。
+- 追加一条结构化记录到 `metrics/verify.jsonl`。
+
+## 5. 手工验证
+
+- 启动桌面应用。
+- 选择 Doubao 或远程 HTTP ASR provider。
+- 完成一次录音、转录、可选改写、复制或自动粘贴流程。
+- 转录中取消一次，确认 UI 状态更新。

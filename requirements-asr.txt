@@ -1,5 +1,0 @@
--r requirements.txt
-
-# Runtime dependencies for local ASR execution.
-torch>=2.8.0,<3.0.0
-qwen-asr>=0.6.0,<1.0.0

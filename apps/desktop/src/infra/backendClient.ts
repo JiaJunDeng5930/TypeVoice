@@ -1,7 +1,6 @@
 import { defaultTauriGateway, type TauriGateway } from "./runtimePorts";
 import type {
   HistoryItem,
-  RuntimePythonStatus,
   RuntimeToolchainStatus,
   UiEvent,
   WorkflowApplyEventRequest,
@@ -24,7 +23,6 @@ export type BackendClient = {
   }): Promise<void>;
   logUiEvent(req: Record<string, unknown>): Promise<void>;
   runtimeToolchainStatus(): Promise<RuntimeToolchainStatus>;
-  runtimePythonStatus(): Promise<RuntimePythonStatus>;
   historyList(req: { limit: number; beforeMs?: number | null }): Promise<HistoryItem[]>;
   listenUiEvent(handler: (event: UiEvent) => void | Promise<void>): Promise<() => void>;
 };
@@ -48,9 +46,6 @@ export function createBackendClient(gateway: TauriGateway = defaultTauriGateway)
     },
     runtimeToolchainStatus() {
       return gateway.invoke<RuntimeToolchainStatus>("runtime_toolchain_status");
-    },
-    runtimePythonStatus() {
-      return gateway.invoke<RuntimePythonStatus>("runtime_python_status");
     },
     historyList(req) {
       return gateway.invoke<HistoryItem[]>("history_list", req);

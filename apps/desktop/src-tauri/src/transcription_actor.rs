@@ -1,7 +1,6 @@
 use std::{
     collections::HashSet,
     io::Write,
-    path::PathBuf,
     sync::{mpsc, Arc, Mutex},
     time::Instant,
 };
@@ -11,17 +10,15 @@ use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_util::sync::CancellationToken;
 
 use crate::{
-    asr_service::AsrService,
     data_dir, doubao_asr, history, obs,
     settings::{self, Settings},
     transcription::{TranscriptionMetrics, TranscriptionResult},
     ui_events::{UiEvent, UiEventMailbox, UiEventStatus},
 };
 
-const LOCAL_CHUNK_MS: u64 = 60_000;
+const REMOTE_CHUNK_MS: u64 = 60_000;
 const DOUBAO_CHUNK_MS: u64 = 200;
 const PCM_SAMPLE_RATE: u32 = 16_000;
 const PCM_CHANNELS: u16 = 1;
@@ -31,7 +28,6 @@ const DOUBAO_RESOURCE_ID: &str = "volc.seedasr.sauc.duration";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamingProviderKind {
-    Local,
     Remote,
     Doubao,
 }
@@ -39,15 +35,13 @@ pub enum StreamingProviderKind {
 impl StreamingProviderKind {
     fn from_settings(s: &Settings) -> Self {
         match settings::resolve_asr_provider(s).as_str() {
-            "doubao" => Self::Doubao,
             "remote" => Self::Remote,
-            _ => Self::Local,
+            _ => Self::Doubao,
         }
     }
 
     fn as_str(self) -> &'static str {
         match self {
-            Self::Local => "local",
             Self::Remote => "remote",
             Self::Doubao => "doubao",
         }
@@ -95,7 +89,6 @@ impl TranscriptionActor {
         std::thread::Builder::new()
             .name("transcription_actor".to_string())
             .spawn(move || {
-                let asr = AsrService::new();
                 let mut session: Option<ActorSession> = None;
                 while let Ok(msg) = rx.recv() {
                     match msg {
@@ -149,9 +142,7 @@ impl TranscriptionActor {
                                 );
                                 continue;
                             }
-                            if let Err(e) =
-                                active.handle_chunk(sequence, pcm, is_last, &asr, &mailbox)
-                            {
+                            if let Err(e) = active.handle_chunk(sequence, pcm, is_last) {
                                 send_failed(
                                     &mailbox,
                                     &task_id,
@@ -225,7 +216,7 @@ impl TranscriptionActor {
         let provider = StreamingProviderKind::from_settings(&s);
         let chunk_ms = match provider {
             StreamingProviderKind::Doubao => DOUBAO_CHUNK_MS,
-            StreamingProviderKind::Local | StreamingProviderKind::Remote => LOCAL_CHUNK_MS,
+            StreamingProviderKind::Remote => REMOTE_CHUNK_MS,
         };
         Ok(StreamingSessionConfig {
             provider,
@@ -286,7 +277,6 @@ struct ActorSession {
     config: StreamingSessionConfig,
     started_at: Instant,
     text: String,
-    local_segments: Vec<PathBuf>,
     doubao: Option<DoubaoSessionHandle>,
 }
 
@@ -315,19 +305,11 @@ impl ActorSession {
             config,
             started_at: Instant::now(),
             text: String::new(),
-            local_segments: Vec::new(),
             doubao,
         })
     }
 
-    fn handle_chunk(
-        &mut self,
-        sequence: u64,
-        pcm: Vec<u8>,
-        is_last: bool,
-        asr: &AsrService,
-        mailbox: &UiEventMailbox,
-    ) -> Result<()> {
+    fn handle_chunk(&mut self, sequence: u64, pcm: Vec<u8>, is_last: bool) -> Result<()> {
         if pcm.is_empty() && !is_last {
             return Ok(());
         }
@@ -337,22 +319,6 @@ impl ActorSession {
                     return Err(anyhow!("doubao session missing"));
                 };
                 doubao.send_chunk(sequence, pcm, is_last)
-            }
-            StreamingProviderKind::Local => {
-                if pcm.is_empty() {
-                    return Ok(());
-                }
-                let text = transcribe_local_chunk(&self.task_id, sequence, pcm, asr)?;
-                if !text.trim().is_empty() {
-                    self.text.push_str(text.trim());
-                    mailbox.send(UiEvent::partial(
-                        &self.task_id,
-                        text.trim(),
-                        self.text.as_str(),
-                        sequence,
-                    ));
-                }
-                Ok(())
             }
             StreamingProviderKind::Remote => {
                 Err(anyhow!("E_REMOTE_STREAMING_UNSUPPORTED: remote HTTP ASR does not support streaming actor mode"))
@@ -400,9 +366,6 @@ impl ActorSession {
     fn cancel(&mut self) {
         if let Some(doubao) = self.doubao.take() {
             doubao.cancel();
-        }
-        for path in self.local_segments.drain(..) {
-            let _ = std::fs::remove_file(path);
         }
     }
 }
@@ -727,61 +690,6 @@ fn gunzip(bytes: &[u8]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-fn transcribe_local_chunk(
-    task_id: &str,
-    sequence: u64,
-    pcm: Vec<u8>,
-    asr: &AsrService,
-) -> Result<String> {
-    let dir = data_dir::data_dir()?;
-    let path = write_pcm_wav(task_id, sequence, &pcm)?;
-    let token = CancellationToken::new();
-    let pid_slot = Arc::new(Mutex::new(None));
-    let result = asr.transcribe(&dir, task_id, &path, "Chinese", &token, &pid_slot);
-    let _ = std::fs::remove_file(&path);
-    let (resp, _) = result?;
-    if !resp.ok {
-        let code = resp
-            .error
-            .as_ref()
-            .map(|e| e.code.as_str())
-            .unwrap_or("E_ASR_FAILED");
-        let message = resp
-            .error
-            .as_ref()
-            .map(|e| e.message.as_str())
-            .unwrap_or("asr failed");
-        return Err(anyhow!("{code}: {message}"));
-    }
-    Ok(resp.text.unwrap_or_default())
-}
-
-fn write_pcm_wav(task_id: &str, sequence: u64, pcm: &[u8]) -> Result<PathBuf> {
-    let root = repo_root()?;
-    let tmp = root.join("tmp").join("desktop");
-    std::fs::create_dir_all(&tmp)?;
-    let path = tmp.join(format!("{task_id}-stream-{sequence}.wav"));
-    let mut bytes = Vec::with_capacity(44 + pcm.len());
-    let data_len = pcm.len() as u32;
-    let byte_rate = PCM_SAMPLE_RATE * u32::from(PCM_CHANNELS) * u32::from(PCM_BITS) / 8;
-    let block_align = PCM_CHANNELS * PCM_BITS / 8;
-    bytes.extend_from_slice(b"RIFF");
-    bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
-    bytes.extend_from_slice(b"WAVEfmt ");
-    bytes.extend_from_slice(&16_u32.to_le_bytes());
-    bytes.extend_from_slice(&1_u16.to_le_bytes());
-    bytes.extend_from_slice(&PCM_CHANNELS.to_le_bytes());
-    bytes.extend_from_slice(&PCM_SAMPLE_RATE.to_le_bytes());
-    bytes.extend_from_slice(&byte_rate.to_le_bytes());
-    bytes.extend_from_slice(&block_align.to_le_bytes());
-    bytes.extend_from_slice(&PCM_BITS.to_le_bytes());
-    bytes.extend_from_slice(b"data");
-    bytes.extend_from_slice(&data_len.to_le_bytes());
-    bytes.extend_from_slice(pcm);
-    std::fs::write(&path, bytes)?;
-    Ok(path)
-}
-
 fn append_history(result: &TranscriptionResult) -> Result<()> {
     let dir = data_dir::data_dir()?;
     history::append(
@@ -818,18 +726,6 @@ pub fn pcm_bytes_for_ms(ms: u64) -> usize {
     let bytes_per_second =
         PCM_SAMPLE_RATE as u64 * u64::from(PCM_CHANNELS) * u64::from(PCM_BITS / 8);
     ((bytes_per_second * ms) / 1000) as usize
-}
-
-fn repo_root() -> Result<PathBuf> {
-    if let Ok(p) = std::env::var("TYPEVOICE_REPO_ROOT") {
-        return Ok(PathBuf::from(p));
-    }
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let root = dir
-        .ancestors()
-        .nth(3)
-        .ok_or_else(|| anyhow!("failed to locate repo root from CARGO_MANIFEST_DIR"))?;
-    Ok(root.to_path_buf())
 }
 
 fn now_ms() -> i64 {

@@ -115,7 +115,6 @@ export type PromptTemplate = {
 };
 
 export type Settings = {
-  asr_model?: string | null;
   asr_provider?: string | null;
   remote_asr_url?: string | null;
   remote_asr_model?: string | null;
@@ -163,13 +162,6 @@ export type AudioCaptureDevice = {
   is_default_console: boolean;
 };
 
-export type ModelStatus = {
-  model_dir: string;
-  ok: boolean;
-  reason?: string | null;
-  model_version?: string | null;
-};
-
 export type ApiKeyStatus = {
   configured: boolean;
   source: string;
@@ -183,14 +175,6 @@ export type RuntimeToolchainStatus = {
   toolchain_dir?: string | null;
   platform: string;
   expected_version: string;
-};
-
-export type RuntimePythonStatus = {
-  ready: boolean;
-  code?: string | null;
-  message?: string | null;
-  python_path?: string | null;
-  python_version?: string | null;
 };
 
 export type HistoryItem = {

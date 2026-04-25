@@ -1,4 +1,3 @@
-mod asr_service;
 mod audio_capture;
 mod audio_device_notifications_windows;
 mod audio_devices_windows;
@@ -14,11 +13,9 @@ mod history;
 mod hotkeys;
 mod insertion;
 mod llm;
-mod model;
 mod obs;
 mod pipeline;
 mod ports;
-mod python_runtime;
 mod record_input;
 mod record_input_cache;
 mod remote_asr;
@@ -37,7 +34,6 @@ mod voice_workflow;
 
 use history::HistoryItem;
 use llm::ApiKeyStatus;
-use model::ModelStatus;
 use obs::Span;
 use settings::Settings;
 use settings::SettingsPatch;
@@ -48,14 +44,12 @@ use templates::PromptTemplate;
 
 pub(crate) struct RuntimeState {
     toolchain: std::sync::Mutex<toolchain::ToolchainStatus>,
-    python: std::sync::Mutex<python_runtime::PythonStatus>,
 }
 
 impl RuntimeState {
     fn new() -> Self {
         Self {
             toolchain: std::sync::Mutex::new(toolchain::ToolchainStatus::pending()),
-            python: std::sync::Mutex::new(python_runtime::PythonStatus::pending()),
         }
     }
 
@@ -66,15 +60,6 @@ impl RuntimeState {
 
     pub(crate) fn get_toolchain(&self) -> toolchain::ToolchainStatus {
         self.toolchain.lock().unwrap().clone()
-    }
-
-    fn set_python(&self, st: python_runtime::PythonStatus) {
-        let mut g = self.python.lock().unwrap();
-        *g = st;
-    }
-
-    pub(crate) fn get_python(&self) -> python_runtime::PythonStatus {
-        self.python.lock().unwrap().clone()
     }
 }
 
@@ -285,26 +270,11 @@ fn cmd_span(
     Span::start(data_dir, task_id, "Cmd", step_id, ctx)
 }
 
-fn repo_root() -> Result<std::path::PathBuf, String> {
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(3)
-        .map(|p| p.to_path_buf())
-        .ok_or_else(|| "repo root not found".to_string())
-}
-
 #[tauri::command]
 fn runtime_toolchain_status(
     runtime: tauri::State<'_, RuntimeState>,
 ) -> Result<toolchain::ToolchainStatus, String> {
     Ok(runtime.get_toolchain())
-}
-
-#[tauri::command]
-fn runtime_python_status(
-    runtime: tauri::State<'_, RuntimeState>,
-) -> Result<python_runtime::PythonStatus, String> {
-    Ok(runtime.get_python())
 }
 
 #[tauri::command]
@@ -704,14 +674,12 @@ fn set_settings(
 #[tauri::command]
 fn update_settings(
     app: tauri::AppHandle,
-    transcriber: tauri::State<transcription::TranscriptionService>,
     hotkeys: tauri::State<hotkeys::HotkeyManager>,
     record_input_cache: tauri::State<record_input_cache::RecordInputCacheState>,
     patch: SettingsPatch,
 ) -> Result<Settings, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let patch_summary = serde_json::json!({
-        "asr_model": patch.asr_model.is_some(),
         "asr_provider": patch.asr_provider.is_some(),
         "remote_asr_url": patch.remote_asr_url.is_some(),
         "remote_asr_model": patch.remote_asr_model.is_some(),
@@ -754,8 +722,6 @@ fn update_settings(
             return Err(e.to_string());
         }
     };
-    let asr_model_changed = patch.asr_model.is_some();
-    let asr_provider_changed = patch.asr_provider.is_some();
     let record_input_changed = patch.record_input_strategy.is_some()
         || patch.record_follow_default_role.is_some()
         || patch.record_fixed_endpoint_id.is_some()
@@ -804,15 +770,6 @@ fn update_settings(
         span.err_anyhow("settings", "E_CMD_UPDATE_SETTINGS", &e, None);
         return Err(e.to_string());
     }
-    let asr_provider = settings::resolve_asr_provider(&next);
-    if asr_provider == "local" {
-        if asr_model_changed || asr_provider_changed {
-            transcriber.restart_asr_best_effort("settings_changed");
-        }
-    } else if asr_model_changed || asr_provider_changed {
-        transcriber.kill_asr_best_effort("settings_changed_remote");
-    }
-
     // Hotkeys are also best-effort; failures are traced and should not break settings.
     hotkeys.apply_from_settings_best_effort(&app, &dir, &next);
     if cfg!(windows) && record_input_changed {
@@ -821,94 +778,6 @@ fn update_settings(
 
     span.ok(None);
     Ok(next)
-}
-
-#[tauri::command]
-fn asr_model_status() -> Result<ModelStatus, String> {
-    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let span = cmd_span(&dir, None, "CMD.asr_model_status", None);
-    let model_id = match pipeline::resolve_asr_model_id(&dir) {
-        Ok(v) => v,
-        Err(e) => {
-            span.err_anyhow("model", "E_CMD_MODEL_ID", &e, None);
-            return Err(e.to_string());
-        }
-    };
-
-    let st = if std::path::Path::new(&model_id).exists() {
-        match model::verify_model_dir(std::path::Path::new(&model_id)) {
-            Ok(st) => st,
-            Err(e) => {
-                span.err_anyhow("model", "E_CMD_MODEL_STATUS", &e, None);
-                return Err(e.to_string());
-            }
-        }
-    } else {
-        ModelStatus {
-            model_dir: model_id,
-            ok: true,
-            reason: Some("remote_model_not_locally_verified".to_string()),
-            model_version: None,
-        }
-    };
-    let _ok = st.ok;
-    span.ok(Some(
-        serde_json::json!({"ok": st.ok, "reason": st.reason, "model_version": st.model_version}),
-    ));
-    Ok(st)
-}
-
-#[tauri::command]
-async fn download_asr_model() -> Result<ModelStatus, String> {
-    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let span = cmd_span(&dir, None, "CMD.download_asr_model", None);
-    let root = repo_root()?;
-    let model_dir = model::default_model_dir(&root);
-    let py = match python_runtime::resolve_python_binary(&root) {
-        Ok(p) => p,
-        Err(e) => {
-            span.err_anyhow("config", "E_PYTHON_NOT_READY", &e, None);
-            return Err(e.to_string());
-        }
-    };
-    let root2 = root.clone();
-    let py2 = py.clone();
-    let model_dir2 = model_dir.clone();
-    let st_res = tauri::async_runtime::spawn_blocking(move || {
-        model::download_model(&root2, &py2, &model_dir2)
-    })
-    .await;
-    let st = match st_res {
-        Ok(Ok(st)) => st,
-        Ok(Err(e)) => {
-            span.err_anyhow("model", "E_CMD_MODEL_DOWNLOAD", &e, None);
-            return Err(e.to_string());
-        }
-        Err(e) => {
-            let ae = anyhow::anyhow!("spawn_blocking failed: {e}");
-            span.err_anyhow("runtime", "E_CMD_JOIN", &ae, None);
-            return Err(ae.to_string());
-        }
-    };
-    // Set settings.asr_model to local dir if ok.
-    if st.ok {
-        let mut s = match settings::load_settings_strict(&dir) {
-            Ok(v) => v,
-            Err(e) => {
-                span.err_anyhow("settings", "E_CMD_MODEL_DOWNLOAD_SETTINGS", &e, None);
-                return Err(e.to_string());
-            }
-        };
-        s.asr_model = Some(model_dir.display().to_string());
-        if let Err(e) = settings::save_settings(&dir, &s) {
-            span.err_anyhow("settings", "E_CMD_MODEL_DOWNLOAD_SAVE", &e, None);
-            return Err(e.to_string());
-        }
-    }
-    span.ok(Some(
-        serde_json::json!({"ok": st.ok, "reason": st.reason, "model_version": st.model_version}),
-    ));
-    Ok(st)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -978,26 +847,11 @@ pub fn run() {
             .build();
 
             let mut toolchain_ready = false;
-            let mut python_ready = false;
             if let Ok(dir) = data_dir::data_dir() {
                 let runtime = app.state::<RuntimeState>();
                 let st = toolchain::initialize_and_verify(&app.handle(), &dir);
                 toolchain_ready = st.ready;
                 runtime.set_toolchain(st);
-                if let Ok(root) = repo_root() {
-                    let py = python_runtime::initialize_and_verify(&dir, &root);
-                    python_ready = py.ready;
-                    runtime.set_python(py);
-                } else {
-                    let py = python_runtime::PythonStatus {
-                        ready: false,
-                        code: Some("E_PYTHON_NOT_READY".to_string()),
-                        message: Some("E_PYTHON_NOT_READY: repo root not found".to_string()),
-                        python_path: None,
-                        python_version: None,
-                    };
-                    runtime.set_python(py);
-                }
 
                 if cfg!(windows) {
                     let record_input_cache = app.state::<record_input_cache::RecordInputCacheState>();
@@ -1021,11 +875,7 @@ pub fn run() {
                 }
             }
 
-            // Warm up the ASR runner in background so first transcription is fast.
-            // If runtime preflight failed, skip warmup to avoid noisy startup failures.
-            if toolchain_ready && python_ready {
-                let transcriber = app.state::<transcription::TranscriptionService>();
-                transcriber.warmup_asr_best_effort();
+            if toolchain_ready {
                 let state = app.state::<TaskManager>();
                 state.warmup_context_best_effort();
             }
@@ -1090,11 +940,8 @@ pub fn run() {
             update_settings,
             hotkeys::check_hotkey_available,
             runtime_toolchain_status,
-            runtime_python_status,
             overlay_set_state,
             ui_log_event,
-            asr_model_status,
-            download_asr_model
         ])
         .run(ctx)
         .expect("error while running tauri application");

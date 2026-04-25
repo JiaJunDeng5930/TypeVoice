@@ -48,8 +48,8 @@ pub enum MetricsRecord {
         audio_seconds: f64,
         preprocess_ms: u128,
         asr_roundtrip_ms: u128,
-        asr_runner_elapsed_ms: i64,
-        asr_overhead_ms: u64,
+        asr_provider_elapsed_ms: i64,
+        asr_transport_overhead_ms: u64,
         rtf: f64,
         rewrite_ms: Option<u128>,
         device_used: String,
@@ -61,7 +61,6 @@ pub enum MetricsRecord {
         asr_preprocess_threshold_db: f64,
         asr_preprocess_trim_start_ms: u64,
         asr_preprocess_trim_end_ms: u64,
-        asr_warmup_ms: Option<i64>,
     },
     TaskDone {
         ts_ms: i64,

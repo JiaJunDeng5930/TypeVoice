@@ -9,6 +9,14 @@ function Info([string]$msg) {
   Write-Host ("INFO: " + $msg) -ForegroundColor Cyan
 }
 
+function Run-Native([string]$label, [string]$exe, [string[]]$cmdArgs) {
+  Info $label
+  & $exe @cmdArgs | Out-Host
+  if ($LASTEXITCODE -ne 0) {
+    Fail ($label + " failed (exit_code=" + $LASTEXITCODE + ")")
+  }
+}
+
 function Ensure-Command([string]$name) {
   if (-not (Get-Command $name -ErrorAction SilentlyContinue)) {
     Fail ("missing command: " + $name)
@@ -32,81 +40,44 @@ Set-Location $RepoRoot
 Info ("repo_root=" + $RepoRoot)
 
 # Basic toolchain checks (we don't auto-install global tools; just fail with a clear message)
-Ensure-Command "python"
 Ensure-Command "node"
 Ensure-Command "npm"
 Ensure-Command "cargo"
 Ensure-Command "gpg"
 
 # Fast fail: Windows-only compile gate (catches Send/Sync and other Windows-specific errors).
-Info "running windows compile gate"
-powershell -ExecutionPolicy Bypass -File .\scripts\windows\windows_compile_gate.ps1
+Run-Native "running windows compile gate" "powershell" @(
+  "-ExecutionPolicy",
+  "Bypass",
+  "-File",
+  ".\scripts\windows\windows_compile_gate.ps1"
+)
 
 # Optional speed-up: enable Rust compile cache if available.
 Try-Enable-Sccache $RepoRoot
 
-Info "downloading bundled ffmpeg toolchain"
-powershell -ExecutionPolicy Bypass -File .\scripts\windows\download_ffmpeg_toolchain.ps1 -Platform all
+Run-Native "downloading bundled ffmpeg toolchain" "powershell" @(
+  "-ExecutionPolicy",
+  "Bypass",
+  "-File",
+  ".\scripts\windows\download_ffmpeg_toolchain.ps1",
+  "-Platform",
+  "all"
+)
 
 $ToolchainDir = Join-Path $RepoRoot "apps\desktop\src-tauri\toolchain\bin\windows-x86_64"
 $env:TYPEVOICE_TOOLCHAIN_DIR = $ToolchainDir
 $env:TYPEVOICE_FFMPEG = (Join-Path $ToolchainDir "ffmpeg.exe")
 $env:TYPEVOICE_FFPROBE = (Join-Path $ToolchainDir "ffprobe.exe")
 
-# Python venv (repo-local)
-$VenvPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
-if (-not (Test-Path $VenvPython)) {
-  Info "creating .venv"
-  python -m venv .venv | Out-Host
-}
-
-& $VenvPython -m pip install -U pip | Out-Host
-
-# Torch CUDA install (try several common CUDA wheel indexes; fail if CUDA still unavailable)
-$TorchIndexUrls = @(
-  "https://download.pytorch.org/whl/cu126",
-  "https://download.pytorch.org/whl/cu124",
-  "https://download.pytorch.org/whl/cu121"
-)
-
-$TorchOk = $false
-foreach ($url in $TorchIndexUrls) {
-  Info ("installing torch from " + $url)
-  try {
-    & $VenvPython -m pip install -U torch torchvision torchaudio --index-url $url | Out-Host
-    $cuda = & $VenvPython -c "import torch; print('cuda_available=' + str(torch.cuda.is_available()))"
-    if ($cuda -match "cuda_available=True") {
-      $TorchOk = $true
-      break
-    }
-  } catch {
-    # keep trying
-  }
-}
-
-if (-not $TorchOk) {
-  Fail "torch CUDA is not available (torch.cuda.is_available() == False). Check NVIDIA driver / GPU, then re-run."
-}
-
-Info "installing python deps"
-& $VenvPython -m pip install -U huggingface_hub pytest qwen-asr transformers accelerate | Out-Host
-
-# Download model (repo-local, ignored by git)
-Info "downloading ASR model"
-& $VenvPython scripts\download_asr_model.py | Out-Host
-
 # Desktop deps
-Info "installing desktop npm deps"
 Set-Location (Join-Path $RepoRoot "apps\desktop")
-npm ci | Out-Host
+Run-Native "installing desktop npm deps" "npm" @("ci")
 
-# Gate: quick/full (machine-readable metrics are written to metrics/verify.jsonl)
-Set-Location $RepoRoot
-Info "running verify_quick"
-& $VenvPython scripts\verify_quick.py | Out-Host
+Run-Native "running desktop build" "npm" @("run", "build")
 
-Info "running verify_full"
-& $VenvPython scripts\verify_full.py | Out-Host
+Set-Location (Join-Path $RepoRoot "apps\desktop\src-tauri")
+Run-Native "running rust tests" "cargo" @("test", "--locked")
 
 Info "starting desktop app (tauri dev)"
 Set-Location (Join-Path $RepoRoot "apps\desktop")

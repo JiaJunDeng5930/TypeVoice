@@ -6,7 +6,6 @@ import {
 import { createBackendClient, type BackendClient } from "../infra/backendClient";
 import { buildDiagnostic } from "../domain/diagnostic";
 import type {
-  RuntimePythonStatus,
   RuntimeToolchainStatus,
   Settings,
   UiEvent,
@@ -68,11 +67,6 @@ export function MainScreen({
       try {
         const runtime = await client.runtimeToolchainStatus() as RuntimeToolchainStatus;
         if (!runtime.ready) pushToast("TOOLCHAIN NOT READY", "danger");
-      } catch {
-      }
-      try {
-        const runtime = await client.runtimePythonStatus() as RuntimePythonStatus;
-        if (!runtime.ready) pushToast("PYTHON NOT READY", "danger");
       } catch {
       }
     })();

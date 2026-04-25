@@ -35,6 +35,18 @@ function Ensure-Command([string]$name) {
   }
 }
 
+function Resolve-GpgCommand {
+  $common = "D:\Program Files\GnuPG\bin\gpg.exe"
+  if (Test-Path $common) {
+    return $common
+  }
+  $cmd = Get-Command "gpg.exe" -ErrorAction SilentlyContinue
+  if ($cmd) {
+    return $cmd.Source
+  }
+  Fail "missing command: gpg.exe"
+}
+
 $RepoRoot = Resolve-RepoRoot
 $ManifestPath = Join-Path $RepoRoot "apps\desktop\src-tauri\toolchain\ffmpeg_manifest.json"
 if (-not (Test-Path $ManifestPath)) {
@@ -47,7 +59,7 @@ if ($null -eq $Upstream) {
   Fail "manifest missing upstream_release_verification section"
 }
 
-Ensure-Command "gpg"
+$Gpg = Resolve-GpgCommand
 $targets = @()
 
 switch ($Platform) {
@@ -66,7 +78,7 @@ switch ($Platform) {
   }
 }
 
-$workRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("typevoice_ffmpeg_" + [guid]::NewGuid().ToString("N"))
+$workRoot = Join-Path $RepoRoot ("tmp\windows_gate\typevoice_ffmpeg_" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $workRoot | Out-Null
 
 try {
@@ -97,13 +109,17 @@ try {
     Fail ("ffmpeg upstream source sha256 mismatch expected=" + $Upstream.source_sha256 + " actual=" + $sourceSha)
   }
 
-  & gpg --homedir $gnupgHome --batch --import $keyPath | Out-Null
+  & $Gpg --homedir $gnupgHome --batch --import $keyPath | Out-Null
   if ($LASTEXITCODE -ne 0) {
     Fail "failed to import ffmpeg signing key"
   }
 
-  $status = & gpg --homedir $gnupgHome --status-fd=1 --batch --verify $sourceSigPath $sourcePath 2>$null
-  if ($LASTEXITCODE -ne 0) {
+  $oldErrorActionPreference = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  $status = & $Gpg --homedir $gnupgHome --status-fd=1 --batch --verify $sourceSigPath $sourcePath 2>&1
+  $gpgExitCode = $LASTEXITCODE
+  $ErrorActionPreference = $oldErrorActionPreference
+  if ($gpgExitCode -ne 0) {
     Fail "ffmpeg upstream signature verify command failed"
   }
   $goodSig = $status | Where-Object { $_ -match "^\[GNUPG:\] GOODSIG " } | Select-Object -First 1

@@ -8,15 +8,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::obs::Span;
 
-pub const DEFAULT_ASR_PROVIDER: &str = "local";
+pub const DEFAULT_ASR_PROVIDER: &str = "doubao";
 pub const DEFAULT_REMOTE_ASR_URL: &str = "https://api.server/transcribe";
 pub const DEFAULT_REMOTE_ASR_CONCURRENCY: usize = 4;
 pub const MAX_REMOTE_ASR_CONCURRENCY: usize = 16;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
-    pub asr_model: Option<String>,    // local dir or HF repo id
-    pub asr_provider: Option<String>, // local|remote
+    pub asr_provider: Option<String>, // doubao|remote
     pub remote_asr_url: Option<String>,
     pub remote_asr_model: Option<String>,
     pub remote_asr_concurrency: Option<u64>,
@@ -66,7 +65,6 @@ pub struct Settings {
 pub struct SettingsPatch {
     // Outer Option: whether to update this field.
     // Inner Option: Some(value)=set, None=clear.
-    pub asr_model: Option<Option<String>>,
     pub asr_provider: Option<Option<String>>,
     pub remote_asr_url: Option<Option<String>>,
     pub remote_asr_model: Option<Option<String>>,
@@ -106,9 +104,6 @@ pub struct SettingsPatch {
 }
 
 pub fn apply_patch(mut s: Settings, p: SettingsPatch) -> Settings {
-    if let Some(v) = p.asr_model {
-        s.asr_model = v;
-    }
     if let Some(v) = p.asr_provider {
         s.asr_provider = v;
     }
@@ -322,7 +317,7 @@ pub fn resolve_asr_provider(s: &Settings) -> String {
     } else if value == "doubao" {
         "doubao".to_string()
     } else {
-        "local".to_string()
+        DEFAULT_ASR_PROVIDER.to_string()
     }
 }
 
@@ -362,8 +357,7 @@ mod tests {
     #[test]
     fn apply_patch_is_partial_and_can_clear() {
         let base = Settings {
-            asr_model: Some("asr".to_string()),
-            asr_provider: Some("local".to_string()),
+            asr_provider: Some("doubao".to_string()),
             remote_asr_url: None,
             remote_asr_model: None,
             remote_asr_concurrency: None,
@@ -407,7 +401,6 @@ mod tests {
         };
 
         let next = apply_patch(base, p);
-        assert_eq!(next.asr_model.as_deref(), Some("asr"));
         assert_eq!(next.asr_provider.as_deref(), Some("remote"));
         assert_eq!(
             next.remote_asr_url.as_deref(),
@@ -430,7 +423,7 @@ mod tests {
     #[test]
     fn resolve_remote_asr_fields_apply_defaults_and_clamp() {
         let s = Settings::default();
-        assert_eq!(resolve_asr_provider(&s), "local");
+        assert_eq!(resolve_asr_provider(&s), "doubao");
         assert_eq!(resolve_remote_asr_url(&s), DEFAULT_REMOTE_ASR_URL);
         assert_eq!(resolve_remote_asr_model(&s), None);
         assert_eq!(resolve_remote_asr_concurrency(&s), 4);

@@ -361,7 +361,12 @@ mod tests {
 
     #[test]
     fn ui_events_use_single_frontend_channel() {
-        let event = UiEvent::stage("task-1", "Transcribe", UiEventStatus::Started, "asr(local)");
+        let event = UiEvent::stage(
+            "task-1",
+            "Transcribe",
+            UiEventStatus::Started,
+            "asr(doubao)",
+        );
 
         assert_eq!(UI_EVENT_CHANNEL, "ui_event");
         assert_eq!(event.kind, "transcription.stage");

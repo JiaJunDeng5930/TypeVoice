@@ -195,13 +195,5 @@ fn ensure_runtime_ready(runtime: &RuntimeState) -> Result<(), WorkflowError> {
                 .unwrap_or_else(|| "toolchain is not ready".to_string()),
         ));
     }
-    let py = runtime.get_python();
-    if !py.ready {
-        return Err(WorkflowError::from_message(
-            "E_PYTHON_NOT_READY",
-            py.message
-                .unwrap_or_else(|| "python runtime is not ready".to_string()),
-        ));
-    }
     Ok(())
 }

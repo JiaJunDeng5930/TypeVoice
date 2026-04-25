@@ -90,17 +90,14 @@ Frontend
 - 取消控制。
 - 初始历史记录写入。
 - 性能指标记录。
-- ASR provider 生命周期和进程句柄管理。
+- ASR provider 生命周期管理。
 
-本地 provider：
+Doubao provider：
 
-- 模型：`Qwen/Qwen3-ASR-0.6B`
-- 后端：PyTorch CUDA。
-- GPU 不可用时失败。
-- ASR Runner 为常驻 Python daemon。
-- 通信协议为 stdin/stdout JSON。
+- WebSocket 流式转录。
+- 凭据通过 keyring 或环境变量读取。
 
-API provider：
+远程 HTTP provider：
 
 - 沿用当前 remote ASR 配置和 API Key 管理。
 - 产出统一 `TranscriptionResult`。
