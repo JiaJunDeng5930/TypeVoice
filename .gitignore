@@ -1,10 +1,8 @@
 fixtures/
-.venv/
 metrics/
 tmp/
 models/
-__pycache__/
-.python-version
+target/
 .DS_Store
 apps/desktop/src-tauri/toolchain/bin/windows-x86_64/*
 apps/desktop/src-tauri/toolchain/bin/linux-x86_64/*

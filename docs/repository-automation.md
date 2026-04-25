@@ -19,7 +19,7 @@
 - 监控范围：
   - `npm`：`/apps/desktop`
   - `cargo`：`/apps/desktop/src-tauri`
-  - `pip`：仓库根目录
+  - `cargo`：`/tools/typevoice-tools`
 
 ## 当前策略
 

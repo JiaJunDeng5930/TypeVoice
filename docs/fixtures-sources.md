@@ -4,7 +4,7 @@
 
 - 这些音频仅用于本机 `fixtures/` 下的性能/回归验证，不提交到 git（见 `.gitignore`）。
 - 仓库提交 `scripts/fixtures_manifest.json` 记录下载 URL 与 `sha256`，可通过
-  `./.venv/bin/python scripts/download_fixtures.py` 自动拉取并校验。
+  `cargo run --locked --manifest-path tools/typevoice-tools/Cargo.toml -- fixtures download` 自动拉取并校验。
 - 文件名是本项目约定的本地命名；括号内为上游文件名与下载链接（Wikimedia Commons `Special:FilePath`）。
 - 时长为当前下载版本用 `ffprobe` 测得（秒）。
 

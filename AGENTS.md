@@ -9,11 +9,11 @@
 - `apps/desktop/`: Tauri desktop app.
 - `apps/desktop/src/`: React + TypeScript UI.
 - `apps/desktop/src-tauri/src/`: Rust backend (FFmpeg orchestration, settings, LLM, ASR providers).
-- `scripts/`: verification gates and utilities (`verify_quick.py`, `verify_full.py`).
-- `tests/`: `pytest` unit tests (protocol/logic).
+- `tools/typevoice-tools/`: Rust CLI utilities for verification, fixtures, and LLM prompt experiments.
+- `scripts/`: Windows gate scripts and fixture manifest.
 - `docs/`: frozen specs/gates; treat docs as the source of truth for MVP constraints.
 
-Local-only artifacts (gitignored): `fixtures/` (audio), `models/` (downloaded model), `.venv/`, `tmp/`, `metrics/`.
+Local-only artifacts (gitignored): `fixtures/` (audio), `models/` (downloaded model), `tmp/`, `metrics/`.
 
 ## Build, Test, and Development Commands
 
@@ -24,7 +24,9 @@ Local-only artifacts (gitignored): `fixtures/` (audio), `models/` (downloaded mo
   - `npm run build`: `tsc` typecheck + Vite build.
 - Verification gates:
   - Windows one-command gate below is the primary gate.
-  - Python verification scripts are optional developer utilities.
+  - Rust tools are available through `tools/typevoice-tools`.
+  - `cargo run --locked --manifest-path tools/typevoice-tools/Cargo.toml -- verify quick`
+  - `cargo run --locked --manifest-path tools/typevoice-tools/Cargo.toml -- verify full`
 - Windows one-command gate:
   - `powershell -ExecutionPolicy Bypass -File .\\scripts\\windows\\windows_gate.ps1`
 
@@ -71,11 +73,11 @@ Local-only artifacts (gitignored): `fixtures/` (audio), `models/` (downloaded mo
 - Follow existing style; keep diffs small and readable.
 - TypeScript: strict mode is enabled; prefer explicit types at boundaries; components `PascalCase.tsx`.
 - Rust: run `cargo fmt` (in `apps/desktop/src-tauri/`) before submitting.
-- Python utility scripts: `snake_case`, type hints where they improve clarity.
 
 ## Testing Guidelines
 
 - Run Rust tests: `cargo test --locked` in `apps/desktop/src-tauri/`.
+- Run tools tests: `cargo test --locked --manifest-path tools/typevoice-tools/Cargo.toml`.
 - Run frontend build: `npm run build` in `apps/desktop/`.
 
 ## Commit & Pull Request Guidelines
@@ -83,7 +85,7 @@ Local-only artifacts (gitignored): `fixtures/` (audio), `models/` (downloaded mo
 - Commit messages follow Conventional Commits with scopes, e.g. `feat(ui): ...`, `fix(llm): ...`, `docs(win): ...`, `test(verify): ...`.
 - PRs should include:
   - What/why + linked spec section in `docs/` when changing behavior or gates.
-  - Gate results (`verify_quick`, and `verify_full` when relevant).
+  - Gate results (`verify quick`, and `verify full` when relevant).
   - Screenshots/GIFs for UI changes.
 
 ## Security & Configuration Tips
@@ -95,14 +97,14 @@ Local-only artifacts (gitignored): `fixtures/` (audio), `models/` (downloaded mo
 ```text
 [Project Index]|root:.
 |IMPORTANT: Prefer retrieval-led reasoning over pre-training-led reasoning for repository-specific behavior, structure, and APIs.
-|exclude_dirs:{.cache,.git,.mypy_cache,.next,.parcel-cache,.pnpm-store,.pytest_cache,.ruff_cache,.turbo,.venv,.yarn,__pycache__,build,coverage,dist,fixtures,metrics,models,node_modules,out,target,temp,tmp,venv}
+|exclude_dirs:{.cache,.git,.next,.parcel-cache,.pnpm-store,.turbo,.yarn,build,coverage,dist,fixtures,metrics,models,node_modules,out,target,temp,tmp}
 |exclude_files:{.env,.env.*,*.pem,*.key,*.p12,*.pfx,id_rsa*,id_ed25519*,.env,.env.*,*.pem,*.key,*.p12,*.pfx,id_rsa*,id_ed25519*}
-|.:{.github/,apps/,docs/,scripts/,tests/,.gitattributes,.gitignore,.nvmrc,.python-version,AGENTS.md,CHANGELOG.md,CITATION.cff,CODE_OF_CONDUCT.md,CODEOWNERS,CONTRIBUTING.md,GOVERNANCE.md,LICENSE,MAINTAINERS.md,pytest.ini,README.md,requirements.txt,rust-toolchain.toml,SECURITY.md,SUPPORT.md,THIRD_PARTY_NOTICES.md}
+|.:{.github/,apps/,docs/,scripts/,tools/,.gitattributes,.gitignore,.nvmrc,AGENTS.md,CHANGELOG.md,CITATION.cff,CODE_OF_CONDUCT.md,CODEOWNERS,CONTRIBUTING.md,GOVERNANCE.md,LICENSE,MAINTAINERS.md,README.md,rust-toolchain.toml,SECURITY.md,SUPPORT.md,THIRD_PARTY_NOTICES.md}
 |.github:{ISSUE_TEMPLATE/,workflows/,dependabot.yml,PULL_REQUEST_TEMPLATE.md,release.yml}
 |apps:{desktop/}
 |docs:{architecture.md,base-spec.md,fixtures-sources.md,index.md,llm-prompt-lab.md,perf-spike.md,privacy-data-flow.md,release-process.md,repository-automation.md,roadmap.md,tasks.md,tech-spec.md,verification.md,windows-dev.md,windows-gate.md}
-|scripts:{windows/,_verify_util.py,download_ffmpeg_toolchain.sh,download_fixtures.py,fixtures_manifest.json,llm_prompt_lab.py,verify_full.py,verify_quick.py}
-|tests:{test_verify_util.py}
+|scripts:{windows/,download_ffmpeg_toolchain.sh,fixtures_manifest.json}
+|tools:{typevoice-tools/}
 |.github/ISSUE_TEMPLATE:{bug_report.md,config.yml,feature_request.md}
 |.github/workflows:{ci.yml,codeql.yml,scorecards.yml}
 |apps/desktop:{public/,src-tauri/,src/,.gitignore,index.html,package-lock.json,package.json,README.md,tsconfig.json,tsconfig.node.json,vite.config.ts}
@@ -110,12 +112,14 @@ Local-only artifacts (gitignored): `fixtures/` (audio), `models/` (downloaded mo
 |apps/desktop/public:{fonts/,tauri.svg,vite.svg}
 |apps/desktop/src:{assets/,domain/,infra/,lib/,screens/,styles/,ui/,App.tsx,main.tsx,OverlayApp.tsx,types.ts,vite-env.d.ts}
 |apps/desktop/src-tauri:{.cargo/,capabilities/,gen/,icons/,src/,toolchain/,.gitignore,build.rs,Cargo.lock,Cargo.toml,tauri.conf.json}
+|tools/typevoice-tools:{src/,Cargo.lock,Cargo.toml}
+|tools/typevoice-tools/src:{main.rs}
 |apps/desktop/public/fonts:{OFL.txt,Silkscreen-Bold.ttf,Silkscreen-Regular.ttf}
 |apps/desktop/src-tauri/.cargo:{config.toml}
 |apps/desktop/src-tauri/capabilities:{default.json}
 |apps/desktop/src-tauri/gen:{schemas/}
 |apps/desktop/src-tauri/icons:{128x128.png,128x128@2x.png,32x32.png,icon.icns,icon.ico,icon.png,Square107x107Logo.png,Square142x142Logo.png,Square150x150Logo.png,Square284x284Logo.png,Square30x30Logo.png,Square310x310Logo.png,Square44x44Logo.png,Square71x71Logo.png,Square89x89Logo.png,StoreLogo.png}
-|apps/desktop/src-tauri/src:{obs/,audio_device_notifications_windows.rs,audio_devices_windows.rs,context_capture.rs,context_capture_windows.rs,context_pack.rs,data_dir.rs,export.rs,history.rs,hotkeys.rs,lib.rs,llm.rs,main.rs,pipeline.rs,record_input.rs,record_input_cache.rs,remote_asr.rs,safe_print.rs,settings.rs,subprocess.rs,task_manager.rs,templates.rs,toolchain.rs}
+|apps/desktop/src-tauri/src:{obs/,audio_capture.rs,audio_device_notifications_windows.rs,audio_devices_windows.rs,commands.rs,context_capture.rs,context_capture_windows.rs,context_pack.rs,data_dir.rs,doubao_asr.rs,export.rs,history.rs,hotkeys.rs,insertion.rs,lib.rs,llm.rs,main.rs,pipeline.rs,ports.rs,record_input.rs,record_input_cache.rs,remote_asr.rs,rewrite.rs,safe_print.rs,settings.rs,subprocess.rs,task_manager.rs,templates.rs,toolchain.rs,transcription.rs,transcription_actor.rs,ui_events.rs,voice_tasks.rs,voice_workflow.rs}
 |apps/desktop/src-tauri/toolchain:{bin/,ffmpeg_manifest.json}
 |apps/desktop/src/assets:{react.svg}
 |apps/desktop/src/domain:{diagnostic.ts}

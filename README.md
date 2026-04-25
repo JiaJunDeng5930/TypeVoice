@@ -7,7 +7,7 @@
 - 本地录音 -> FFmpeg 预处理 -> ASR 转写 -> 可选 LLM 改写 -> 复制/自动粘贴
 - 历史记录仅保存文本与元信息，不保存音频
 - 支持 Doubao 流式 ASR 与远程 HTTP ASR
-- 提供 `quick/full` 验证脚本
+- 提供 `quick/full` Rust 验证工具
 
 ## 快速开始
 
@@ -18,21 +18,14 @@ cd apps/desktop
 npm ci
 ```
 
-### 2) 准备 Python 验证环境
+### 2) 下载验证 fixtures（建议）
 
 ```bash
 cd /path/to/TypeVoice
-python3 -m venv .venv
-./.venv/bin/python -m pip install -r requirements.txt
+cargo run --locked --manifest-path tools/typevoice-tools/Cargo.toml -- fixtures download
 ```
 
-### 3) 下载验证 fixtures（建议）
-
-```bash
-./.venv/bin/python scripts/download_fixtures.py
-```
-
-### 4) 启动桌面应用
+### 3) 启动桌面应用
 
 ```bash
 cd apps/desktop
@@ -44,12 +37,12 @@ npm run tauri dev
 在仓库根目录执行：
 
 ```bash
-./.venv/bin/python -m pytest -q tests
-./.venv/bin/python scripts/verify_quick.py
-./.venv/bin/python scripts/verify_full.py
+cargo test --locked --manifest-path tools/typevoice-tools/Cargo.toml
+cargo run --locked --manifest-path tools/typevoice-tools/Cargo.toml -- verify quick
+cargo run --locked --manifest-path tools/typevoice-tools/Cargo.toml -- verify full
 ```
 
-说明：`verify_quick.py` / `verify_full.py` 会按 `scripts/fixtures_manifest.json`
+说明：`verify quick` / `verify full` 会按 `scripts/fixtures_manifest.json`
 自动下载并校验缺失的 fixture 音频。
 
 Windows 一键门禁参见 [docs/windows-gate.md](./docs/windows-gate.md)。

@@ -11,4 +11,5 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Added open source project baseline files: license, governance, contribution guides, and issue/PR templates.
 - Added third-party notices and FFmpeg redistribution/license statement.
 - Added CI/security/release automation skeleton under `.github/`.
-- Added reproducibility files for Python/Node/Rust toolchain versions.
+- Added reproducibility files for Node/Rust toolchain versions.
+- Added Rust CLI tools for verification, fixtures, and LLM prompt experiments.

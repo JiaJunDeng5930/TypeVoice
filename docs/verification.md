@@ -12,7 +12,7 @@
 - 固定样本音频：`fixtures/` 下的 `zh_10s.ogg`、`zh_60s.ogg`、`zh_5m.ogg`。
   - 音频本体不提交到 git。
   - 下载地址与 `sha256` 固化在 `scripts/fixtures_manifest.json`。
-  - `verify_quick.py` / `verify_full.py` 会在运行前自动下载并校验缺失样本。
+  - `typevoice-tools verify quick/full` 会在运行前自动下载并校验缺失样本。
 - 结构化指标：每次验证输出关键指标、成功/失败与错误码。
 
 ## 3. `quick`
@@ -21,7 +21,7 @@
 
 - Rust 后端编译检查。
 - 可调试性契约检查。
-- Python 快速单元测试。
+- FFmpeg 预处理参数契约检查。
 - FFmpeg 预处理取消验证。
 
 输出：
@@ -35,7 +35,7 @@
 
 - Rust 后端编译检查。
 - 可调试性契约检查。
-- 全部 Python 单元测试。
+- 全部 Rust 单元测试。
 - 三条 fixture 的 FFmpeg 预处理验证。
 - FFmpeg 预处理取消验证。
 

@@ -315,3 +315,29 @@ pub fn preprocess_ffmpeg_cancellable(
 }
 
 // Intentionally no generic "run_audio_pipeline" helper to keep call sites explicit.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ffmpeg_preprocess_args_keep_asr_input_format() {
+        let args = build_ffmpeg_preprocess_args(
+            Path::new("in.ogg"),
+            Path::new("out.wav"),
+            &PreprocessConfig::default(),
+        )
+        .expect("build args");
+
+        assert_eq!(args[args.iter().position(|v| v == "-ac").unwrap() + 1], "1");
+        assert_eq!(
+            args[args.iter().position(|v| v == "-ar").unwrap() + 1],
+            "16000"
+        );
+        assert_eq!(
+            args[args.iter().position(|v| v == "-c:a").unwrap() + 1],
+            "pcm_s16le"
+        );
+        assert_eq!(args.last().map(String::as_str), Some("out.wav"));
+    }
+}

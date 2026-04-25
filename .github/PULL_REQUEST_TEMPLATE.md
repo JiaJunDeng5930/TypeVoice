@@ -5,8 +5,8 @@
 ## Changes
 
 ## Verification
-- [ ] `./.venv/bin/python -m pytest -q tests`
-- [ ] `./.venv/bin/python scripts/verify_quick.py`
+- [ ] `cargo test --locked --manifest-path tools/typevoice-tools/Cargo.toml`
+- [ ] `cargo run --locked --manifest-path tools/typevoice-tools/Cargo.toml -- verify quick`
 - [ ] Windows gate when applicable
 
 ## Docs

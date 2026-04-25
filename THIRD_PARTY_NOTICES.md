@@ -24,11 +24,11 @@ This project redistributes and/or integrates third-party components.
   - `https://johnvansickle.com/ffmpeg/release-source/`
   - Upstream FFmpeg legal page: `https://ffmpeg.org/legal.html`
 
-## npm/cargo/pip dependencies
+## npm/cargo dependencies
 
 This repository also uses third-party dependencies from:
 - npm (`apps/desktop/package-lock.json`)
 - Cargo (`apps/desktop/src-tauri/Cargo.lock`)
-- pip (`requirements.txt`)
+- Cargo (`tools/typevoice-tools/Cargo.lock`)
 
 Their licenses are governed by each upstream package.

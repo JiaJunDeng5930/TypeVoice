@@ -2,14 +2,14 @@
 
 目标：把“测试 LLM 返回 -> 调整 prompt -> 再测”的流程固化为可复用的脚本，不做自动判定（人工判断输出是否符合预期）。
 
-脚本：`scripts/llm_prompt_lab.py`
+工具：`typevoice-tools llm-prompt-lab`
 
 ## 1. 基本用法
 
 最小示例（只发 transcript）：
 
 ```bash
-python3 scripts/llm_prompt_lab.py \
+cargo run --locked --manifest-path tools/typevoice-tools/Cargo.toml -- llm-prompt-lab \
   --base-url http://api.server/v1/chat/completions \
   --model gpt-5.3-codex \
   --reasoning-effort medium \
@@ -19,7 +19,7 @@ python3 scripts/llm_prompt_lab.py \
 
 说明：
 
-- `--base-url` 可填 `.../v1` 或完整 `.../v1/chat/completions`，脚本会自动归一化并发送到 `/chat/completions`。
+- `--base-url` 可填 `.../v1` 或完整 `.../v1/chat/completions`，工具会自动归一化并发送到 `/chat/completions`。
 - API Key 默认从环境变量 `TYPEVOICE_LLM_API_KEY` 读取（不建议用 `--api-key`，避免落到 shell history）。
 - 每次运行会落盘到 `tmp/llm_prompt_lab/<timestamp>_<hash>/`：
   - `meta.json`、`request.json`、`response.json`、`response.txt` 等。
@@ -29,7 +29,7 @@ python3 scripts/llm_prompt_lab.py \
 当前 app 行为（一个 user message 内同时含 transcript + context）：
 
 ```bash
-python3 scripts/llm_prompt_lab.py \
+cargo run --locked --manifest-path tools/typevoice-tools/Cargo.toml -- llm-prompt-lab \
   --base-url http://api.server/v1 \
   --model gpt-5.3-codex \
   --reasoning-effort medium \
@@ -44,7 +44,7 @@ python3 scripts/llm_prompt_lab.py \
 对比模式（拆成两条 user message：第一条只给 transcript，第二条只给 context，并带“不要复述上下文”的固定前缀）：
 
 ```bash
-python3 scripts/llm_prompt_lab.py \
+cargo run --locked --manifest-path tools/typevoice-tools/Cargo.toml -- llm-prompt-lab \
   --base-url http://api.server/v1 \
   --model gpt-5.3-codex \
   --reasoning-effort medium \
@@ -64,7 +64,7 @@ python3 scripts/llm_prompt_lab.py \
 
 ```bash
 export EDITOR=vim
-python3 scripts/llm_prompt_lab.py \
+cargo run --locked --manifest-path tools/typevoice-tools/Cargo.toml -- llm-prompt-lab \
   --base-url http://api.server/v1 \
   --model gpt-5.3-codex \
   --reasoning-effort medium \
@@ -75,5 +75,5 @@ python3 scripts/llm_prompt_lab.py \
 
 ## 4. 注意事项
 
-- 本脚本不做“输出是否正确”的自动判定：你需要人工判断 `response.txt` 是否符合预期。
-- 脚本不会将 API Key 写入磁盘（但若你用 `--api-key`，它仍可能出现在终端历史中）。
+- 本工具不做“输出是否正确”的自动判定：你需要人工判断 `response.txt` 是否符合预期。
+- 工具不会将 API Key 写入磁盘（但若你用 `--api-key`，它仍可能出现在终端历史中）。
