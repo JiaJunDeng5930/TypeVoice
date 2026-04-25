@@ -49,20 +49,20 @@ let previewSettings: Record<string, unknown> = {
 };
 
 const previewWorkflow = {
-  phase: "idle",
+  phase: "recording",
   taskId: null,
   recordingSessionId: null,
   lastTranscriptId: "preview-transcript",
-  lastAsrText: "Send the revised note after the meeting.",
-  lastText: "Send the revised note after the meeting.",
+  lastAsrText: "Send the revised note after the meeting, then attach the short summary below it.",
+  lastText: "",
   lastCreatedAtMs: previewNow - 8 * 60 * 1000,
   diagnosticCode: null,
   diagnosticLine: "",
-  primaryLabel: "START",
+  primaryLabel: "STOP",
   primaryDisabled: false,
-  canRewrite: true,
-  canInsert: true,
-  canCopy: true,
+  canRewrite: false,
+  canInsert: false,
+  canCopy: false,
 };
 
 const previewTemplates = [

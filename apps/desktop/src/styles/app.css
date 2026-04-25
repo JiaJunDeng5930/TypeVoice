@@ -271,63 +271,27 @@ button {
   letter-spacing: 0.16em;
 }
 
-.lastLine {
-  appearance: none;
-  position: relative;
-  width: 100%;
-  align-self: start;
-  border: 0;
+.streamCanvas {
+  min-height: 0;
+  height: 100%;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
-  background: transparent;
-  color: var(--ink);
-  padding: 28px 88px 28px 0;
-  cursor: pointer;
+  padding: 34px 0;
   display: grid;
-  gap: 10px;
-  text-align: left;
+  align-content: start;
 }
 
-.lastLine:disabled {
-  cursor: not-allowed;
-}
-
-.lastLine:hover:not(:disabled),
-.lastLine:focus-visible:not(:disabled) {
-  outline: none;
-  border-color: var(--border-strong);
-}
-
-.lastText {
-  max-width: 680px;
+.streamText {
+  max-width: 940px;
   color: var(--ink);
-  font-size: clamp(24px, 3.1vw, 48px);
-  line-height: 1.12;
+  font-size: clamp(30px, 3.25vw, 56px);
+  line-height: 1.16;
   letter-spacing: 0;
 }
 
-.lastMeta {
+.streamText.isEmpty {
   color: var(--muted);
-  font-size: 11px;
-}
-
-.lastCopy {
-  position: absolute;
-  right: 0;
-  top: 28px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--muted);
-  padding: 7px 12px;
-  font-size: 10px;
-  letter-spacing: 0.14em;
-}
-
-.lastCopy.isOn,
-.lastLine:hover:not(:disabled) .lastCopy {
-  color: var(--accent);
-  border-color: rgba(183, 121, 31, 0.44);
-  background: #fff8ec;
+  font-size: clamp(24px, 2.2vw, 36px);
 }
 
 .mainDiag {
@@ -402,7 +366,7 @@ button {
 
 .historyRow {
   display: grid;
-  grid-template-columns: minmax(140px, 0.24fr) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(140px, 0.24fr) minmax(0, 1fr);
   gap: 24px;
   align-items: center;
   min-height: 82px;
@@ -426,25 +390,6 @@ button {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
-}
-
-.historyCopy {
-  appearance: none;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--muted);
-  padding: 7px 12px;
-  cursor: pointer;
-  font-size: 10px;
-  letter-spacing: 0.14em;
-}
-
-.historyCopy:hover,
-.historyCopy:focus-visible {
-  color: var(--accent);
-  border-color: rgba(183, 121, 31, 0.44);
-  outline: none;
 }
 
 .historyFooter {
@@ -859,7 +804,7 @@ body.isOverlay {
   }
 
   .historyRow {
-    grid-template-columns: 1fr auto;
+    grid-template-columns: 1fr;
   }
 
   .historyTime {

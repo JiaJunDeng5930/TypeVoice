@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  browserClipboard,
   defaultTauriGateway,
-  type ClipboardPort,
   type TauriGateway,
 } from "../infra/runtimePorts";
 import type { HistoryItem } from "../types";
@@ -11,7 +9,6 @@ type Props = {
   epoch: number;
   pushToast: (msg: string, tone?: "default" | "ok" | "danger") => void;
   gateway?: TauriGateway;
-  clipboard?: ClipboardPort;
 };
 
 const PAGE = 50;
@@ -20,7 +17,6 @@ export function HistoryScreen({
   epoch,
   pushToast,
   gateway = defaultTauriGateway,
-  clipboard = browserClipboard,
 }: Props) {
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -82,17 +78,6 @@ export function HistoryScreen({
     if (remaining < 140) loadMore();
   }
 
-  async function copyItem(h: HistoryItem) {
-    const text = (h.final_text || h.asr_text || "").trim();
-      if (!text) return;
-    try {
-      await clipboard.copyText(text);
-      pushToast("COPIED", "ok");
-    } catch {
-      pushToast("COPY FAILED", "danger");
-    }
-  }
-
   return (
     <div className="pageSurface historySurface">
       <div className="pageHeader">
@@ -109,14 +94,6 @@ export function HistoryScreen({
             <div className="historyPreview">
               {(h.final_text || h.asr_text || "").trim() || "-"}
             </div>
-            <button
-              type="button"
-              className="historyCopy"
-              onClick={() => copyItem(h)}
-              title="COPY"
-            >
-              COPY
-            </button>
           </div>
         ))}
 

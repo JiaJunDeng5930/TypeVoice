@@ -49,7 +49,6 @@ export function MainScreen({
   const client = useMemo(() => backend || createBackendClient(gateway), [backend, gateway]);
   const [workflow, setWorkflow] = useState<WorkflowView>(EMPTY_WORKFLOW_VIEW);
   const [hover, setHover] = useState(false);
-  const [lastHover, setLastHover] = useState(false);
   const [liveTranscript, setLiveTranscript] = useState("");
 
   useEffect(() => {
@@ -198,10 +197,7 @@ export function MainScreen({
 
   const phase = String(workflow.phase || "idle").toLowerCase();
   const hint = workflow.primaryLabel || "START";
-  const lastText = liveTranscript || workflow.lastText || "";
-  const lastMeta = workflow.lastCreatedAtMs
-    ? new Date(workflow.lastCreatedAtMs).toLocaleString()
-    : "NO LAST RESULT";
+  const streamText = liveTranscript || workflow.lastAsrText || "";
   const statusLabel = phase === "idle" ? "READY" : hint;
 
   return (
@@ -234,27 +230,15 @@ export function MainScreen({
 
       <div className="resultSheet">
         <div className="resultHeader">
-          <div className="sectionTitle">LAST RESULT</div>
+          <div className="sectionTitle">CURRENT TRANSCRIPT</div>
           <span className="resultStatus">READY</span>
         </div>
 
-        <button
-          type="button"
-          className="lastLine"
-          onClick={() => void sendWorkflowCommand("copyLast")}
-          disabled={!workflow.canCopy}
-          onMouseEnter={() => setLastHover(true)}
-          onMouseLeave={() => setLastHover(false)}
-          title={workflow.canCopy ? "COPY" : ""}
-        >
-          <span className="lastText">
-            {lastText.trim() ? lastText : "Send the revised note after the meeting."}
-          </span>
-          <span className="lastMeta">{lastMeta}</span>
-          <span className={`lastCopy ${lastHover && workflow.canCopy ? "isOn" : ""}`}>
-            COPY
-          </span>
-        </button>
+        <div className="streamCanvas" aria-live="polite">
+          <div className={`streamText ${streamText.trim() ? "" : "isEmpty"}`}>
+            {streamText.trim() || "Start recording to see live transcription here."}
+          </div>
+        </div>
 
         <div
           className={`mainDiag ${workflow.diagnosticLine ? "isVisible" : ""}`}
