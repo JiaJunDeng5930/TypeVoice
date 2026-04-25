@@ -94,12 +94,10 @@ export function HistoryScreen({
   }
 
   return (
-    <div className="card">
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <div className="sectionTitle" style={{ margin: 0 }}>
-          HISTORY
-        </div>
-        <div className="muted">{items.length}</div>
+    <div className="pageSurface historySurface">
+      <div className="pageHeader">
+        <div className="sectionTitle">HISTORY</div>
+        <div className="muted">{items.length} ITEMS</div>
       </div>
 
       <div className="historyScroller" ref={scrollerRef} onScroll={onScroll}>

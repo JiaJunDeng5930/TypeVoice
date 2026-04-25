@@ -12,13 +12,25 @@ export function IconStart({ size = 64, tone = "ink" }: IconProps) {
     <svg
       width={size}
       height={size}
-      viewBox="0 0 16 16"
-      shapeRendering="crispEdges"
+      viewBox="0 0 24 24"
       aria-hidden="true"
     >
-      <rect x="0" y="0" width="16" height="16" fill="none" />
-      <rect x="3" y="3" width="10" height="10" fill="none" stroke={c} strokeWidth="2" />
-      <rect x="6" y="6" width="4" height="4" fill={c} />
+      <path
+        d="M12 3.75a3.2 3.2 0 0 0-3.2 3.2v4.3a3.2 3.2 0 0 0 6.4 0v-4.3A3.2 3.2 0 0 0 12 3.75Z"
+        fill="none"
+        stroke={c}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.6"
+      />
+      <path
+        d="M6.4 10.6v.75a5.6 5.6 0 0 0 11.2 0v-.75M12 17v3.25M9.1 20.25h5.8"
+        fill="none"
+        stroke={c}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.6"
+      />
     </svg>
   );
 }
@@ -29,12 +41,11 @@ export function IconStop({ size = 64, tone = "ink" }: IconProps) {
     <svg
       width={size}
       height={size}
-      viewBox="0 0 16 16"
-      shapeRendering="crispEdges"
+      viewBox="0 0 24 24"
       aria-hidden="true"
     >
-      <rect x="3" y="3" width="10" height="10" fill={c} />
-      <rect x="1" y="1" width="14" height="14" fill="none" stroke={c} strokeWidth="2" />
+      <rect x="7" y="7" width="10" height="10" rx="2.2" fill={c} />
+      <circle cx="12" cy="12" r="8.25" fill="none" stroke={c} strokeWidth="1.6" />
     </svg>
   );
 }
@@ -45,17 +56,25 @@ export function IconTranscribing({ size = 64, tone = "accent" }: IconProps) {
     <svg
       width={size}
       height={size}
-      viewBox="0 0 16 16"
-      shapeRendering="crispEdges"
+      viewBox="0 0 24 24"
       aria-hidden="true"
       className="pxSpin"
     >
-      <rect x="0" y="0" width="16" height="16" fill="none" />
-      <rect x="2" y="2" width="12" height="12" fill="none" stroke={c} strokeWidth="2" />
-      <rect x="7" y="4" width="2" height="2" fill={c} />
-      <rect x="10" y="7" width="2" height="2" fill={c} />
-      <rect x="7" y="10" width="2" height="2" fill={c} />
-      <rect x="4" y="7" width="2" height="2" fill={c} />
+      <path
+        d="M12 3.8a8.2 8.2 0 1 1-7.1 4.1"
+        fill="none"
+        stroke={c}
+        strokeLinecap="round"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M4.2 4.2v3.9h3.9"
+        fill="none"
+        stroke={c}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
     </svg>
   );
 }

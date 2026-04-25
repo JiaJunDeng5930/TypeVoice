@@ -712,7 +712,12 @@ export function SettingsScreen({
   }, [asrProvider, remoteAsrUrl]);
 
   return (
-    <div className="stack">
+    <div className="pageSurface settingsSurface">
+      <div className="pageHeader settingsHeader">
+        <div className="sectionTitle">SETTINGS</div>
+        <div className="ok">SAVED</div>
+      </div>
+      <div className="settingsGrid">
       <div className="card">
         <div className="sectionTitle">ASR</div>
         <div className="row">
@@ -1163,6 +1168,8 @@ export function SettingsScreen({
             CLEAR ALL
           </PixelButton>
         </div>
+      </div>
+
       </div>
 
       <PixelDialog

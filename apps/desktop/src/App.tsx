@@ -78,39 +78,41 @@ export default function App() {
   }, []);
 
   const subtitle = useMemo(() => {
-    return tab === "main" ? "ONE BUTTON" : tab === "history" ? "ALL RUNS" : "CONFIG";
+    return tab === "main" ? "READY" : tab === "history" ? "ALL RUNS" : "SAVED";
   }, [tab]);
 
   return (
     <div className="appBg">
-      <div className="layout">
-        <div className="topbar">
+      <div className="layout appShell">
+        <aside className="sideRail">
           <div className="brand">
             <div className="brandTitle">TYPEVOICE</div>
-            <div className="brandSub">{subtitle}</div>
           </div>
           <PixelTabs active={tab} onChange={setTab} />
-        </div>
+          <div className="brandSub">{subtitle}</div>
+        </aside>
 
-        <div style={{ display: tab === "main" ? "block" : "none" }}>
-          <MainScreen
-            settings={settings}
-            pushToast={pushToast}
-            onHistoryChanged={onHistoryChanged}
-          />
-        </div>
-        <div style={{ display: tab === "history" ? "block" : "none" }}>
-          <HistoryScreen epoch={epoch} pushToast={pushToast} />
-        </div>
-        <div style={{ display: tab === "settings" ? "block" : "none" }}>
-          <SettingsScreen
-            settings={settings}
-            savePatch={savePatch}
-            pushToast={pushToast}
-            onHistoryCleared={onHistoryChanged}
-          />
-          {settingsError ? <div className="muted">SETTINGS ERROR: {settingsError}</div> : null}
-        </div>
+        <main className="contentStage">
+          <div style={{ display: tab === "main" ? "block" : "none" }}>
+            <MainScreen
+              settings={settings}
+              pushToast={pushToast}
+              onHistoryChanged={onHistoryChanged}
+            />
+          </div>
+          <div style={{ display: tab === "history" ? "block" : "none" }}>
+            <HistoryScreen epoch={epoch} pushToast={pushToast} />
+          </div>
+          <div style={{ display: tab === "settings" ? "block" : "none" }}>
+            <SettingsScreen
+              settings={settings}
+              savePatch={savePatch}
+              pushToast={pushToast}
+              onHistoryCleared={onHistoryChanged}
+            />
+            {settingsError ? <div className="muted">SETTINGS ERROR: {settingsError}</div> : null}
+          </div>
+        </main>
       </div>
 
       <PixelToastHost toasts={toasts} onDismiss={dismissToast} />

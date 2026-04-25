@@ -202,10 +202,11 @@ export function MainScreen({
   const lastMeta = workflow.lastCreatedAtMs
     ? new Date(workflow.lastCreatedAtMs).toLocaleString()
     : "NO LAST RESULT";
+  const statusLabel = phase === "idle" ? "READY" : hint;
 
   return (
-    <div className="card mainCard">
-      <div className="mainCenter">
+    <div className="pageSurface mainSurface">
+      <div className="voiceDock">
         <button
           type="button"
           className={`mainButton ${phase === "transcribing" ? "isBusy" : ""}`}
@@ -219,22 +220,47 @@ export function MainScreen({
           title={hint}
         >
           {phase === "idle" || phase === "transcribed" || phase === "rewritten" || phase === "cancelled" || phase === "failed" ? (
-            <IconStart size={84} tone="accent" />
+            <IconStart size={42} tone="accent" />
           ) : phase === "recording" ? (
-            <IconStop size={84} tone="accent" />
+            <IconStop size={42} tone="accent" />
           ) : (
-            <IconTranscribing size={84} tone="accent" />
+            <IconTranscribing size={42} tone="accent" />
           )}
+          <span className="mainButtonText">{hint}</span>
         </button>
 
-        <div className="mainHint" aria-hidden={!hover && phase !== "transcribing"}>
-          {hover || phase !== "idle" ? hint : ""}
+        <div className="mainHint">{hover ? hint : statusLabel}</div>
+      </div>
+
+      <div className="resultSheet">
+        <div className="resultHeader">
+          <div className="sectionTitle">LAST RESULT</div>
+          <span className="resultStatus">READY</span>
         </div>
+
+        <button
+          type="button"
+          className="lastLine"
+          onClick={() => void sendWorkflowCommand("copyLast")}
+          disabled={!workflow.canCopy}
+          onMouseEnter={() => setLastHover(true)}
+          onMouseLeave={() => setLastHover(false)}
+          title={workflow.canCopy ? "COPY" : ""}
+        >
+          <span className="lastText">
+            {lastText.trim() ? lastText : "Send the revised note after the meeting."}
+          </span>
+          <span className="lastMeta">{lastMeta}</span>
+          <span className={`lastCopy ${lastHover && workflow.canCopy ? "isOn" : ""}`}>
+            COPY
+          </span>
+        </button>
+
         <div
           className={`mainDiag ${workflow.diagnosticLine ? "isVisible" : ""}`}
           aria-hidden={!workflow.diagnosticLine}
         >
-          {workflow.diagnosticLine || ""}
+          {workflow.diagnosticLine || "NO ERRORS"}
         </div>
 
         <div className="mainActions">
@@ -255,24 +281,6 @@ export function MainScreen({
             INSERT
           </button>
         </div>
-
-        <button
-          type="button"
-          className="lastLine"
-          onClick={() => void sendWorkflowCommand("copyLast")}
-          disabled={!workflow.canCopy}
-          onMouseEnter={() => setLastHover(true)}
-          onMouseLeave={() => setLastHover(false)}
-          title={workflow.canCopy ? "COPY" : ""}
-        >
-          <span className="lastMeta">{lastMeta}</span>
-          <span className="lastText">
-            {lastText.trim() ? lastText : "-"}
-          </span>
-          <span className={`lastCopy ${lastHover && workflow.canCopy ? "isOn" : ""}`}>
-            COPY
-          </span>
-        </button>
       </div>
     </div>
   );
