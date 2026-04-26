@@ -253,32 +253,20 @@ pub fn resolve_hotkey_config(s: &Settings) -> Result<HotkeyConfigResolved> {
         });
     }
 
-    let ptt = s
-        .hotkey_ptt
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| anyhow!("E_SETTINGS_HOTKEY_PTT_MISSING: hotkey_ptt is required"))?
-        .to_string();
-
-    let toggle = s
-        .hotkey_toggle
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| anyhow!("E_SETTINGS_HOTKEY_TOGGLE_MISSING: hotkey_toggle is required"))?
-        .to_string();
-
-    if ptt.eq_ignore_ascii_case(&toggle) {
-        return Err(anyhow!(
-            "E_SETTINGS_HOTKEY_CONFLICT: hotkey_ptt and hotkey_toggle must be different"
-        ));
-    }
-
     Ok(HotkeyConfigResolved {
         enabled: true,
-        ptt: Some(ptt),
-        toggle: Some(toggle),
+        ptt: s
+            .hotkey_ptt
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(ToOwned::to_owned),
+        toggle: s
+            .hotkey_toggle
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(ToOwned::to_owned),
     })
 }
 

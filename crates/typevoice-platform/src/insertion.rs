@@ -53,6 +53,13 @@ impl InsertResult {
 }
 
 pub async fn insert_text(req: InsertTextRequest) -> PortResult<InsertResult> {
+    insert_text_after_focus(req, None).await
+}
+
+pub async fn insert_text_after_focus(
+    req: InsertTextRequest,
+    target_hwnd: Option<isize>,
+) -> PortResult<InsertResult> {
     let dir =
         data_dir::data_dir().map_err(|e| PortError::from_message("E_DATA_DIR", e.to_string()))?;
     let span = obs::Span::start(
@@ -81,6 +88,9 @@ pub async fn insert_text(req: InsertTextRequest) -> PortResult<InsertResult> {
         })));
         return Ok(InsertResult::copy_only());
     }
+
+    let _ = export::focus_window_best_effort(target_hwnd);
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
 
     match export::auto_paste_text(&req.text).await {
         Ok(()) => {

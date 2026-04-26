@@ -5,6 +5,7 @@ use anyhow::{anyhow, Result};
 
 pub trait ContextCollector: Send + Sync {
     fn warmup_best_effort(&self);
+    fn last_external_hwnd_best_effort(&self) -> Option<isize>;
     fn capture_hotkey_context_now(
         &self,
         data_dir: &Path,
@@ -22,6 +23,10 @@ pub trait ContextCollector: Send + Sync {
 impl ContextCollector for context_capture::ContextService {
     fn warmup_best_effort(&self) {
         self.warmup_best_effort();
+    }
+
+    fn last_external_hwnd_best_effort(&self) -> Option<isize> {
+        self.last_external_hwnd_best_effort()
     }
 
     fn capture_hotkey_context_now(
@@ -60,6 +65,10 @@ impl TaskManager {
 
     pub fn warmup_context_best_effort(&self) {
         self.ctx.warmup_best_effort();
+    }
+
+    pub fn last_external_hwnd_best_effort(&self) -> Option<isize> {
+        self.ctx.last_external_hwnd_best_effort()
     }
 
     pub fn capture_hotkey_context(
@@ -103,6 +112,10 @@ mod tests {
 
     impl ContextCollector for FakeContext {
         fn warmup_best_effort(&self) {}
+
+        fn last_external_hwnd_best_effort(&self) -> Option<isize> {
+            None
+        }
 
         fn capture_hotkey_context_now(
             &self,

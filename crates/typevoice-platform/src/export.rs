@@ -63,6 +63,19 @@ pub async fn auto_paste_text(text: &str) -> Result<(), ExportError> {
     }
 }
 
+pub fn focus_window_best_effort(hwnd: Option<isize>) -> bool {
+    #[cfg(windows)]
+    {
+        return windows::focus_window_best_effort(hwnd);
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = hwnd;
+        false
+    }
+}
+
 #[cfg(any(windows, test))]
 fn utf16_code_units(text: &str) -> Vec<u16> {
     text.encode_utf16().collect()
@@ -78,8 +91,20 @@ mod windows {
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, IsWindow, GUITHREADINFO,
+        GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, IsWindow,
+        SetForegroundWindow, GUITHREADINFO,
     };
+
+    pub fn focus_window_best_effort(hwnd: Option<isize>) -> bool {
+        let Some(hwnd) = hwnd else {
+            return false;
+        };
+        let hwnd = hwnd as HWND;
+        if hwnd.is_null() || unsafe { IsWindow(hwnd) } == 0 {
+            return false;
+        }
+        unsafe { SetForegroundWindow(hwnd) != 0 }
+    }
 
     pub fn auto_input_text(text: &str) -> Result<(), ExportError> {
         let target = resolve_foreground_focus_window().ok_or_else(|| {

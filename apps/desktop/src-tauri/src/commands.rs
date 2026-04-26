@@ -24,6 +24,7 @@ pub fn command_names() -> &'static [&'static str] {
         "workflow_snapshot",
         "workflow_command",
         "workflow_apply_event",
+        "overlay_insert_text",
         "transcribe_fixture",
     ]
 }
@@ -51,6 +52,13 @@ pub struct RecordTranscribeStopRequest {
 pub struct RecordTranscribeCancelRequest {
     pub session_id: Option<String>,
     pub transcript_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverlayInsertTextRequest {
+    pub transcript_id: Option<String>,
+    pub text: String,
 }
 
 #[tauri::command]
@@ -197,6 +205,30 @@ pub async fn insert_text(
         .insert_text(&mailbox, req)
         .await
         .map_err(render_workflow_error)
+}
+
+#[tauri::command]
+pub async fn overlay_insert_text(
+    task_state: State<'_, crate::task_manager::TaskManager>,
+    req: OverlayInsertTextRequest,
+) -> Result<InsertResult, String> {
+    if req.text.trim().is_empty() {
+        return Err("E_EXPORT_EMPTY_TEXT: empty text cannot be exported".to_string());
+    }
+    let target_hwnd = task_state
+        .last_external_hwnd_best_effort()
+        .ok_or_else(|| {
+            "E_OVERLAY_TARGET_UNAVAILABLE: no external target window captured".to_string()
+        })?;
+    crate::insertion::insert_text_after_focus(
+        InsertTextRequest {
+            transcript_id: req.transcript_id,
+            text: req.text,
+        },
+        Some(target_hwnd),
+    )
+    .await
+    .map_err(|err| format!("{}: {}", err.code, err.message))
 }
 
 fn normalize_task_id(task_id: Option<String>) -> Result<Option<String>, String> {

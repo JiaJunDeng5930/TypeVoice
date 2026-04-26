@@ -35,6 +35,13 @@ struct OverlayState {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct OverlayResizeRequest {
+    width: f64,
+    height: f64,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct UiLogEventRequest {
     kind: String,
     code: Option<String>,
@@ -220,6 +227,17 @@ fn overlay_set_state(app: tauri::AppHandle, state: OverlayState) -> Result<(), S
     // Broadcast: the overlay window listens and updates its UI.
     let _ = app.emit("tv_overlay_state", state);
     span.ok(None);
+    Ok(())
+}
+
+#[tauri::command]
+fn overlay_resize(app: tauri::AppHandle, req: OverlayResizeRequest) -> Result<(), String> {
+    let width = req.width.clamp(320.0, 640.0);
+    let height = req.height.clamp(96.0, 520.0);
+    if let Some(w) = app.get_webview_window("overlay") {
+        w.set_size(tauri::LogicalSize::new(width, height))
+            .map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
@@ -877,6 +895,7 @@ pub fn run() {
             commands::workflow_snapshot,
             commands::workflow_command,
             commands::workflow_apply_event,
+            commands::overlay_insert_text,
             commands::transcribe_fixture,
             abort_pending_task,
             list_templates,
@@ -903,6 +922,7 @@ pub fn run() {
             hotkeys::check_hotkey_available,
             runtime_toolchain_status,
             overlay_set_state,
+            overlay_resize,
             ui_log_event,
         ])
         .run(ctx)

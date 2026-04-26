@@ -6,6 +6,8 @@ import type {
   WorkflowApplyEventRequest,
   WorkflowCommand,
   WorkflowView,
+  RewriteResult,
+  InsertResult,
 } from "../types";
 
 export type BackendClient = {
@@ -15,12 +17,15 @@ export type BackendClient = {
     taskId?: string | null;
   }): Promise<WorkflowView>;
   workflowApplyEvent(req: WorkflowApplyEventRequest): Promise<WorkflowView>;
+  rewriteText(req: { transcriptId: string; text: string; templateId?: string | null }): Promise<RewriteResult>;
+  insertOverlayText(req: { transcriptId?: string | null; text: string }): Promise<InsertResult>;
   overlaySetState(state: {
     visible: boolean;
     status: string;
     detail?: string | null;
     ts_ms: number;
   }): Promise<void>;
+  overlayResize(req: { width: number; height: number }): Promise<void>;
   logUiEvent(req: Record<string, unknown>): Promise<void>;
   runtimeToolchainStatus(): Promise<RuntimeToolchainStatus>;
   historyList(req: { limit: number; beforeMs?: number | null }): Promise<HistoryItem[]>;
@@ -38,8 +43,17 @@ export function createBackendClient(gateway: TauriGateway = defaultTauriGateway)
     workflowApplyEvent(req) {
       return gateway.invoke<WorkflowView>("workflow_apply_event", { req });
     },
+    rewriteText(req) {
+      return gateway.invoke<RewriteResult>("rewrite_text", { req });
+    },
+    insertOverlayText(req) {
+      return gateway.invoke<InsertResult>("overlay_insert_text", { req });
+    },
     overlaySetState(state) {
       return gateway.invoke<void>("overlay_set_state", { state });
+    },
+    overlayResize(req) {
+      return gateway.invoke<void>("overlay_resize", { req });
     },
     logUiEvent(req) {
       return gateway.invoke<void>("ui_log_event", { req });

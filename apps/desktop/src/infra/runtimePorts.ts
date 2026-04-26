@@ -164,6 +164,7 @@ const browserPreviewGateway: TauriGateway = {
     switch (command) {
       case "ui_log_event":
       case "overlay_set_state":
+      case "overlay_resize":
       case "set_llm_api_key":
       case "clear_llm_api_key":
       case "set_remote_asr_api_key":
@@ -182,6 +183,21 @@ const browserPreviewGateway: TauriGateway = {
       case "workflow_command":
       case "workflow_apply_event":
         return previewWorkflow as T;
+      case "rewrite_text":
+        return {
+          transcriptId: String((args?.req as Record<string, unknown> | undefined)?.transcriptId || "preview-transcript"),
+          finalText: String((args?.req as Record<string, unknown> | undefined)?.text || "").trim(),
+          rewriteMs: 80,
+          templateId: "clean-note",
+        } as T;
+      case "overlay_insert_text":
+        return {
+          copied: true,
+          autoPasteAttempted: true,
+          autoPasteOk: true,
+          errorCode: null,
+          errorMessage: null,
+        } as T;
       case "runtime_toolchain_status":
         return {
           ready: true,

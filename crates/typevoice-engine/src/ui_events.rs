@@ -307,7 +307,9 @@ fn overlay_state_from_event(event: &UiEvent) -> Option<OverlayState> {
     let (visible, status, detail) = match phase {
         "recording" => (true, "REC".to_string(), None),
         "transcribing" => (true, "TRANSCRIBING".to_string(), None),
+        "transcribed" => (true, "TRANSCRIBED".to_string(), None),
         "rewriting" => (true, "REWRITING".to_string(), None),
+        "rewritten" => (true, "REWRITTEN".to_string(), None),
         "inserting" => (true, "INSERTING".to_string(), None),
         _ => (false, "IDLE".to_string(), diagnostic_code),
     };

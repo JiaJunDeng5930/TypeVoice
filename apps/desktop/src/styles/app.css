@@ -691,9 +691,95 @@ button {
   border-top: 1px solid var(--border);
 }
 
+.hotkeyGuide {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.hotkeyGuide > div {
+  display: grid;
+  grid-template-columns: 112px 1fr;
+  gap: 12px;
+  align-items: center;
+}
+
+.hotkeyGuide span:first-child {
+  color: var(--ink);
+  letter-spacing: 0.08em;
+}
+
 body.isOverlay {
   background: transparent;
   overflow: hidden;
+}
+
+.transcriptOverlayRoot {
+  --overlay-tone: rgba(183, 121, 31, 0.88);
+  width: 100%;
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto minmax(64px, 1fr);
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(222, 215, 204, 0.9);
+  border-radius: 8px;
+  background: rgba(255, 253, 248, 0.96);
+  box-shadow: 0 12px 32px var(--shadow);
+}
+
+.transcriptOverlayRoot.isHidden {
+  display: none;
+}
+
+.transcriptOverlayRoot.tone-ok {
+  --overlay-tone: rgba(59, 122, 87, 0.88);
+  border-color: rgba(59, 122, 87, 0.35);
+}
+
+.transcriptOverlayRoot.tone-danger {
+  --overlay-tone: rgba(184, 74, 58, 0.88);
+  border-color: rgba(184, 74, 58, 0.35);
+}
+
+.transcriptOverlayTop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.transcriptOverlayBadge {
+  flex: 0 0 auto;
+  color: var(--overlay-tone);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+}
+
+.transcriptOverlayDetail {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transcriptOverlayEditor {
+  width: 100%;
+  min-height: 64px;
+  max-height: 430px;
+  resize: none;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1.4;
+  letter-spacing: 0;
+  overflow-y: auto;
 }
 
 .overlayRoot {

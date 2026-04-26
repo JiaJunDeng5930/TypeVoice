@@ -1,6 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createBackendClient } from "./infra/backendClient";
 import { defaultTauriGateway } from "./infra/runtimePorts";
-import type { UiEvent } from "./types";
+import {
+  appendTranscript,
+  overlayKeyAction,
+  textFromRewriteCompleted,
+  textFromTranscriptionCompleted,
+  textFromTranscriptionPartial,
+} from "./domain/overlaySession";
+import type { WorkflowView } from "./types";
 
 type OverlayState = {
   visible: boolean;
@@ -9,63 +17,75 @@ type OverlayState = {
   ts_ms: number;
 };
 
-type OverlayAudioLevelEvent = {
-  recordingId: string;
-  rms: number;
-  peak: number;
-  tsMs: number;
+type GlobalHotkeyEvent = {
+  action: "altTap" | "insertOverlay";
+  tsMs?: number;
 };
 
-const EQ_BAR_MIX = [
-  [0.2, 0.8],
-  [0.45, 0.55],
-  [0, 1],
-  [0.45, 0.55],
-  [0.2, 0.8],
-] as const;
-const RMS_REF = 0.15;
-const PEAK_REF = 0.45;
-const RMS_ATTACK = 0.35;
-const RMS_RELEASE = 0.12;
-const PEAK_ATTACK = 0.6;
-const PEAK_RELEASE = 0.25;
+const OVERLAY_WIDTH = 420;
+const MIN_OVERLAY_HEIGHT = 112;
+const MAX_OVERLAY_HEIGHT = 520;
 
-function clamp01(v: number): number {
-  if (!Number.isFinite(v)) return 0;
-  return Math.min(1, Math.max(0, v));
+function isActivePhase(phase: string): boolean {
+  return ["recording", "transcribing", "rewriting", "inserting"].includes(phase);
 }
 
-function levelCurve(v: number): number {
-  return Math.pow(clamp01(v), 0.5);
+function canAltToggle(phase: string): boolean {
+  return ["idle", "recording", "transcribed", "rewritten", "cancelled", "failed"].includes(phase);
 }
 
-function smoothLevel(next: number, prev: number, attack: number, release: number): number {
-  const alpha = next >= prev ? attack : release;
-  return prev + (next - prev) * alpha;
+function statusFromPhase(phase: string): string {
+  if (phase === "recording") return "REC";
+  if (phase === "transcribing") return "TRANSCRIBING";
+  if (phase === "rewriting") return "REWRITING";
+  if (phase === "rewritten") return "REWRITTEN";
+  if (phase === "inserting") return "INSERTING";
+  if (phase === "transcribed") return "TRANSCRIBED";
+  if (phase === "failed") return "ERROR";
+  return "READY";
 }
 
-function toneFromStatus(s: string): "default" | "ok" | "danger" {
-  const up = String(s || "").toUpperCase();
-  if (up.includes("COPY") || up.includes("COPIED") || up.includes("OK")) return "ok";
-  if (up.includes("ERR") || up.includes("FAIL") || up.includes("DENIED")) return "danger";
-  return "default";
+function workflowViewFromPayload(payload: unknown): WorkflowView | null {
+  if (!payload || typeof payload !== "object") return null;
+  const raw = payload as Record<string, unknown>;
+  return {
+    phase: String(raw.phase || "idle"),
+    taskId: optionalString(raw.taskId),
+    recordingSessionId: optionalString(raw.recordingSessionId),
+    lastTranscriptId: optionalString(raw.lastTranscriptId),
+    lastAsrText: String(raw.lastAsrText || ""),
+    lastText: String(raw.lastText || ""),
+    lastCreatedAtMs: typeof raw.lastCreatedAtMs === "number" ? raw.lastCreatedAtMs : null,
+    diagnosticCode: optionalString(raw.diagnosticCode),
+    diagnosticLine: String(raw.diagnosticLine || ""),
+    primaryLabel: String(raw.primaryLabel || "START"),
+    primaryDisabled: raw.primaryDisabled === true,
+    canRewrite: raw.canRewrite === true,
+    canInsert: raw.canInsert === true,
+    canCopy: raw.canCopy === true,
+  };
 }
 
-function isRecordingStatus(status: string): boolean {
-  const up = String(status || "").trim().toUpperCase();
-  return up === "REC" || up === "RECORDING" || up.startsWith("REC ");
+function optionalString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
 }
 
 export default function OverlayApp() {
-  const [st, setSt] = useState<OverlayState>({
-    visible: false,
-    status: "IDLE",
-    detail: null,
-    ts_ms: Date.now(),
-  });
-  const [rmsLevel, setRmsLevel] = useState(0);
-  const [peakLevel, setPeakLevel] = useState(0);
-  const stateRef = useRef(st);
+  const client = useMemo(() => createBackendClient(defaultTauriGateway), []);
+  const [visible, setVisible] = useState(false);
+  const [status, setStatus] = useState("READY");
+  const [draftText, setDraftText] = useState("");
+  const [liveText, setLiveText] = useState("");
+  const [detail, setDetail] = useState<string | null>(null);
+  const [workflow, setWorkflow] = useState<WorkflowView | null>(null);
+  const [transcriptId, setTranscriptId] = useState<string | null>(null);
+  const [busyAction, setBusyAction] = useState<"rewrite" | "insert" | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const phaseRef = useRef("idle");
+  const draftRef = useRef("");
+  const liveRef = useRef("");
+  const transcriptIdRef = useRef<string | null>(null);
+  const busyRef = useRef<"rewrite" | "insert" | null>(null);
 
   useEffect(() => {
     document.body.classList.add("isOverlay");
@@ -73,93 +93,273 @@ export default function OverlayApp() {
   }, []);
 
   useEffect(() => {
-    stateRef.current = st;
-  }, [st]);
+    draftRef.current = draftText;
+  }, [draftText]);
 
   useEffect(() => {
-    let unlisten: null | (() => void) = null;
-    (async () => {
-      unlisten = await defaultTauriGateway.listen<OverlayState>("tv_overlay_state", (next) => {
-        if (!next) return;
-        setSt(next);
-        if (!next.visible || !isRecordingStatus(next.status)) {
-          setRmsLevel(0);
-          setPeakLevel(0);
-        }
+    liveRef.current = liveText;
+  }, [liveText]);
+
+  useEffect(() => {
+    transcriptIdRef.current = transcriptId;
+  }, [transcriptId]);
+
+  useEffect(() => {
+    busyRef.current = busyAction;
+  }, [busyAction]);
+
+  useEffect(() => {
+    phaseRef.current = String(workflow?.phase || "idle").toLowerCase();
+  }, [workflow]);
+
+  const resizeOverlay = useCallback(() => {
+    const root = rootRef.current;
+    if (!root || !visible) return;
+    const measured = Math.ceil(root.scrollHeight + 2);
+    const height = Math.max(MIN_OVERLAY_HEIGHT, Math.min(MAX_OVERLAY_HEIGHT, measured));
+    void client.overlayResize({ width: OVERLAY_WIDTH, height });
+  }, [client, visible]);
+
+  useEffect(() => {
+    resizeOverlay();
+  }, [draftText, liveText, detail, status, resizeOverlay]);
+
+  useEffect(() => {
+    if (!visible) return;
+    void client.overlaySetState({
+      visible: true,
+      status,
+      detail,
+      ts_ms: Date.now(),
+    });
+  }, [client, detail, status, visible]);
+
+  const hideOverlay = useCallback(async () => {
+    setVisible(false);
+    setStatus("READY");
+    setDetail(null);
+    await client.overlaySetState({
+      visible: false,
+      status: "READY",
+      detail: null,
+      ts_ms: Date.now(),
+    });
+  }, [client]);
+
+  const showOverlay = useCallback((nextStatus: string) => {
+    setVisible(true);
+    setStatus(nextStatus);
+    setDetail(null);
+  }, []);
+
+  const runPrimaryFromAlt = useCallback(async () => {
+    const phase = phaseRef.current;
+    if (!canAltToggle(phase) || busyRef.current) return;
+
+    showOverlay(phase === "recording" ? "TRANSCRIBING" : "REC");
+    if (phase !== "recording") {
+      setLiveText("");
+    }
+
+    try {
+      const next = await client.workflowCommand({ command: "primary" });
+      setWorkflow(next);
+      setStatus(statusFromPhase(String(next.phase || "idle").toLowerCase()));
+    } catch (err) {
+      setStatus("ERROR");
+      setDetail(String(err));
+    }
+  }, [client, showOverlay]);
+
+  const runRewrite = useCallback(async () => {
+    if (busyRef.current) return;
+    const id = transcriptIdRef.current;
+    const text = draftRef.current.trim();
+    if (!id || !text || isActivePhase(phaseRef.current)) return;
+
+    setBusyAction("rewrite");
+    setStatus("REWRITING");
+    setDetail(null);
+    try {
+      const result = await client.rewriteText({
+        transcriptId: id,
+        text,
+        templateId: null,
       });
-    })();
-    return () => {
-      try {
-        unlisten?.();
-      } catch {
-        // ignore
-      }
-    };
-  }, []);
+      setDraftText(result.finalText);
+      setLiveText("");
+      setTranscriptId(result.transcriptId);
+      setStatus("REWRITTEN");
+    } catch (err) {
+      setStatus("ERROR");
+      setDetail(String(err));
+    } finally {
+      setBusyAction(null);
+    }
+  }, [client]);
+
+  const runInsert = useCallback(async () => {
+    if (busyRef.current) return;
+    const text = appendTranscript(draftRef.current, liveRef.current).trim();
+    if (!text) return;
+
+    setBusyAction("insert");
+    setStatus("INSERTING");
+    setDetail(null);
+    setVisible(false);
+    await client.overlaySetState({
+      visible: false,
+      status: "INSERTING",
+      detail: null,
+      ts_ms: Date.now(),
+    });
+
+    try {
+      await client.insertOverlayText({
+        transcriptId: transcriptIdRef.current,
+        text,
+      });
+      setDraftText("");
+      setLiveText("");
+      setTranscriptId(null);
+      await hideOverlay();
+    } catch (err) {
+      setVisible(true);
+      setStatus("ERROR");
+      setDetail(String(err));
+    } finally {
+      setBusyAction(null);
+    }
+  }, [client, hideOverlay]);
 
   useEffect(() => {
-    let unlisten: null | (() => void) = null;
-    (async () => {
-      unlisten = await defaultTauriGateway.listen<UiEvent>(
-        "ui_event",
-        (event) => {
-          if (!event || event.kind !== "audio.level") return;
-          const next = audioLevelFromUiEvent(event);
-          if (!next) return;
-          const current = stateRef.current;
-          if (!current.visible || !isRecordingStatus(current.status)) return;
-          const rmsRaw = clamp01((next.rms || 0) / RMS_REF);
-          const peakRaw = clamp01((next.peak || 0) / PEAK_REF);
-          const rmsMapped = levelCurve(rmsRaw);
-          const peakMapped = levelCurve(peakRaw);
-          setRmsLevel((prev) => smoothLevel(rmsMapped, prev, RMS_ATTACK, RMS_RELEASE));
-          setPeakLevel((prev) => smoothLevel(peakMapped, prev, PEAK_ATTACK, PEAK_RELEASE));
-        },
-      );
-    })();
-    return () => {
-      try {
-        unlisten?.();
-      } catch {
-        // ignore
+    let cancelled = false;
+    const unlistenFns: Array<() => void> = [];
+    const track = (fn: () => void) => {
+      if (cancelled) {
+        fn();
+      } else {
+        unlistenFns.push(fn);
       }
     };
-  }, []);
 
-  const tone = useMemo(() => toneFromStatus(st.status), [st.status]);
-  const statusUpper = useMemo(() => String(st.status || "").toUpperCase(), [st.status]);
-  const isRec = st.visible && isRecordingStatus(st.status);
-  const bars = useMemo(() => {
-    if (!isRec) return [0, 0, 0, 0, 0];
-    return EQ_BAR_MIX.map(([r, p]) => clamp01(r * rmsLevel + p * peakLevel));
-  }, [isRec, peakLevel, rmsLevel]);
+    (async () => {
+      track(await defaultTauriGateway.listen<GlobalHotkeyEvent>("tv_global_hotkey", async (event) => {
+        if (!event) return;
+        if (event.action === "altTap") {
+          await runPrimaryFromAlt();
+          return;
+        }
+        if (event.action === "insertOverlay") {
+          await runInsert();
+        }
+      }));
+
+      track(await defaultTauriGateway.listen<OverlayState>("tv_overlay_state", (state) => {
+        if (!state) return;
+        if (!state.visible && !draftRef.current.trim() && !liveRef.current.trim()) {
+          setVisible(false);
+        }
+        if (state.status) setStatus(String(state.status).toUpperCase());
+        setDetail(state.detail || null);
+      }));
+
+      track(await client.listenUiEvent((event) => {
+        if (!event || event.kind === "audio.level") return;
+
+        if (event.kind === "workflow.state") {
+          const next = workflowViewFromPayload(event.payload);
+          if (!next) return;
+          const phase = String(next.phase || "idle").toLowerCase();
+          setWorkflow(next);
+          setStatus(statusFromPhase(phase));
+          if (phase === "recording" || phase === "transcribing" || phase === "rewriting" || phase === "rewritten" || phase === "transcribed") {
+            setVisible(true);
+          }
+          return;
+        }
+
+        if (event.kind === "transcription.partial") {
+          const text = textFromTranscriptionPartial(event);
+          setLiveText(text);
+          setVisible(true);
+          setStatus("REC");
+          return;
+        }
+
+        if (event.kind === "transcription.completed") {
+          const result = textFromTranscriptionCompleted(event);
+          setDraftText((prev) => appendTranscript(prev, result.asrText));
+          setLiveText("");
+          if (result.transcriptId) setTranscriptId(result.transcriptId);
+          setVisible(true);
+          setStatus("TRANSCRIBED");
+          return;
+        }
+
+        if (event.kind === "rewrite.completed") {
+          const result = textFromRewriteCompleted(event);
+          if (result.finalText.trim()) setDraftText(result.finalText);
+          setLiveText("");
+          if (result.transcriptId) setTranscriptId(result.transcriptId);
+          setVisible(true);
+          setStatus("REWRITTEN");
+          return;
+        }
+
+        if (event.status === "failed") {
+          setVisible(true);
+          setStatus("ERROR");
+          setDetail(event.errorCode || event.message);
+        }
+      }));
+    })().catch((err) => {
+      setVisible(true);
+      setStatus("ERROR");
+      setDetail(String(err));
+    });
+
+    return () => {
+      cancelled = true;
+      for (const fn of unlistenFns) fn();
+    };
+  }, [client, runInsert, runPrimaryFromAlt]);
+
+  const displayText = useMemo(
+    () => appendTranscript(draftText, liveText),
+    [draftText, liveText],
+  );
+  const tone = status === "ERROR" ? "danger" : status === "REWRITTEN" || status === "TRANSCRIBED" ? "ok" : "default";
+
+  if (!visible) {
+    return <div ref={rootRef} className="transcriptOverlayRoot isHidden" />;
+  }
 
   return (
-    <div className={`overlayRoot ${st.visible ? "isVisible" : ""} tone-${tone} ${isRec ? "isRec" : ""}`}>
-      <div className="overlayTop">
-        <div className="overlayEq" aria-hidden={!isRec}>
-          {bars.map((v, idx) => (
-            <span
-              key={idx}
-              className="overlayEqBar"
-              style={{ height: `${10 + Math.round(v * 22)}px`, opacity: isRec ? 1 : 0.2 }}
-            />
-          ))}
-        </div>
-        <div className="overlayBadge">{statusUpper}</div>
+    <div ref={rootRef} className={`transcriptOverlayRoot tone-${tone}`}>
+      <div className="transcriptOverlayTop">
+        <div className="transcriptOverlayBadge">{busyAction ? status : status}</div>
+        {detail ? <div className="transcriptOverlayDetail">{detail}</div> : null}
       </div>
-      {st.detail ? <div className="overlayDetail">{st.detail}</div> : null}
+      <textarea
+        className="transcriptOverlayEditor"
+        value={displayText}
+        spellCheck={false}
+        onChange={(event) => {
+          setDraftText(event.currentTarget.value);
+          setLiveText("");
+        }}
+        onKeyDown={(event) => {
+          const action = overlayKeyAction(event);
+          if (action === "none" || action === "newline") return;
+          event.preventDefault();
+          if (action === "rewrite") {
+            void runRewrite();
+            return;
+          }
+          void runInsert();
+        }}
+      />
     </div>
   );
-}
-
-function audioLevelFromUiEvent(event: UiEvent): OverlayAudioLevelEvent | null {
-  if (!event.payload || typeof event.payload !== "object") return null;
-  const payload = event.payload as Record<string, unknown>;
-  return {
-    recordingId: String(payload.recordingId || ""),
-    rms: typeof payload.rms === "number" ? payload.rms : 0,
-    peak: typeof payload.peak === "number" ? payload.peak : 0,
-    tsMs: event.tsMs,
-  };
 }
