@@ -9,7 +9,9 @@ use crate::transcription::{TranscribeFixtureRequest, TranscriptionResult, Transc
 use crate::transcription_actor::TranscriptionActor;
 use crate::ui_events::UiEventMailbox;
 use crate::voice_workflow::{
-    VoiceWorkflow, WorkflowApplyEventRequest, WorkflowCommandRequest, WorkflowError, WorkflowView,
+    VoiceWorkflow, WorkflowApplyEventRequest, WorkflowAsrCompletedRequest, WorkflowCommandRequest,
+    WorkflowError, WorkflowInsertCompletedRequest, WorkflowRewriteCompletedRequest,
+    WorkflowTaskFailedRequest, WorkflowTextCommandRequest, WorkflowView,
 };
 use crate::{data_dir, RuntimeState};
 
@@ -24,6 +26,14 @@ pub fn command_names() -> &'static [&'static str] {
         "workflow_snapshot",
         "workflow_command",
         "workflow_apply_event",
+        "workflow_report_asr_completed",
+        "workflow_report_asr_failed",
+        "workflow_rewrite",
+        "workflow_insert",
+        "workflow_report_rewrite_completed",
+        "workflow_report_rewrite_failed",
+        "workflow_report_insert_completed",
+        "workflow_report_insert_failed",
         "overlay_insert_text",
         "transcribe_fixture",
     ]
@@ -129,6 +139,116 @@ pub fn workflow_apply_event(
 ) -> Result<WorkflowView, String> {
     workflow
         .apply_event(&mailbox, req)
+        .map_err(render_workflow_error)
+}
+
+#[tauri::command]
+pub fn workflow_report_asr_completed(
+    workflow: State<'_, VoiceWorkflow>,
+    mailbox: State<'_, UiEventMailbox>,
+    req: WorkflowAsrCompletedRequest,
+) -> Result<WorkflowView, String> {
+    workflow
+        .report_asr_completed(&mailbox, req)
+        .map_err(render_workflow_error)
+}
+
+#[tauri::command]
+pub fn workflow_report_asr_failed(
+    workflow: State<'_, VoiceWorkflow>,
+    mailbox: State<'_, UiEventMailbox>,
+    req: WorkflowTaskFailedRequest,
+) -> Result<WorkflowView, String> {
+    workflow
+        .report_asr_failed(&mailbox, req)
+        .map_err(render_workflow_error)
+}
+
+#[tauri::command]
+pub async fn workflow_rewrite(
+    workflow: State<'_, VoiceWorkflow>,
+    mailbox: State<'_, UiEventMailbox>,
+    task_state: State<'_, crate::task_manager::TaskManager>,
+    req: WorkflowTextCommandRequest,
+) -> Result<RewriteResult, String> {
+    workflow
+        .rewrite_text(
+            &mailbox,
+            &task_state,
+            RewriteTextRequest {
+                transcript_id: req.transcript_id,
+                text: req.text,
+                template_id: None,
+            },
+        )
+        .await
+        .map_err(render_workflow_error)
+}
+
+#[tauri::command]
+pub async fn workflow_insert(
+    workflow: State<'_, VoiceWorkflow>,
+    mailbox: State<'_, UiEventMailbox>,
+    task_state: State<'_, crate::task_manager::TaskManager>,
+    req: WorkflowTextCommandRequest,
+) -> Result<InsertResult, String> {
+    let target_hwnd = task_state.last_external_hwnd_best_effort().ok_or_else(|| {
+        "E_OVERLAY_TARGET_UNAVAILABLE: no external target window captured".to_string()
+    })?;
+    workflow
+        .insert_text_after_focus(
+            &mailbox,
+            InsertTextRequest {
+                transcript_id: Some(req.transcript_id),
+                text: req.text,
+            },
+            Some(target_hwnd),
+        )
+        .await
+        .map_err(render_workflow_error)
+}
+
+#[tauri::command]
+pub fn workflow_report_rewrite_completed(
+    workflow: State<'_, VoiceWorkflow>,
+    mailbox: State<'_, UiEventMailbox>,
+    req: WorkflowRewriteCompletedRequest,
+) -> Result<WorkflowView, String> {
+    workflow
+        .report_rewrite_completed(&mailbox, req)
+        .map_err(render_workflow_error)
+}
+
+#[tauri::command]
+pub fn workflow_report_rewrite_failed(
+    workflow: State<'_, VoiceWorkflow>,
+    mailbox: State<'_, UiEventMailbox>,
+    req: WorkflowTaskFailedRequest,
+) -> Result<WorkflowView, String> {
+    workflow
+        .report_rewrite_failed(&mailbox, req)
+        .map_err(render_workflow_error)
+}
+
+#[tauri::command]
+pub fn workflow_report_insert_completed(
+    workflow: State<'_, VoiceWorkflow>,
+    mailbox: State<'_, UiEventMailbox>,
+    req: WorkflowInsertCompletedRequest,
+) -> Result<WorkflowView, String> {
+    workflow
+        .report_insert_completed(&mailbox, req)
+        .map_err(render_workflow_error)
+}
+
+#[tauri::command]
+pub fn workflow_report_insert_failed(
+    workflow: State<'_, VoiceWorkflow>,
+    mailbox: State<'_, UiEventMailbox>,
+    req: WorkflowTaskFailedRequest,
+) -> Result<WorkflowView, String> {
+    workflow
+        .report_insert_failed(&mailbox, req)
         .map_err(render_workflow_error)
 }
 
@@ -270,6 +390,10 @@ mod tests {
         assert!(names.contains(&"workflow_snapshot"));
         assert!(names.contains(&"workflow_command"));
         assert!(names.contains(&"workflow_apply_event"));
+        assert!(names.contains(&"workflow_report_asr_completed"));
+        assert!(names.contains(&"workflow_report_asr_failed"));
+        assert!(names.contains(&"workflow_rewrite"));
+        assert!(names.contains(&"workflow_insert"));
         assert!(names.contains(&"transcribe_fixture"));
         assert!(!names.contains(&"start_task"));
         assert!(!names.contains(&"export_text"));

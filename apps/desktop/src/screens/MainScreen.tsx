@@ -8,7 +8,7 @@ import { buildDiagnostic } from "../domain/diagnostic";
 import type {
   RuntimeToolchainStatus,
   Settings,
-  UiEvent,
+  TranscriptionMetrics,
   WorkflowCommand,
   WorkflowView,
 } from "../types";
@@ -102,30 +102,23 @@ export function MainScreen({
           }
           return;
         }
-        if (ev.effect === "stateChanging") {
-          try {
-            const eventId = optionalString(ev.eventId);
-            if (!eventId) throw new Error("E_UI_EVENT_ID_MISSING: eventId is required");
-            const next = await client.workflowApplyEvent({
-              eventId,
-              kind: ev.kind,
-              taskId: optionalString(ev.taskId),
-              status: optionalString(ev.status),
-              message: ev.message,
-              errorCode: optionalString(ev.errorCode),
-              payload: ev.payload,
-            });
-            setWorkflow(next);
-            if (ev.kind === "transcription.completed") setLiveTranscript("");
-            handleStateChangingEvent(ev, pushToast, onHistoryChanged);
-          } catch (err) {
-            const diag = buildDiagnostic(err, "WORKFLOW EVENT FAILED");
-            pushToast(diag.title, "danger");
-          }
-          return;
-        }
         if (ev.status === "failed") {
-          if (ev.effect === "displayOnly" && ev.kind !== "diagnostic.error") return;
+          if (ev.stage === "Transcribe") {
+            const transcriptId = optionalString(ev.taskId);
+            if (transcriptId) {
+              try {
+                const next = await client.workflowReportAsrFailed({
+                  transcriptId,
+                  code: optionalString(ev.errorCode) || "E_TRANSCRIBE_FAILED",
+                  message: ev.message,
+                });
+                setWorkflow(next);
+              } catch (err) {
+                const diag = buildDiagnostic(err, "WORKFLOW EVENT FAILED");
+                pushToast(diag.title, "danger");
+              }
+            }
+          }
           const title = ev.stage === "Rewrite"
             ? "REWRITE FAILED"
             : ev.stage === "Insert"
@@ -139,9 +132,25 @@ export function MainScreen({
           return;
         }
         if (ev.kind === "transcription.completed") {
-          setLiveTranscript("");
-          pushToast("TRANSCRIBED", "ok");
-          onHistoryChanged();
+          const completed = transcriptionCompletedPayload(ev.payload);
+          if (!completed) {
+            pushToast("TRANSCRIBE FAILED", "danger");
+            return;
+          }
+          try {
+            const next = await client.workflowReportAsrCompleted({
+              transcriptId: completed.transcriptId,
+              text: completed.asrText,
+              metrics: completed.metrics,
+            });
+            setWorkflow(next);
+            setLiveTranscript("");
+            pushToast("TRANSCRIBED", "ok");
+            onHistoryChanged();
+          } catch (err) {
+            const diag = buildDiagnostic(err, "WORKFLOW EVENT FAILED");
+            pushToast(diag.title, "danger");
+          }
           return;
         }
         if (ev.kind === "rewrite.completed") {
@@ -252,7 +261,7 @@ export function MainScreen({
             type="button"
             className="mainActionButton"
             onClick={() => void sendWorkflowCommand("rewriteLast")}
-            disabled={!workflow.canRewrite}
+            disabled={true}
           >
             REWRITE
           </button>
@@ -260,7 +269,7 @@ export function MainScreen({
             type="button"
             className="mainActionButton"
             onClick={() => void sendWorkflowCommand("insertLast")}
-            disabled={!workflow.canInsert}
+            disabled={true}
           >
             INSERT
           </button>
@@ -268,44 +277,6 @@ export function MainScreen({
       </div>
     </div>
   );
-}
-
-function handleStateChangingEvent(
-  ev: UiEvent,
-  pushToast: (msg: string, tone?: "default" | "ok" | "danger") => void,
-  onHistoryChanged: () => void,
-) {
-  if (ev.status === "failed") {
-    const title = ev.stage === "Rewrite"
-      ? "REWRITE FAILED"
-      : ev.stage === "Insert"
-        ? "INSERT FAILED"
-        : "TRANSCRIBE FAILED";
-    pushToast(title, "danger");
-    return;
-  }
-  if (ev.status === "cancelled") {
-    pushToast("CANCELLED", "default");
-    return;
-  }
-  if (ev.kind === "transcription.completed") {
-    pushToast("TRANSCRIBED", "ok");
-    onHistoryChanged();
-    return;
-  }
-  if (ev.kind === "rewrite.completed") {
-    pushToast("REWRITTEN", "ok");
-    onHistoryChanged();
-    return;
-  }
-  if (ev.kind === "insertion.completed") {
-    const inserted = insertionPayload(ev.payload);
-    if (inserted?.autoPasteAttempted && !inserted.autoPasteOk) {
-      pushToast(`AUTO PASTE FAILED: ${inserted.errorCode || "E_EXPORT_PASTE_FAILED"}`, "danger");
-    } else {
-      pushToast(inserted?.autoPasteAttempted ? "COPIED + PASTED" : "COPIED", "ok");
-    }
-  }
 }
 
 function workflowViewFromPayload(payload: unknown): WorkflowView | null {
@@ -347,6 +318,31 @@ function transcriptionPartialPayload(payload: unknown): { text: string } | null 
   if (!payload || typeof payload !== "object") return null;
   const raw = payload as Record<string, unknown>;
   return { text: String(raw.text || "") };
+}
+
+function transcriptionCompletedPayload(payload: unknown): {
+  transcriptId: string;
+  asrText: string;
+  metrics: TranscriptionMetrics;
+} | null {
+  if (!payload || typeof payload !== "object") return null;
+  const raw = payload as Record<string, unknown>;
+  const transcriptId = optionalString(raw.transcriptId);
+  const asrText = String(raw.asrText || "");
+  const metrics = metricsPayload(raw.metrics);
+  if (!transcriptId || !asrText.trim() || !metrics) return null;
+  return { transcriptId, asrText, metrics };
+}
+
+function metricsPayload(payload: unknown): TranscriptionMetrics | null {
+  if (!payload || typeof payload !== "object") return null;
+  const raw = payload as Record<string, unknown>;
+  return {
+    rtf: optionalNumber(raw.rtf) || 0,
+    deviceUsed: String(raw.deviceUsed || ""),
+    preprocessMs: optionalNumber(raw.preprocessMs) || 0,
+    asrMs: optionalNumber(raw.asrMs) || 0,
+  };
 }
 
 function optionalString(value: unknown): string | null {

@@ -124,7 +124,7 @@ impl UiEvent {
         message: impl Into<String>,
         payload: serde_json::Value,
     ) -> Self {
-        Self::completed_with_effect(task_id, kind, message, payload, "stateChanging")
+        Self::completed_with_effect(task_id, kind, message, payload, "displayOnly")
     }
 
     fn completed_with_effect(
@@ -222,7 +222,7 @@ impl UiEvent {
     ) -> Self {
         Self {
             kind: "workflow.task.failed".to_string(),
-            effect: "stateChanging".to_string(),
+            effect: "displayOnly".to_string(),
             event_id: new_event_id(),
             sequence: next_sequence(),
             task_id: Some(task_id.into()),
@@ -239,7 +239,7 @@ impl UiEvent {
     pub fn state_cancelled(task_id: impl Into<String>, stage: impl Into<String>) -> Self {
         Self {
             kind: "workflow.task.cancelled".to_string(),
-            effect: "stateChanging".to_string(),
+            effect: "displayOnly".to_string(),
             event_id: new_event_id(),
             sequence: next_sequence(),
             task_id: Some(task_id.into()),

@@ -34,6 +34,23 @@ export type WorkflowApplyEventRequest = {
   payload?: unknown;
 };
 
+export type WorkflowAsrCompletedRequest = {
+  transcriptId: string;
+  text: string;
+  metrics: TranscriptionMetrics;
+};
+
+export type WorkflowTaskFailedRequest = {
+  transcriptId: string;
+  code: string;
+  message: string;
+};
+
+export type WorkflowTextCommandRequest = {
+  transcriptId: string;
+  text: string;
+};
+
 export type RecordTranscribeStartResult = {
   sessionId: string;
 };
@@ -181,6 +198,8 @@ export type HistoryItem = {
   task_id: string;
   created_at_ms: number;
   asr_text: string;
+  rewritten_text: string;
+  inserted_text: string;
   final_text: string;
   template_id?: string | null;
   rtf: number;

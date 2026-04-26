@@ -120,6 +120,45 @@ pub struct WorkflowApplyEventRequest {
     pub payload: Option<serde_json::Value>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowAsrCompletedRequest {
+    pub transcript_id: String,
+    pub text: String,
+    pub metrics: TranscriptionMetrics,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowTaskFailedRequest {
+    pub transcript_id: String,
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowTextCommandRequest {
+    pub transcript_id: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowRewriteCompletedRequest {
+    pub transcript_id: String,
+    pub text: String,
+    pub rewrite_ms: u128,
+    pub template_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowInsertCompletedRequest {
+    pub transcript_id: String,
+    pub text: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkflowError {
     pub code: String,
@@ -239,7 +278,6 @@ impl VoiceWorkflow {
     }
 
     pub fn snapshot_view(&self) -> WorkflowResult<WorkflowView> {
-        self.hydrate_latest_history()?;
         Ok(self.view())
     }
 
@@ -264,62 +302,6 @@ impl VoiceWorkflow {
         if let Some(view) = self.applied_event_view(&event_id) {
             return Ok(view);
         }
-
-        let status = req.status.as_deref().unwrap_or("").to_string();
-        match req.kind.as_str() {
-            "transcription.completed" => {
-                ensure_event_status(&status, "completed")?;
-                let result: TranscriptionResult = decode_event_payload(req.payload)?;
-                self.ensure_event_task(req.task_id.as_deref(), &result.transcript_id)?;
-                self.complete_transcription(result)?;
-            }
-            "rewrite.completed" => {
-                ensure_event_status(&status, "completed")?;
-                let result: RewriteResult = decode_event_payload(req.payload)?;
-                self.ensure_event_task(req.task_id.as_deref(), &result.transcript_id)?;
-                self.complete_rewrite(result)?;
-            }
-            "insertion.completed" => {
-                ensure_event_status(&status, "completed")?;
-                let task_id = req.task_id.as_deref().ok_or_else(|| {
-                    WorkflowError::new("E_WORKFLOW_EVENT_TASK_MISSING", "task_id is required")
-                })?;
-                self.ensure_active_task(task_id)?;
-                self.complete_insert()?;
-            }
-            "workflow.task.failed" => {
-                ensure_event_status(&status, "failed")?;
-                let task_id = req.task_id.as_deref().ok_or_else(|| {
-                    WorkflowError::new("E_WORKFLOW_EVENT_TASK_MISSING", "task_id is required")
-                })?;
-                self.ensure_active_task(task_id)?;
-                let code = req
-                    .error_code
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or("E_WORKFLOW_TASK_FAILED");
-                let err = WorkflowError::new(code, req.message);
-                self.mark_failed(err);
-            }
-            "workflow.task.cancelled" => {
-                ensure_event_status(&status, "cancelled")?;
-                let task_id = req.task_id.as_deref().ok_or_else(|| {
-                    WorkflowError::new("E_WORKFLOW_EVENT_TASK_MISSING", "task_id is required")
-                })?;
-                if self.phase() != WorkflowPhase::Cancelled {
-                    self.ensure_active_task(task_id)?;
-                    self.mark_cancelled();
-                }
-            }
-            _ => {
-                return Err(WorkflowError::new(
-                    "E_WORKFLOW_EVENT_KIND_UNSUPPORTED",
-                    format!("unsupported workflow event kind: {}", req.kind),
-                ));
-            }
-        }
-
         let view = self.view();
         self.remember_applied_event(event_id, view.clone());
         Ok(view)
@@ -336,7 +318,6 @@ impl VoiceWorkflow {
         task_state: &TaskManager,
         req: WorkflowCommandRequest,
     ) -> WorkflowResult<WorkflowCommandOutcome> {
-        self.hydrate_latest_history()?;
         let result = match req.command {
             WorkflowCommand::Primary => {
                 self.run_primary(
@@ -395,7 +376,7 @@ impl VoiceWorkflow {
         &self,
         runtime: &RuntimeState,
         audio: &RecordingRegistry,
-        transcriber: &TranscriptionService,
+        _transcriber: &TranscriptionService,
         streaming_actor: &TranscriptionActor,
         mailbox: &UiEventMailbox,
         record_input_cache: &RecordInputCacheState,
@@ -403,11 +384,7 @@ impl VoiceWorkflow {
     ) -> WorkflowResult<Option<WorkflowTaskRequest>> {
         let snapshot = self.snapshot();
         match snapshot.phase {
-            WorkflowPhase::Idle
-            | WorkflowPhase::Transcribed
-            | WorkflowPhase::Rewritten
-            | WorkflowPhase::Cancelled
-            | WorkflowPhase::Failed => {
+            WorkflowPhase::Idle | WorkflowPhase::Cancelled | WorkflowPhase::Failed => {
                 self.start_record_transcribe(
                     runtime,
                     audio,
@@ -438,13 +415,11 @@ impl VoiceWorkflow {
                         .map(Some)
                 }
             }
-            WorkflowPhase::Transcribing => {
-                self.run_cancel(audio, transcriber, streaming_actor, mailbox)
-            }
-            WorkflowPhase::Rewriting | WorkflowPhase::Inserting => Err(WorkflowError::new(
-                "E_WORKFLOW_BUSY",
-                "workflow already has an active session",
-            )),
+            WorkflowPhase::Transcribing
+            | WorkflowPhase::Transcribed
+            | WorkflowPhase::Rewriting
+            | WorkflowPhase::Rewritten
+            | WorkflowPhase::Inserting => Err(primary_phase_error(snapshot.phase)),
         }
     }
 
@@ -453,35 +428,14 @@ impl VoiceWorkflow {
         _mailbox: &UiEventMailbox,
         _task_state: &TaskManager,
     ) -> WorkflowResult<Option<WorkflowTaskRequest>> {
-        let last = self.last_asr_for_action()?;
-        let transcript_id = last.transcript_id;
-        self.begin_rewrite(&transcript_id)?;
-        let pending_context = self.take_pending_context(&transcript_id);
-        Ok(Some(WorkflowTaskRequest::Rewrite {
-            task_id: transcript_id.clone(),
-            pending_context,
-            req: RewriteTextRequest {
-                transcript_id,
-                text: last.asr_text,
-                template_id: None,
-            },
-        }))
+        Err(rewrite_phase_error(self.phase()))
     }
 
     async fn run_insert_last(
         &self,
         _mailbox: &UiEventMailbox,
     ) -> WorkflowResult<Option<WorkflowTaskRequest>> {
-        let last = self.last_text_for_action()?;
-        let task_id = last.transcript_id;
-        self.begin_insert()?;
-        Ok(Some(WorkflowTaskRequest::Insert {
-            task_id: task_id.clone(),
-            req: InsertTextRequest {
-                transcript_id: Some(task_id),
-                text: last.final_text,
-            },
-        }))
+        Err(insert_phase_error(self.phase()))
     }
 
     fn run_copy_last(&self) -> WorkflowResult<()> {
@@ -718,8 +672,6 @@ impl VoiceWorkflow {
                 return Err(workflow_err);
             }
         };
-        self.complete_transcription(result.clone())?;
-        self.emit_state(mailbox);
         mailbox.send(UiEvent::stage_with_elapsed(
             &result.transcript_id,
             "Transcribe",
@@ -735,6 +687,53 @@ impl VoiceWorkflow {
             serde_json::to_value(&result).unwrap_or_default(),
         ));
         Ok(Some(result))
+    }
+
+    pub fn report_asr_completed(
+        &self,
+        mailbox: &UiEventMailbox,
+        req: WorkflowAsrCompletedRequest,
+    ) -> WorkflowResult<WorkflowView> {
+        let transcript_id = req.transcript_id.trim().to_string();
+        if transcript_id.is_empty() {
+            return Err(WorkflowError::new(
+                "E_WORKFLOW_ASR_TRANSCRIPT_ID_MISSING",
+                "transcript_id is required",
+            ));
+        }
+        if req.text.trim().is_empty() {
+            return Err(WorkflowError::new(
+                "E_WORKFLOW_ASR_TEXT_MISSING",
+                "text is required",
+            ));
+        }
+        self.ensure_transcribing_task(&transcript_id)?;
+        let result = TranscriptionResult::new(transcript_id, req.text, req.metrics);
+        self.complete_transcription(result.clone())?;
+        self.persist_transcription_result(&result)?;
+        let view = self.view();
+        self.emit_state(mailbox);
+        Ok(view)
+    }
+
+    pub fn report_asr_failed(
+        &self,
+        mailbox: &UiEventMailbox,
+        req: WorkflowTaskFailedRequest,
+    ) -> WorkflowResult<WorkflowView> {
+        self.ensure_transcribing_task(&req.transcript_id)?;
+        let code = req.code.trim();
+        if code.is_empty() {
+            return Err(WorkflowError::new(
+                "E_WORKFLOW_FAILURE_CODE_MISSING",
+                "code is required",
+            ));
+        }
+        let err = WorkflowError::new(code, req.message);
+        self.mark_failed(err);
+        let view = self.view();
+        self.emit_state(mailbox);
+        Ok(view)
     }
 
     pub fn cancel_record_transcribe(
@@ -796,16 +795,19 @@ impl VoiceWorkflow {
                 }
                 Ok(())
             }
-            WorkflowPhase::Idle | WorkflowPhase::Cancelled | WorkflowPhase::Failed => {
+            WorkflowPhase::Idle
+            | WorkflowPhase::Transcribed
+            | WorkflowPhase::Rewritten
+            | WorkflowPhase::Cancelled
+            | WorkflowPhase::Failed => {
                 if let Some(transcript_id) = transcript_id {
                     self.abort_pending_task(&transcript_id);
                 }
-                Ok(())
+                Err(cancel_phase_error(snapshot.phase))
             }
-            _ => Err(WorkflowError::new(
-                "E_WORKFLOW_INVALID_PHASE",
-                "workflow cannot cancel the current phase",
-            )),
+            WorkflowPhase::Rewriting | WorkflowPhase::Inserting => {
+                Err(cancel_phase_error(snapshot.phase))
+            }
         }
     }
 
@@ -855,6 +857,7 @@ impl VoiceWorkflow {
             }
         };
         self.complete_transcription(result.clone())?;
+        self.persist_transcription_result(&result)?;
         self.emit_state(mailbox);
         mailbox.send(UiEvent::stage_with_elapsed(
             &result.transcript_id,
@@ -924,22 +927,98 @@ impl VoiceWorkflow {
         Ok(result)
     }
 
+    pub fn report_rewrite_completed(
+        &self,
+        mailbox: &UiEventMailbox,
+        req: WorkflowRewriteCompletedRequest,
+    ) -> WorkflowResult<WorkflowView> {
+        let transcript_id = req.transcript_id.trim().to_string();
+        if transcript_id.is_empty() {
+            return Err(WorkflowError::new(
+                "E_REWRITE_TRANSCRIPT_ID_MISSING",
+                "transcript_id is required",
+            ));
+        }
+        if req.text.trim().is_empty() {
+            return Err(WorkflowError::new(
+                "E_REWRITE_EMPTY_TEXT",
+                "text is required",
+            ));
+        }
+        let result = RewriteResult {
+            transcript_id,
+            final_text: req.text,
+            rewrite_ms: req.rewrite_ms,
+            template_id: req.template_id,
+        };
+        self.complete_rewrite(result.clone())?;
+        self.persist_rewrite_result(&result)?;
+        let view = self.view();
+        self.emit_state(mailbox);
+        Ok(view)
+    }
+
+    pub fn report_rewrite_failed(
+        &self,
+        mailbox: &UiEventMailbox,
+        req: WorkflowTaskFailedRequest,
+    ) -> WorkflowResult<WorkflowView> {
+        self.ensure_rewriting_task(&req.transcript_id)?;
+        let code = req.code.trim();
+        if code.is_empty() {
+            return Err(WorkflowError::new(
+                "E_WORKFLOW_FAILURE_CODE_MISSING",
+                "code is required",
+            ));
+        }
+        self.mark_failed(WorkflowError::new(code, req.message));
+        let view = self.view();
+        self.emit_state(mailbox);
+        Ok(view)
+    }
+
     pub async fn insert_text(
         &self,
         mailbox: &UiEventMailbox,
         req: InsertTextRequest,
     ) -> WorkflowResult<InsertResult> {
-        self.begin_insert()?;
+        self.insert_text_after_focus(mailbox, req, None).await
+    }
+
+    pub async fn insert_text_after_focus(
+        &self,
+        mailbox: &UiEventMailbox,
+        req: InsertTextRequest,
+        target_hwnd: Option<isize>,
+    ) -> WorkflowResult<InsertResult> {
+        let transcript_id = req
+            .transcript_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                WorkflowError::new(
+                    "E_INSERT_TRANSCRIPT_ID_MISSING",
+                    "transcript_id is required",
+                )
+            })?
+            .to_string();
+        if req.text.trim().is_empty() {
+            return Err(WorkflowError::new(
+                "E_INSERT_EMPTY_TEXT",
+                "text is required",
+            ));
+        }
+        self.begin_insert(&transcript_id)?;
         self.emit_state(mailbox);
-        let transcript_id = req.transcript_id.clone();
-        let event_task_id = transcript_id.as_deref().unwrap_or("insert");
+        let event_task_id = transcript_id.as_str();
         mailbox.send(UiEvent::stage(
             event_task_id,
             "Insert",
             UiEventStatus::Started,
             "insert",
         ));
-        let result = match insertion::insert_text(req).await {
+        let result = match insertion::insert_text_after_focus(req.clone(), target_hwnd).await {
             Ok(result) => result,
             Err(err) => {
                 let workflow_err = WorkflowError::from_port(err);
@@ -955,6 +1034,7 @@ impl VoiceWorkflow {
                 return Err(workflow_err);
             }
         };
+        self.persist_inserted_text(&transcript_id, &req.text)?;
         self.complete_insert()?;
         self.emit_state(mailbox);
         mailbox.send(UiEvent::stage(
@@ -970,6 +1050,51 @@ impl VoiceWorkflow {
             serde_json::to_value(&result).unwrap_or_default(),
         ));
         Ok(result)
+    }
+
+    pub fn report_insert_completed(
+        &self,
+        mailbox: &UiEventMailbox,
+        req: WorkflowInsertCompletedRequest,
+    ) -> WorkflowResult<WorkflowView> {
+        let transcript_id = req.transcript_id.trim().to_string();
+        if transcript_id.is_empty() {
+            return Err(WorkflowError::new(
+                "E_INSERT_TRANSCRIPT_ID_MISSING",
+                "transcript_id is required",
+            ));
+        }
+        if req.text.trim().is_empty() {
+            return Err(WorkflowError::new(
+                "E_INSERT_EMPTY_TEXT",
+                "text is required",
+            ));
+        }
+        self.ensure_inserting_task(&transcript_id)?;
+        self.persist_inserted_text(&transcript_id, &req.text)?;
+        self.complete_insert()?;
+        let view = self.view();
+        self.emit_state(mailbox);
+        Ok(view)
+    }
+
+    pub fn report_insert_failed(
+        &self,
+        mailbox: &UiEventMailbox,
+        req: WorkflowTaskFailedRequest,
+    ) -> WorkflowResult<WorkflowView> {
+        self.ensure_inserting_task(&req.transcript_id)?;
+        let code = req.code.trim();
+        if code.is_empty() {
+            return Err(WorkflowError::new(
+                "E_WORKFLOW_FAILURE_CODE_MISSING",
+                "code is required",
+            ));
+        }
+        self.mark_failed(WorkflowError::new(code, req.message));
+        let view = self.view();
+        self.emit_state(mailbox);
+        Ok(view)
     }
 
     pub fn abort_pending_task(&self, task_id: &str) -> bool {
@@ -1065,52 +1190,7 @@ impl VoiceWorkflow {
         }
     }
 
-    fn hydrate_latest_history(&self) -> WorkflowResult<()> {
-        let should_hydrate = {
-            let state = self.state.lock().unwrap();
-            matches!(
-                state.phase,
-                WorkflowPhase::Idle | WorkflowPhase::Cancelled | WorkflowPhase::Failed
-            ) && state.transcription.is_none()
-                && state.rewrite.is_none()
-        };
-        if !should_hydrate {
-            return Ok(());
-        }
-
-        let dir = data_dir::data_dir()
-            .map_err(|e| WorkflowError::from_message("E_DATA_DIR", e.to_string()))?;
-        let rows = history::list(&dir.join("history.sqlite3"), 1, None)
-            .map_err(|e| WorkflowError::from_message("E_HISTORY_LIST", e.to_string()))?;
-        let Some(item) = rows.into_iter().next() else {
-            return Ok(());
-        };
-
-        let mut state = self.state.lock().unwrap();
-        if !matches!(
-            state.phase,
-            WorkflowPhase::Idle | WorkflowPhase::Cancelled | WorkflowPhase::Failed
-        ) || state.transcription.is_some()
-            || state.rewrite.is_some()
-        {
-            return Ok(());
-        }
-        state.phase = WorkflowPhase::Transcribed;
-        state.session = Some(WorkflowSession {
-            session_id: item.task_id.clone(),
-            recording_session_id: String::new(),
-            streaming_transcription: false,
-        });
-        let created_at_ms = item.created_at_ms;
-        state.transcription = Some(history_item_to_transcription_result(item));
-        state.rewrite = None;
-        state.last_created_at_ms = Some(created_at_ms);
-        state.last_error = None;
-        Ok(())
-    }
-
     fn last_text_for_action(&self) -> WorkflowResult<WorkflowActionText> {
-        self.hydrate_latest_history()?;
         let snapshot = self.snapshot();
         let last = last_result_from_snapshot(&snapshot).ok_or_else(|| {
             WorkflowError::new("E_WORKFLOW_LAST_RESULT_MISSING", "last result is missing")
@@ -1124,19 +1204,45 @@ impl VoiceWorkflow {
         Ok(last)
     }
 
-    fn last_asr_for_action(&self) -> WorkflowResult<WorkflowActionText> {
-        self.hydrate_latest_history()?;
-        let snapshot = self.snapshot();
-        let last = last_result_from_snapshot(&snapshot).ok_or_else(|| {
-            WorkflowError::new("E_WORKFLOW_LAST_RESULT_MISSING", "last result is missing")
-        })?;
-        if last.asr_text.trim().is_empty() {
-            return Err(WorkflowError::new(
-                "E_WORKFLOW_LAST_ASR_TEXT_MISSING",
-                "last ASR text is missing",
-            ));
-        }
-        Ok(last)
+    fn persist_transcription_result(&self, result: &TranscriptionResult) -> WorkflowResult<()> {
+        let dir = data_dir::data_dir()
+            .map_err(|e| WorkflowError::from_message("E_DATA_DIR", e.to_string()))?;
+        history::append(
+            &dir.join("history.sqlite3"),
+            &history::HistoryItem {
+                task_id: result.transcript_id.clone(),
+                created_at_ms: now_ms(),
+                asr_text: result.asr_text.clone(),
+                rewritten_text: String::new(),
+                inserted_text: String::new(),
+                final_text: result.asr_text.clone(),
+                template_id: None,
+                rtf: result.metrics.rtf,
+                device_used: result.metrics.device_used.clone(),
+                preprocess_ms: result.metrics.preprocess_ms as i64,
+                asr_ms: result.metrics.asr_ms as i64,
+            },
+        )
+        .map_err(|e| WorkflowError::from_message("E_HISTORY_APPEND", e.to_string()))
+    }
+
+    fn persist_rewrite_result(&self, result: &RewriteResult) -> WorkflowResult<()> {
+        let dir = data_dir::data_dir()
+            .map_err(|e| WorkflowError::from_message("E_DATA_DIR", e.to_string()))?;
+        history::update_final_text(
+            &dir.join("history.sqlite3"),
+            &result.transcript_id,
+            &result.final_text,
+            result.template_id.as_deref(),
+        )
+        .map_err(|e| WorkflowError::from_message("E_HISTORY_UPDATE", e.to_string()))
+    }
+
+    fn persist_inserted_text(&self, transcript_id: &str, text: &str) -> WorkflowResult<()> {
+        let dir = data_dir::data_dir()
+            .map_err(|e| WorkflowError::from_message("E_DATA_DIR", e.to_string()))?;
+        history::update_inserted_text(&dir.join("history.sqlite3"), transcript_id, text)
+            .map_err(|e| WorkflowError::from_message("E_HISTORY_UPDATE", e.to_string()))
     }
 
     fn remember_error(&self, err: WorkflowError) {
@@ -1158,23 +1264,6 @@ impl VoiceWorkflow {
         state.applied_event_views.insert(event_id, view);
     }
 
-    fn ensure_event_task(
-        &self,
-        event_task_id: Option<&str>,
-        result_task_id: &str,
-    ) -> WorkflowResult<()> {
-        let event_task_id = event_task_id.ok_or_else(|| {
-            WorkflowError::new("E_WORKFLOW_EVENT_TASK_MISSING", "task_id is required")
-        })?;
-        if event_task_id != result_task_id {
-            return Err(WorkflowError::new(
-                "E_WORKFLOW_TRANSCRIPT_MISMATCH",
-                "event task does not match result task",
-            ));
-        }
-        self.ensure_active_task(event_task_id)
-    }
-
     fn ensure_active_task(&self, task_id: &str) -> WorkflowResult<()> {
         let snapshot = self.snapshot();
         let active = snapshot
@@ -1191,6 +1280,46 @@ impl VoiceWorkflow {
         Ok(())
     }
 
+    fn ensure_phase_task(
+        &self,
+        expected_phase: WorkflowPhase,
+        task_id: &str,
+        code: &str,
+    ) -> WorkflowResult<()> {
+        let snapshot = self.snapshot();
+        if snapshot.phase != expected_phase {
+            return Err(WorkflowError::new(
+                code,
+                format!("workflow phase is {}", snapshot.phase.as_str()),
+            ));
+        }
+        self.ensure_active_task(task_id)
+    }
+
+    fn ensure_transcribing_task(&self, task_id: &str) -> WorkflowResult<()> {
+        self.ensure_phase_task(
+            WorkflowPhase::Transcribing,
+            task_id,
+            "E_WORKFLOW_ASR_REPORT_INVALID_PHASE",
+        )
+    }
+
+    fn ensure_rewriting_task(&self, task_id: &str) -> WorkflowResult<()> {
+        self.ensure_phase_task(
+            WorkflowPhase::Rewriting,
+            task_id,
+            "E_WORKFLOW_REWRITE_REPORT_INVALID_PHASE",
+        )
+    }
+
+    fn ensure_inserting_task(&self, task_id: &str) -> WorkflowResult<()> {
+        self.ensure_phase_task(
+            WorkflowPhase::Inserting,
+            task_id,
+            "E_WORKFLOW_INSERT_REPORT_INVALID_PHASE",
+        )
+    }
+
     #[cfg(test)]
     fn begin_recording(
         &self,
@@ -1200,16 +1329,9 @@ impl VoiceWorkflow {
         let mut state = self.state.lock().unwrap();
         if !matches!(
             state.phase,
-            WorkflowPhase::Idle
-                | WorkflowPhase::Transcribed
-                | WorkflowPhase::Rewritten
-                | WorkflowPhase::Cancelled
-                | WorkflowPhase::Failed
+            WorkflowPhase::Idle | WorkflowPhase::Cancelled | WorkflowPhase::Failed
         ) {
-            return Err(WorkflowError::new(
-                "E_WORKFLOW_BUSY",
-                "workflow already has an active session",
-            ));
+            return Err(primary_phase_error(state.phase));
         }
         let session = WorkflowSession {
             session_id: session_id.into(),
@@ -1229,16 +1351,9 @@ impl VoiceWorkflow {
         let mut state = self.state.lock().unwrap();
         if !matches!(
             state.phase,
-            WorkflowPhase::Idle
-                | WorkflowPhase::Transcribed
-                | WorkflowPhase::Rewritten
-                | WorkflowPhase::Cancelled
-                | WorkflowPhase::Failed
+            WorkflowPhase::Idle | WorkflowPhase::Cancelled | WorkflowPhase::Failed
         ) {
-            return Err(WorkflowError::new(
-                "E_WORKFLOW_BUSY",
-                "workflow already has an active session",
-            ));
+            return Err(primary_phase_error(state.phase));
         }
         state.phase = WorkflowPhase::Recording;
         state.session = Some(WorkflowSession {
@@ -1258,16 +1373,9 @@ impl VoiceWorkflow {
         let mut state = self.state.lock().unwrap();
         if !matches!(
             state.phase,
-            WorkflowPhase::Idle
-                | WorkflowPhase::Transcribed
-                | WorkflowPhase::Rewritten
-                | WorkflowPhase::Cancelled
-                | WorkflowPhase::Failed
+            WorkflowPhase::Idle | WorkflowPhase::Cancelled | WorkflowPhase::Failed
         ) {
-            return Err(WorkflowError::new(
-                "E_WORKFLOW_BUSY",
-                "workflow already has an active session",
-            ));
+            return Err(primary_phase_error(state.phase));
         }
         state.phase = WorkflowPhase::Transcribing;
         state.session = Some(WorkflowSession {
@@ -1406,17 +1514,11 @@ impl VoiceWorkflow {
 
     fn begin_rewrite(&self, transcript_id: &str) -> WorkflowResult<()> {
         let mut state = self.state.lock().unwrap();
-        if matches!(
+        if !matches!(
             state.phase,
-            WorkflowPhase::Recording
-                | WorkflowPhase::Transcribing
-                | WorkflowPhase::Rewriting
-                | WorkflowPhase::Inserting
+            WorkflowPhase::Transcribed | WorkflowPhase::Rewritten
         ) {
-            return Err(WorkflowError::new(
-                "E_WORKFLOW_BUSY",
-                "workflow already has an active session",
-            ));
+            return Err(rewrite_phase_error(state.phase));
         }
         if let Some(session) = state.session.as_ref() {
             if !session.session_id.is_empty() && session.session_id != transcript_id {
@@ -1471,19 +1573,21 @@ impl VoiceWorkflow {
         Ok(())
     }
 
-    fn begin_insert(&self) -> WorkflowResult<()> {
+    fn begin_insert(&self, transcript_id: &str) -> WorkflowResult<()> {
         let mut state = self.state.lock().unwrap();
-        if matches!(
+        if !matches!(
             state.phase,
-            WorkflowPhase::Recording
-                | WorkflowPhase::Transcribing
-                | WorkflowPhase::Rewriting
-                | WorkflowPhase::Inserting
+            WorkflowPhase::Transcribed | WorkflowPhase::Rewritten
         ) {
-            return Err(WorkflowError::new(
-                "E_WORKFLOW_BUSY",
-                "workflow already has an active session",
-            ));
+            return Err(insert_phase_error(state.phase));
+        }
+        if let Some(session) = state.session.as_ref() {
+            if !session.session_id.is_empty() && session.session_id != transcript_id {
+                return Err(WorkflowError::new(
+                    "E_WORKFLOW_TRANSCRIPT_MISMATCH",
+                    "insert transcript does not match workflow session",
+                ));
+            }
         }
         state.insert_previous_phase = Some(state.phase);
         state.phase = WorkflowPhase::Inserting;
@@ -1499,13 +1603,12 @@ impl VoiceWorkflow {
                 "workflow is not inserting",
             ));
         }
-        let previous = state.insert_previous_phase.take().ok_or_else(|| {
-            WorkflowError::new(
-                "E_WORKFLOW_INSERT_PREVIOUS_MISSING",
-                "insert previous phase missing",
-            )
-        })?;
-        state.phase = previous;
+        state.insert_previous_phase = None;
+        state.phase = WorkflowPhase::Idle;
+        state.session = None;
+        state.transcription = None;
+        state.rewrite = None;
+        state.last_created_at_ms = None;
         state.last_error = None;
         Ok(())
     }
@@ -1625,7 +1728,7 @@ impl VoiceWorkflow {
 
     #[cfg(test)]
     fn begin_insert_for_test(&self) -> WorkflowResult<()> {
-        self.begin_insert()
+        self.begin_insert("task-1")
     }
 
     #[cfg(test)]
@@ -1660,16 +1763,83 @@ impl Default for VoiceWorkflow {
 
 fn primary_label(phase: WorkflowPhase) -> &'static str {
     match phase {
-        WorkflowPhase::Idle
-        | WorkflowPhase::Transcribed
-        | WorkflowPhase::Rewritten
-        | WorkflowPhase::Cancelled
-        | WorkflowPhase::Failed => "START",
+        WorkflowPhase::Idle | WorkflowPhase::Cancelled | WorkflowPhase::Failed => "START",
         WorkflowPhase::Recording => "STOP",
-        WorkflowPhase::Transcribing => "CANCEL",
+        WorkflowPhase::Transcribing => "TRANSCRIBING",
+        WorkflowPhase::Transcribed => "TRANSCRIBED",
         WorkflowPhase::Rewriting => "REWRITING",
+        WorkflowPhase::Rewritten => "REWRITTEN",
         WorkflowPhase::Inserting => "INSERTING",
     }
+}
+
+fn primary_phase_error(phase: WorkflowPhase) -> WorkflowError {
+    match phase {
+        WorkflowPhase::Transcribing => WorkflowError::new(
+            "E_WORKFLOW_PRIMARY_TRANSCRIBING",
+            "workflow is transcribing",
+        ),
+        WorkflowPhase::Transcribed => {
+            WorkflowError::new("E_WORKFLOW_PRIMARY_TRANSCRIBED", "workflow is transcribed")
+        }
+        WorkflowPhase::Rewriting => {
+            WorkflowError::new("E_WORKFLOW_PRIMARY_REWRITING", "workflow is rewriting")
+        }
+        WorkflowPhase::Rewritten => {
+            WorkflowError::new("E_WORKFLOW_PRIMARY_REWRITTEN", "workflow is rewritten")
+        }
+        WorkflowPhase::Inserting => {
+            WorkflowError::new("E_WORKFLOW_PRIMARY_INSERTING", "workflow is inserting")
+        }
+        WorkflowPhase::Recording => {
+            WorkflowError::new("E_WORKFLOW_PRIMARY_RECORDING", "workflow is recording")
+        }
+        WorkflowPhase::Idle | WorkflowPhase::Cancelled | WorkflowPhase::Failed => {
+            WorkflowError::new("E_WORKFLOW_PRIMARY_ALLOWED", "primary is allowed")
+        }
+    }
+}
+
+fn rewrite_phase_error(phase: WorkflowPhase) -> WorkflowError {
+    let code = match phase {
+        WorkflowPhase::Idle => "E_WORKFLOW_REWRITE_IDLE",
+        WorkflowPhase::Recording => "E_WORKFLOW_REWRITE_RECORDING",
+        WorkflowPhase::Transcribing => "E_WORKFLOW_REWRITE_TRANSCRIBING",
+        WorkflowPhase::Rewriting => "E_WORKFLOW_REWRITE_REWRITING",
+        WorkflowPhase::Inserting => "E_WORKFLOW_REWRITE_INSERTING",
+        WorkflowPhase::Cancelled => "E_WORKFLOW_REWRITE_CANCELLED",
+        WorkflowPhase::Failed => "E_WORKFLOW_REWRITE_FAILED",
+        WorkflowPhase::Transcribed | WorkflowPhase::Rewritten => "E_WORKFLOW_REWRITE_ALLOWED",
+    };
+    WorkflowError::new(code, format!("workflow is {}", phase.as_str()))
+}
+
+fn insert_phase_error(phase: WorkflowPhase) -> WorkflowError {
+    let code = match phase {
+        WorkflowPhase::Idle => "E_WORKFLOW_INSERT_IDLE",
+        WorkflowPhase::Recording => "E_WORKFLOW_INSERT_RECORDING",
+        WorkflowPhase::Transcribing => "E_WORKFLOW_INSERT_TRANSCRIBING",
+        WorkflowPhase::Rewriting => "E_WORKFLOW_INSERT_REWRITING",
+        WorkflowPhase::Inserting => "E_WORKFLOW_INSERT_INSERTING",
+        WorkflowPhase::Cancelled => "E_WORKFLOW_INSERT_CANCELLED",
+        WorkflowPhase::Failed => "E_WORKFLOW_INSERT_FAILED",
+        WorkflowPhase::Transcribed | WorkflowPhase::Rewritten => "E_WORKFLOW_INSERT_ALLOWED",
+    };
+    WorkflowError::new(code, format!("workflow is {}", phase.as_str()))
+}
+
+fn cancel_phase_error(phase: WorkflowPhase) -> WorkflowError {
+    let code = match phase {
+        WorkflowPhase::Idle => "E_WORKFLOW_CANCEL_IDLE",
+        WorkflowPhase::Transcribed => "E_WORKFLOW_CANCEL_TRANSCRIBED",
+        WorkflowPhase::Rewritten => "E_WORKFLOW_CANCEL_REWRITTEN",
+        WorkflowPhase::Cancelled => "E_WORKFLOW_CANCEL_CANCELLED",
+        WorkflowPhase::Failed => "E_WORKFLOW_CANCEL_FAILED",
+        WorkflowPhase::Recording | WorkflowPhase::Transcribing => "E_WORKFLOW_CANCEL_ALLOWED",
+        WorkflowPhase::Rewriting => "E_WORKFLOW_CANCEL_REWRITING",
+        WorkflowPhase::Inserting => "E_WORKFLOW_CANCEL_INSERTING",
+    };
+    WorkflowError::new(code, format!("workflow is {}", phase.as_str()))
 }
 
 fn last_result_from_snapshot(snapshot: &WorkflowSnapshot) -> Option<WorkflowActionText> {
@@ -1687,22 +1857,6 @@ fn last_result_from_snapshot(snapshot: &WorkflowSnapshot) -> Option<WorkflowActi
     })
 }
 
-fn history_item_to_transcription_result(item: history::HistoryItem) -> TranscriptionResult {
-    let task_id = item.task_id;
-    TranscriptionResult {
-        transcript_id: task_id.clone(),
-        asr_text: item.asr_text,
-        final_text: item.final_text,
-        metrics: TranscriptionMetrics {
-            rtf: item.rtf,
-            device_used: item.device_used,
-            preprocess_ms: item.preprocess_ms.max(0) as u128,
-            asr_ms: item.asr_ms.max(0) as u128,
-        },
-        history_id: task_id,
-    }
-}
-
 fn normalize_optional_task_id(task_id: Option<String>) -> WorkflowResult<Option<String>> {
     let raw = match task_id {
         Some(v) => v.trim().to_string(),
@@ -1714,34 +1868,6 @@ fn normalize_optional_task_id(task_id: Option<String>) -> WorkflowResult<Option<
     let parsed = uuid::Uuid::parse_str(&raw)
         .map_err(|e| WorkflowError::new("E_TASK_ID_INVALID", format!("invalid task_id ({e})")))?;
     Ok(Some(parsed.to_string()))
-}
-
-fn decode_event_payload<T>(payload: Option<serde_json::Value>) -> WorkflowResult<T>
-where
-    T: serde::de::DeserializeOwned,
-{
-    let payload = payload.ok_or_else(|| {
-        WorkflowError::new(
-            "E_WORKFLOW_EVENT_PAYLOAD_MISSING",
-            "event payload is required",
-        )
-    })?;
-    serde_json::from_value(payload).map_err(|e| {
-        WorkflowError::new(
-            "E_WORKFLOW_EVENT_PAYLOAD_INVALID",
-            format!("invalid event payload: {e}"),
-        )
-    })
-}
-
-fn ensure_event_status(actual: &str, expected: &str) -> WorkflowResult<()> {
-    if actual.is_empty() || actual == expected {
-        return Ok(());
-    }
-    Err(WorkflowError::new(
-        "E_WORKFLOW_EVENT_STATUS_INVALID",
-        format!("expected event status {expected}, got {actual}"),
-    ))
 }
 
 fn now_ms() -> i64 {
@@ -1818,7 +1944,7 @@ mod tests {
             .open_recording_for_test("task-2", "recording-2")
             .expect_err("second recording is rejected");
 
-        assert_eq!(err.code, "E_WORKFLOW_BUSY");
+        assert_eq!(err.code, "E_WORKFLOW_PRIMARY_RECORDING");
         assert_eq!(workflow.phase(), WorkflowPhase::Recording);
     }
 
@@ -1914,7 +2040,7 @@ mod tests {
     }
 
     #[test]
-    fn insert_restores_previous_completion_phase() {
+    fn insert_completes_session_to_idle() {
         let workflow = VoiceWorkflow::new();
         workflow
             .open_transcribed_session_for_test("task-1", "asr text")
@@ -1926,21 +2052,20 @@ mod tests {
             .complete_insert_for_test()
             .expect("insert completes");
 
-        assert_eq!(workflow.phase(), WorkflowPhase::Transcribed);
+        assert_eq!(workflow.phase(), WorkflowPhase::Idle);
     }
 
     #[test]
-    fn rewrite_last_requires_asr_text() {
+    fn rewrite_allows_empty_asr_when_command_text_is_external() {
         let workflow = VoiceWorkflow::new();
         workflow
             .open_transcribed_session_for_test("task-1", "")
             .expect("transcribed");
 
-        let err = workflow
-            .last_asr_for_action()
-            .expect_err("empty ASR text is rejected");
-
-        assert_eq!(err.code, "E_WORKFLOW_LAST_ASR_TEXT_MISSING");
+        workflow
+            .begin_rewrite_for_test("task-1")
+            .expect("rewrite starts from external command text");
+        assert_eq!(workflow.phase(), WorkflowPhase::Rewriting);
     }
 
     #[test]
@@ -2024,7 +2149,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_transcription_completed_event_updates_state() {
+    fn apply_transcription_completed_event_is_display_only() {
         let workflow = VoiceWorkflow::new();
         workflow
             .open_recording_for_test("task-1", "recording-1")
@@ -2043,12 +2168,12 @@ mod tests {
             ))
             .expect("event applies");
 
-        assert_eq!(view.phase, "transcribed");
-        assert_eq!(view.last_text, "asr text");
+        assert_eq!(view.phase, "transcribing");
+        assert_eq!(view.last_text, "");
     }
 
     #[test]
-    fn apply_rewrite_completed_event_updates_state() {
+    fn apply_rewrite_completed_event_is_display_only() {
         let workflow = VoiceWorkflow::new();
         workflow
             .open_transcribed_session_for_test("task-1", "asr text")
@@ -2071,12 +2196,12 @@ mod tests {
             ))
             .expect("event applies");
 
-        assert_eq!(view.phase, "rewritten");
-        assert_eq!(view.last_text, "final text");
+        assert_eq!(view.phase, "rewriting");
+        assert_eq!(view.last_text, "asr text");
     }
 
     #[test]
-    fn apply_insert_completed_event_restores_previous_phase() {
+    fn apply_insert_completed_event_is_display_only() {
         let workflow = VoiceWorkflow::new();
         workflow
             .open_transcribed_session_for_test("task-1", "asr text")
@@ -2098,11 +2223,11 @@ mod tests {
             ))
             .expect("event applies");
 
-        assert_eq!(view.phase, "transcribed");
+        assert_eq!(view.phase, "inserting");
     }
 
     #[test]
-    fn apply_failed_event_updates_diagnostic_state() {
+    fn apply_failed_event_is_display_only() {
         let workflow = VoiceWorkflow::new();
         workflow
             .open_recording_for_test("task-1", "recording-1")
@@ -2123,8 +2248,8 @@ mod tests {
             })
             .expect("event applies");
 
-        assert_eq!(view.phase, "failed");
-        assert_eq!(view.diagnostic_code.as_deref(), Some("E_ASR_FAILED"));
+        assert_eq!(view.phase, "transcribing");
+        assert_eq!(view.diagnostic_code.as_deref(), None);
     }
 
     #[test]
@@ -2155,7 +2280,7 @@ mod tests {
     }
 
     #[test]
-    fn task_mismatch_event_fails_fast() {
+    fn task_mismatch_display_event_keeps_state() {
         let workflow = VoiceWorkflow::new();
         workflow
             .open_recording_for_test("task-1", "recording-1")
@@ -2164,7 +2289,7 @@ mod tests {
             .begin_transcribing_for_test("recording-1")
             .expect("transcribing starts");
 
-        let err = workflow
+        let view = workflow
             .apply_event_to_state(completed_event(
                 "event-1",
                 "transcription.completed",
@@ -2172,9 +2297,9 @@ mod tests {
                 serde_json::to_value(transcription_result("task-2", "asr text"))
                     .expect("payload serializes"),
             ))
-            .expect_err("mismatched event is rejected");
+            .expect("display event is accepted");
 
-        assert_eq!(err.code, "E_WORKFLOW_TRANSCRIPT_MISMATCH");
+        assert_eq!(view.phase, "transcribing");
         assert_eq!(workflow.phase(), WorkflowPhase::Transcribing);
     }
 

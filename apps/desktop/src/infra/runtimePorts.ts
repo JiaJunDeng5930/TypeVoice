@@ -89,6 +89,8 @@ const previewHistory = [
   task_id: `preview-${index + 1}`,
   created_at_ms: previewNow - (index + 1) * 34 * 60 * 1000,
   asr_text: text,
+  rewritten_text: "",
+  inserted_text: "",
   final_text: text,
   template_id: index % 2 === 0 ? "clean-note" : null,
   rtf: 0.18,
@@ -182,8 +184,15 @@ const browserPreviewGateway: TauriGateway = {
       case "workflow_snapshot":
       case "workflow_command":
       case "workflow_apply_event":
+      case "workflow_report_asr_completed":
+      case "workflow_report_asr_failed":
+      case "workflow_report_rewrite_completed":
+      case "workflow_report_rewrite_failed":
+      case "workflow_report_insert_completed":
+      case "workflow_report_insert_failed":
         return previewWorkflow as T;
       case "rewrite_text":
+      case "workflow_rewrite":
         return {
           transcriptId: String((args?.req as Record<string, unknown> | undefined)?.transcriptId || "preview-transcript"),
           finalText: String((args?.req as Record<string, unknown> | undefined)?.text || "").trim(),
@@ -191,6 +200,7 @@ const browserPreviewGateway: TauriGateway = {
           templateId: "clean-note",
         } as T;
       case "overlay_insert_text":
+      case "workflow_insert":
         return {
           copied: true,
           autoPasteAttempted: true,

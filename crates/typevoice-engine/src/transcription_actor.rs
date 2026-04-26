@@ -12,7 +12,7 @@ use serde_json::Value;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 use crate::{
-    data_dir, doubao_asr, history, obs,
+    data_dir, doubao_asr, obs,
     settings::{self, Settings},
     transcription::{TranscriptionMetrics, TranscriptionResult},
     ui_events::{UiEvent, UiEventMailbox, UiEventStatus},
@@ -331,7 +331,6 @@ impl ActorSession {
                 asr_ms: elapsed,
             },
         );
-        append_history(&result)?;
         mailbox.send(UiEvent::stage_with_elapsed(
             &self.task_id,
             "Transcribe",
@@ -340,7 +339,7 @@ impl ActorSession {
             Some(elapsed),
             None,
         ));
-        mailbox.send(UiEvent::state_completed(
+        mailbox.send(UiEvent::completed(
             &self.task_id,
             "transcription.completed",
             "transcription completed",
@@ -676,25 +675,6 @@ fn gunzip(bytes: &[u8]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-fn append_history(result: &TranscriptionResult) -> Result<()> {
-    let dir = data_dir::data_dir()?;
-    history::append(
-        &dir.join("history.sqlite3"),
-        &history::HistoryItem {
-            task_id: result.transcript_id.clone(),
-            created_at_ms: now_ms(),
-            asr_text: result.asr_text.clone(),
-            final_text: result.final_text.clone(),
-            template_id: None,
-            rtf: result.metrics.rtf,
-            device_used: result.metrics.device_used.clone(),
-            preprocess_ms: result.metrics.preprocess_ms as i64,
-            asr_ms: result.metrics.asr_ms as i64,
-        },
-    )?;
-    Ok(())
-}
-
 fn send_failed(mailbox: &UiEventMailbox, task_id: &str, code: &str, message: impl Into<String>) {
     let message = message.into();
     mailbox.send(UiEvent::stage_with_elapsed(
@@ -712,13 +692,6 @@ pub fn pcm_bytes_for_ms(ms: u64) -> usize {
     let bytes_per_second =
         PCM_SAMPLE_RATE as u64 * u64::from(PCM_CHANNELS) * u64::from(PCM_BITS / 8);
     ((bytes_per_second * ms) / 1000) as usize
-}
-
-fn now_ms() -> i64 {
-    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-        Ok(dur) => dur.as_millis() as i64,
-        Err(_) => 0,
-    }
 }
 
 #[cfg(test)]

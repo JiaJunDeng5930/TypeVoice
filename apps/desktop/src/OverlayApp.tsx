@@ -31,7 +31,7 @@ function isActivePhase(phase: string): boolean {
 }
 
 function canAltToggle(phase: string): boolean {
-  return ["idle", "recording", "transcribed", "rewritten", "cancelled", "failed"].includes(phase);
+  return ["idle", "recording", "cancelled", "failed"].includes(phase);
 }
 
 function statusFromPhase(phase: string): string {
@@ -181,10 +181,9 @@ export default function OverlayApp() {
     setStatus("REWRITING");
     setDetail(null);
     try {
-      const result = await client.rewriteText({
+      const result = await client.workflowRewrite({
         transcriptId: id,
         text,
-        templateId: null,
       });
       setDraftText(result.finalText);
       setLiveText("");
@@ -215,8 +214,10 @@ export default function OverlayApp() {
     });
 
     try {
-      await client.insertOverlayText({
-        transcriptId: transcriptIdRef.current,
+      const id = transcriptIdRef.current;
+      if (!id) throw new Error("E_INSERT_TRANSCRIPT_ID_MISSING: transcript_id is required");
+      await client.workflowInsert({
+        transcriptId: id,
         text,
       });
       setDraftText("");

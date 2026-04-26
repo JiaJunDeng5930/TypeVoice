@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::obs::{metrics, schema::MetricsRecord};
 use crate::ports::{PortError, PortResult};
-use crate::{data_dir, history, pipeline, remote_asr, settings};
+use crate::{data_dir, pipeline, remote_asr, settings};
 
 #[cfg(windows)]
 use crate::subprocess::CommandNoConsoleExt;
@@ -330,7 +330,6 @@ impl TranscriptionService {
             asr_ms: transcript.asr_ms,
         };
         let result = TranscriptionResult::new(&task_id, transcript.text.clone(), metrics);
-        append_history(data_dir, &result)?;
         emit_perf_metrics(
             data_dir,
             &task_id,
@@ -559,25 +558,6 @@ fn resolve_asr_preprocess_config(s: &settings::Settings) -> pipeline::Preprocess
         cfg.silence_trim_end_ms = v;
     }
     cfg
-}
-
-fn append_history(data_dir: &Path, result: &TranscriptionResult) -> PortResult<()> {
-    let db = data_dir.join("history.sqlite3");
-    history::append(
-        &db,
-        &history::HistoryItem {
-            task_id: result.transcript_id.clone(),
-            created_at_ms: now_ms(),
-            asr_text: result.asr_text.clone(),
-            final_text: result.final_text.clone(),
-            template_id: None,
-            rtf: result.metrics.rtf,
-            device_used: result.metrics.device_used.clone(),
-            preprocess_ms: result.metrics.preprocess_ms as i64,
-            asr_ms: result.metrics.asr_ms as i64,
-        },
-    )
-    .map_err(|e| PortError::from_message("E_PERSIST_FAILED", e.to_string()))
 }
 
 fn emit_stage_metric(

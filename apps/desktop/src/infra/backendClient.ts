@@ -4,7 +4,10 @@ import type {
   RuntimeToolchainStatus,
   UiEvent,
   WorkflowApplyEventRequest,
+  WorkflowAsrCompletedRequest,
   WorkflowCommand,
+  WorkflowTaskFailedRequest,
+  WorkflowTextCommandRequest,
   WorkflowView,
   RewriteResult,
   InsertResult,
@@ -17,6 +20,10 @@ export type BackendClient = {
     taskId?: string | null;
   }): Promise<WorkflowView>;
   workflowApplyEvent(req: WorkflowApplyEventRequest): Promise<WorkflowView>;
+  workflowReportAsrCompleted(req: WorkflowAsrCompletedRequest): Promise<WorkflowView>;
+  workflowReportAsrFailed(req: WorkflowTaskFailedRequest): Promise<WorkflowView>;
+  workflowRewrite(req: WorkflowTextCommandRequest): Promise<RewriteResult>;
+  workflowInsert(req: WorkflowTextCommandRequest): Promise<InsertResult>;
   rewriteText(req: { transcriptId: string; text: string; templateId?: string | null }): Promise<RewriteResult>;
   insertOverlayText(req: { transcriptId?: string | null; text: string }): Promise<InsertResult>;
   overlaySetState(state: {
@@ -42,6 +49,18 @@ export function createBackendClient(gateway: TauriGateway = defaultTauriGateway)
     },
     workflowApplyEvent(req) {
       return gateway.invoke<WorkflowView>("workflow_apply_event", { req });
+    },
+    workflowReportAsrCompleted(req) {
+      return gateway.invoke<WorkflowView>("workflow_report_asr_completed", { req });
+    },
+    workflowReportAsrFailed(req) {
+      return gateway.invoke<WorkflowView>("workflow_report_asr_failed", { req });
+    },
+    workflowRewrite(req) {
+      return gateway.invoke<RewriteResult>("workflow_rewrite", { req });
+    },
+    workflowInsert(req) {
+      return gateway.invoke<InsertResult>("workflow_insert", { req });
     },
     rewriteText(req) {
       return gateway.invoke<RewriteResult>("rewrite_text", { req });
