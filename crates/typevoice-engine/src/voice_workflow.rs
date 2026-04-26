@@ -139,7 +139,6 @@ pub struct WorkflowTaskFailedRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowTextCommandRequest {
-    pub transcript_id: String,
     pub text: String,
 }
 
@@ -399,20 +398,11 @@ impl VoiceWorkflow {
                 let session = snapshot.session.as_ref().ok_or_else(|| {
                     WorkflowError::new("E_WORKFLOW_SESSION_MISSING", "recording session missing")
                 })?;
-                let recording_session_id = (!session.recording_session_id.trim().is_empty())
-                    .then_some(session.recording_session_id.as_str())
-                    .ok_or_else(|| {
-                        WorkflowError::new(
-                            "E_WORKFLOW_SESSION_MISSING",
-                            "recording session missing",
-                        )
-                    })?;
                 if session.streaming_transcription {
-                    self.stop_streaming_record_transcribe(audio, mailbox, recording_session_id)?;
+                    self.stop_streaming_record_transcribe(audio, mailbox)?;
                     Ok(None)
                 } else {
-                    self.prepare_stop_record_transcribe(recording_session_id)
-                        .map(Some)
+                    self.prepare_stop_record_transcribe().map(Some)
                 }
             }
             WorkflowPhase::Transcribing
@@ -439,7 +429,7 @@ impl VoiceWorkflow {
     }
 
     fn run_copy_last(&self) -> WorkflowResult<()> {
-        let last = self.last_text_for_action()?;
+        let last = self.current_action_text()?;
         export::copy_text_to_clipboard(&last.final_text)
             .map_err(|err| WorkflowError::new(&err.code, err.message))
     }
@@ -451,24 +441,8 @@ impl VoiceWorkflow {
         streaming_actor: &TranscriptionActor,
         mailbox: &UiEventMailbox,
     ) -> WorkflowResult<Option<WorkflowTaskRequest>> {
-        let snapshot = self.snapshot();
-        let session_id = snapshot
-            .session
-            .as_ref()
-            .map(|session| session.recording_session_id.clone());
-        let transcript_id = snapshot
-            .session
-            .as_ref()
-            .map(|session| session.session_id.clone());
-        self.cancel_record_transcribe(
-            audio,
-            transcriber,
-            streaming_actor,
-            mailbox,
-            session_id,
-            transcript_id,
-        )
-        .map(|()| None)
+        self.cancel_record_transcribe(audio, transcriber, streaming_actor, mailbox)
+            .map(|()| None)
     }
 
     pub fn start_record_transcribe(
@@ -543,14 +517,11 @@ impl VoiceWorkflow {
         }
     }
 
-    pub fn prepare_stop_record_transcribe(
-        &self,
-        recording_session_id: &str,
-    ) -> WorkflowResult<WorkflowTaskRequest> {
-        let session = self.begin_transcribing(recording_session_id)?;
+    pub fn prepare_stop_record_transcribe(&self) -> WorkflowResult<WorkflowTaskRequest> {
+        let session = self.begin_transcribing_current()?;
         Ok(WorkflowTaskRequest::StopRecordTranscribe {
             task_id: session.session_id,
-            recording_session_id: recording_session_id.to_string(),
+            recording_session_id: session.recording_session_id,
         })
     }
 
@@ -558,11 +529,10 @@ impl VoiceWorkflow {
         &self,
         audio: &RecordingRegistry,
         mailbox: &UiEventMailbox,
-        recording_session_id: &str,
     ) -> WorkflowResult<()> {
-        let session = self.begin_transcribing(recording_session_id)?;
+        let session = self.begin_transcribing_current()?;
         self.emit_state(mailbox);
-        let asset = match audio.stop_recording(recording_session_id) {
+        let asset = match audio.stop_recording(&session.recording_session_id) {
             Ok(RecordingStopOutcome::Completed(asset)) => asset,
             Ok(RecordingStopOutcome::Stale) => return Ok(()),
             Err(err) => {
@@ -597,11 +567,10 @@ impl VoiceWorkflow {
         audio: &RecordingRegistry,
         transcriber: &TranscriptionService,
         mailbox: &UiEventMailbox,
-        recording_session_id: &str,
     ) -> WorkflowResult<Option<TranscriptionResult>> {
-        let session = self.begin_transcribing(recording_session_id)?;
+        let session = self.begin_transcribing_current()?;
         self.emit_state(mailbox);
-        let asset = match audio.stop_recording(recording_session_id) {
+        let asset = match audio.stop_recording(&session.recording_session_id) {
             Ok(RecordingStopOutcome::Completed(asset)) => asset,
             Ok(RecordingStopOutcome::Stale) => return Ok(None),
             Err(err) => {
@@ -742,69 +711,50 @@ impl VoiceWorkflow {
         transcriber: &TranscriptionService,
         streaming_actor: &TranscriptionActor,
         mailbox: &UiEventMailbox,
-        session_id: Option<String>,
-        transcript_id: Option<String>,
     ) -> WorkflowResult<()> {
         let snapshot = self.snapshot();
         match snapshot.phase {
             WorkflowPhase::Recording => {
-                let expected = session_id.as_deref();
-                self.cancel_recording_state(expected)?;
+                let session = snapshot.session.clone().ok_or_else(|| {
+                    WorkflowError::new("E_WORKFLOW_SESSION_MISSING", "session missing")
+                })?;
+                self.cancel_current_recording_state()?;
                 self.emit_state(mailbox);
                 audio
-                    .abort_recording(session_id)
+                    .abort_recording(Some(session.recording_session_id.clone()))
                     .map_err(|err| WorkflowError::new(&err.code, err.message))?;
-                if let Some(session) = snapshot.session {
-                    let _ = streaming_actor.cancel_session(&session.session_id);
-                    mailbox.send(UiEvent::stage(
-                        session.session_id,
-                        "Record",
-                        UiEventStatus::Cancelled,
-                        "cancelled",
-                    ));
-                }
+                let _ = streaming_actor.cancel_session(&session.session_id);
+                mailbox.send(UiEvent::stage(
+                    session.session_id,
+                    "Record",
+                    UiEventStatus::Cancelled,
+                    "cancelled",
+                ));
                 Ok(())
             }
             WorkflowPhase::Transcribing => {
-                let expected = transcript_id.as_deref();
-                if let Some(expected) = expected {
-                    if let Some(session) = snapshot.session.as_ref() {
-                        if !expected.trim().is_empty() && expected != session.session_id {
-                            return Err(WorkflowError::new(
-                                "E_WORKFLOW_TRANSCRIPT_MISMATCH",
-                                "transcript id mismatch",
-                            ));
-                        }
-                    }
-                }
+                let session = snapshot.session.clone().ok_or_else(|| {
+                    WorkflowError::new("E_WORKFLOW_SESSION_MISSING", "session missing")
+                })?;
                 transcriber
-                    .cancel(expected)
+                    .cancel(Some(session.session_id.as_str()))
                     .map_err(WorkflowError::from_port)?;
-                if let Some(session) = snapshot.session.as_ref() {
-                    let _ = streaming_actor.cancel_session(&session.session_id);
-                }
+                let _ = streaming_actor.cancel_session(&session.session_id);
                 self.mark_cancelled();
                 self.emit_state(mailbox);
-                if let Some(session) = snapshot.session {
-                    mailbox.send(UiEvent::stage(
-                        session.session_id,
-                        "Transcribe",
-                        UiEventStatus::Cancelled,
-                        "cancelled",
-                    ));
-                }
+                mailbox.send(UiEvent::stage(
+                    session.session_id,
+                    "Transcribe",
+                    UiEventStatus::Cancelled,
+                    "cancelled",
+                ));
                 Ok(())
             }
             WorkflowPhase::Idle
             | WorkflowPhase::Transcribed
             | WorkflowPhase::Rewritten
             | WorkflowPhase::Cancelled
-            | WorkflowPhase::Failed => {
-                if let Some(transcript_id) = transcript_id {
-                    self.abort_pending_task(&transcript_id);
-                }
-                Err(cancel_phase_error(snapshot.phase))
-            }
+            | WorkflowPhase::Failed => Err(cancel_phase_error(snapshot.phase)),
             WorkflowPhase::Rewriting | WorkflowPhase::Inserting => {
                 Err(cancel_phase_error(snapshot.phase))
             }
@@ -925,6 +875,16 @@ impl VoiceWorkflow {
             serde_json::to_value(&result).unwrap_or_default(),
         ));
         Ok(result)
+    }
+
+    pub async fn rewrite_current_text(
+        &self,
+        mailbox: &UiEventMailbox,
+        task_state: &TaskManager,
+        req: WorkflowTextCommandRequest,
+    ) -> WorkflowResult<RewriteResult> {
+        self.rewrite_text(mailbox, task_state, self.current_rewrite_request(req)?)
+            .await
     }
 
     pub fn report_rewrite_completed(
@@ -1050,6 +1010,16 @@ impl VoiceWorkflow {
             serde_json::to_value(&result).unwrap_or_default(),
         ));
         Ok(result)
+    }
+
+    pub async fn insert_current_text_after_focus(
+        &self,
+        mailbox: &UiEventMailbox,
+        req: WorkflowTextCommandRequest,
+        target_hwnd: Option<isize>,
+    ) -> WorkflowResult<InsertResult> {
+        self.insert_text_after_focus(mailbox, self.current_insert_request(req)?, target_hwnd)
+            .await
     }
 
     pub fn report_insert_completed(
@@ -1190,7 +1160,7 @@ impl VoiceWorkflow {
         }
     }
 
-    fn last_text_for_action(&self) -> WorkflowResult<WorkflowActionText> {
+    fn current_action_text(&self) -> WorkflowResult<WorkflowActionText> {
         let snapshot = self.snapshot();
         let last = last_result_from_snapshot(&snapshot).ok_or_else(|| {
             WorkflowError::new("E_WORKFLOW_LAST_RESULT_MISSING", "last result is missing")
@@ -1202,6 +1172,41 @@ impl VoiceWorkflow {
             ));
         }
         Ok(last)
+    }
+
+    fn current_rewrite_request(
+        &self,
+        req: WorkflowTextCommandRequest,
+    ) -> WorkflowResult<RewriteTextRequest> {
+        if req.text.trim().is_empty() {
+            return Err(WorkflowError::new(
+                "E_REWRITE_EMPTY_TEXT",
+                "text is required",
+            ));
+        }
+        let current = self.current_action_text()?;
+        Ok(RewriteTextRequest {
+            transcript_id: current.transcript_id,
+            text: req.text,
+            template_id: None,
+        })
+    }
+
+    fn current_insert_request(
+        &self,
+        req: WorkflowTextCommandRequest,
+    ) -> WorkflowResult<InsertTextRequest> {
+        if req.text.trim().is_empty() {
+            return Err(WorkflowError::new(
+                "E_INSERT_EMPTY_TEXT",
+                "text is required",
+            ));
+        }
+        let current = self.current_action_text()?;
+        Ok(InsertTextRequest {
+            transcript_id: Some(current.transcript_id),
+            text: req.text,
+        })
     }
 
     fn persist_transcription_result(&self, result: &TranscriptionResult) -> WorkflowResult<()> {
@@ -1441,6 +1446,28 @@ impl VoiceWorkflow {
         Ok(session)
     }
 
+    fn begin_transcribing_current(&self) -> WorkflowResult<WorkflowSession> {
+        let mut state = self.state.lock().unwrap();
+        if state.phase != WorkflowPhase::Recording {
+            return Err(WorkflowError::new(
+                "E_WORKFLOW_INVALID_PHASE",
+                "workflow is not recording",
+            ));
+        }
+        let session = state
+            .session
+            .clone()
+            .ok_or_else(|| WorkflowError::new("E_WORKFLOW_SESSION_MISSING", "session missing"))?;
+        if session.recording_session_id.trim().is_empty() {
+            return Err(WorkflowError::new(
+                "E_WORKFLOW_SESSION_MISSING",
+                "recording session missing",
+            ));
+        }
+        state.phase = WorkflowPhase::Transcribing;
+        Ok(session)
+    }
+
     fn complete_transcription(&self, result: TranscriptionResult) -> WorkflowResult<()> {
         let mut state = self.state.lock().unwrap();
         if state.phase != WorkflowPhase::Transcribing {
@@ -1627,10 +1654,7 @@ impl VoiceWorkflow {
         state.last_error = Some(err);
     }
 
-    fn cancel_recording_state(
-        &self,
-        expected_recording_session_id: Option<&str>,
-    ) -> WorkflowResult<()> {
+    fn cancel_current_recording_state(&self) -> WorkflowResult<()> {
         let state = self.state.lock().unwrap();
         if state.phase != WorkflowPhase::Recording {
             return Err(WorkflowError::new(
@@ -1638,20 +1662,15 @@ impl VoiceWorkflow {
                 "workflow is not recording",
             ));
         }
-        if let Some(expected) = expected_recording_session_id {
-            let actual = state
-                .session
-                .as_ref()
-                .map(|session| session.recording_session_id.as_str())
-                .ok_or_else(|| {
-                    WorkflowError::new("E_WORKFLOW_SESSION_MISSING", "session missing")
-                })?;
-            if !expected.trim().is_empty() && actual != expected {
-                return Err(WorkflowError::new(
-                    "E_WORKFLOW_SESSION_MISMATCH",
-                    "recording session mismatch",
-                ));
-            }
+        let session = state
+            .session
+            .as_ref()
+            .ok_or_else(|| WorkflowError::new("E_WORKFLOW_SESSION_MISSING", "session missing"))?;
+        if session.recording_session_id.trim().is_empty() {
+            return Err(WorkflowError::new(
+                "E_WORKFLOW_SESSION_MISSING",
+                "recording session missing",
+            ));
         }
         drop(state);
         self.mark_cancelled();
@@ -1737,11 +1756,8 @@ impl VoiceWorkflow {
     }
 
     #[cfg(test)]
-    fn cancel_recording_for_test(
-        &self,
-        expected_recording_session_id: Option<&str>,
-    ) -> WorkflowResult<()> {
-        self.cancel_recording_state(expected_recording_session_id)
+    fn cancel_current_recording_for_test(&self) -> WorkflowResult<()> {
+        self.cancel_current_recording_state()
     }
 
     #[cfg(test)]
@@ -2093,7 +2109,7 @@ mod tests {
             .expect("transcription completes");
 
         let err = workflow
-            .last_text_for_action()
+            .current_action_text()
             .expect_err("empty final text is rejected");
 
         assert_eq!(err.code, "E_WORKFLOW_LAST_TEXT_MISSING");
@@ -2107,10 +2123,59 @@ mod tests {
             .expect("recording starts");
 
         workflow
-            .cancel_recording_for_test(Some("recording-1"))
+            .cancel_current_recording_for_test()
             .expect("recording cancels");
 
         assert_eq!(workflow.phase(), WorkflowPhase::Cancelled);
+    }
+
+    #[test]
+    fn current_action_text_uses_current_workflow_result() {
+        let workflow = VoiceWorkflow::new();
+        workflow
+            .open_transcribed_session_for_test("task-1", "asr text")
+            .expect("transcribed");
+
+        let current = workflow
+            .current_action_text()
+            .expect("current action text exists");
+
+        assert_eq!(current.transcript_id, "task-1");
+        assert_eq!(current.final_text, "asr text");
+    }
+
+    #[test]
+    fn rewrite_current_request_uses_current_transcript_id() {
+        let workflow = VoiceWorkflow::new();
+        workflow
+            .open_transcribed_session_for_test("task-1", "asr text")
+            .expect("transcribed");
+
+        let req = workflow
+            .current_rewrite_request(WorkflowTextCommandRequest {
+                text: "edited text".to_string(),
+            })
+            .expect("request is built from current state");
+
+        assert_eq!(req.transcript_id, "task-1");
+        assert_eq!(req.text, "edited text");
+    }
+
+    #[test]
+    fn insert_current_request_uses_current_transcript_id() {
+        let workflow = VoiceWorkflow::new();
+        workflow
+            .open_transcribed_session_for_test("task-1", "asr text")
+            .expect("transcribed");
+
+        let req = workflow
+            .current_insert_request(WorkflowTextCommandRequest {
+                text: "edited text".to_string(),
+            })
+            .expect("request is built from current state");
+
+        assert_eq!(req.transcript_id.as_deref(), Some("task-1"));
+        assert_eq!(req.text, "edited text");
     }
 
     #[test]
@@ -2132,7 +2197,7 @@ mod tests {
             .expect("recording starts");
 
         let task = workflow
-            .prepare_stop_record_transcribe("recording-1")
+            .prepare_stop_record_transcribe()
             .expect("stop task is prepared");
 
         assert_eq!(workflow.phase(), WorkflowPhase::Transcribing);
@@ -2146,6 +2211,32 @@ mod tests {
             }
             _ => panic!("unexpected task"),
         }
+    }
+
+    #[test]
+    fn report_failed_event_rejects_mismatched_task_id() {
+        let (mailbox, _rx) = UiEventMailbox::for_test();
+        let workflow = VoiceWorkflow::new();
+        workflow
+            .open_recording_for_test("task-1", "recording-1")
+            .expect("recording starts");
+        workflow
+            .begin_transcribing_for_test("recording-1")
+            .expect("transcribing starts");
+
+        let err = workflow
+            .report_asr_failed(
+                &mailbox,
+                WorkflowTaskFailedRequest {
+                    transcript_id: "task-2".to_string(),
+                    code: "E_ASR_FAILED".to_string(),
+                    message: "failed".to_string(),
+                },
+            )
+            .expect_err("wrong task id is rejected");
+
+        assert_eq!(err.code, "E_WORKFLOW_TRANSCRIPT_MISMATCH");
+        assert_eq!(workflow.phase(), WorkflowPhase::Transcribing);
     }
 
     #[test]

@@ -52,8 +52,8 @@ Frontend
 兼容命令仍由命令层转发到 `voice_workflow`：
 
 - `record_transcribe_start(req) -> { sessionId }`
-- `record_transcribe_stop(req) -> TranscriptionResult`
-- `record_transcribe_cancel(req) -> void`
+- `record_transcribe_stop() -> TranscriptionResult`
+- `record_transcribe_cancel() -> void`
 - `rewrite_text(req) -> RewriteResult`
 - `insert_text(req) -> InsertResult`
 - `transcribe_fixture(req) -> TranscriptionResult`
@@ -104,7 +104,8 @@ Doubao provider：
 
 ## 4. 改写规范
 
-- `rewrite_text` 使用 `transcriptId` 和输入文本执行改写。
+- `workflow_rewrite` 使用当前工作流结果和输入文本执行改写。
+- `rewrite_text` 使用 `transcriptId` 和输入文本执行底层显式改写。
 - 模板来自设置或请求参数。
 - 改写成功后更新历史记录。
 - 改写失败返回结构化错误，调用方保留原始转录文本。
@@ -112,7 +113,8 @@ Doubao provider：
 
 ## 5. 插入规范
 
-- `insert_text` 负责复制和自动写入。
+- `workflow_insert` 使用当前工作流结果和输入文本执行复制和自动写入。
+- `insert_text` 使用 `transcriptId` 和输入文本执行底层显式复制和自动写入。
 - `copyLast` 只复制当前最终文本。
 - 自动写入由设置项 `auto_paste_enabled` 控制。
 - 自动写入失败时返回 `copied=true`、`autoPasteAttempted=true`、`autoPasteOk=false` 和错误信息。

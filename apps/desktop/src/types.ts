@@ -47,7 +47,6 @@ export type WorkflowTaskFailedRequest = {
 };
 
 export type WorkflowTextCommandRequest = {
-  transcriptId: string;
   text: string;
 };
 

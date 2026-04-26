@@ -57,7 +57,7 @@
 状态机调用：
 
 - `record_transcribe_start(req) -> { sessionId }`
-- `record_transcribe_cancel(req) -> void`
+- `record_transcribe_cancel() -> void`
 
 ### 2.3 voice_tasks
 
@@ -85,7 +85,7 @@ Provider：
 
 状态机调用：
 
-- `record_transcribe_stop(req) -> TranscriptionResult`
+- `record_transcribe_stop() -> TranscriptionResult`
 - `transcribe_fixture(req) -> TranscriptionResult`
 
 ### 2.5 rewrite

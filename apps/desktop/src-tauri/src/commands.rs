@@ -53,19 +53,6 @@ pub struct RecordTranscribeStartResult {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RecordTranscribeStopRequest {
-    pub session_id: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RecordTranscribeCancelRequest {
-    pub session_id: Option<String>,
-    pub transcript_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct OverlayInsertTextRequest {
     pub transcript_id: Option<String>,
     pub text: String,
@@ -172,15 +159,7 @@ pub async fn workflow_rewrite(
     req: WorkflowTextCommandRequest,
 ) -> Result<RewriteResult, String> {
     workflow
-        .rewrite_text(
-            &mailbox,
-            &task_state,
-            RewriteTextRequest {
-                transcript_id: req.transcript_id,
-                text: req.text,
-                template_id: None,
-            },
-        )
+        .rewrite_current_text(&mailbox, &task_state, req)
         .await
         .map_err(render_workflow_error)
 }
@@ -196,14 +175,7 @@ pub async fn workflow_insert(
         "E_OVERLAY_TARGET_UNAVAILABLE: no external target window captured".to_string()
     })?;
     workflow
-        .insert_text_after_focus(
-            &mailbox,
-            InsertTextRequest {
-                transcript_id: Some(req.transcript_id),
-                text: req.text,
-            },
-            Some(target_hwnd),
-        )
+        .insert_current_text_after_focus(&mailbox, req, Some(target_hwnd))
         .await
         .map_err(render_workflow_error)
 }
@@ -259,10 +231,9 @@ pub async fn record_transcribe_stop(
     audio: State<'_, RecordingRegistry>,
     transcriber: State<'_, TranscriptionService>,
     mailbox: State<'_, UiEventMailbox>,
-    req: RecordTranscribeStopRequest,
 ) -> Result<Option<TranscriptionResult>, String> {
     workflow
-        .stop_record_transcribe(&runtime, &audio, &transcriber, &mailbox, &req.session_id)
+        .stop_record_transcribe(&runtime, &audio, &transcriber, &mailbox)
         .await
         .map_err(render_workflow_error)
 }
@@ -274,17 +245,9 @@ pub fn record_transcribe_cancel(
     transcriber: State<'_, TranscriptionService>,
     streaming_actor: State<'_, TranscriptionActor>,
     mailbox: State<'_, UiEventMailbox>,
-    req: RecordTranscribeCancelRequest,
 ) -> Result<(), String> {
     workflow
-        .cancel_record_transcribe(
-            &audio,
-            &transcriber,
-            &streaming_actor,
-            &mailbox,
-            req.session_id,
-            req.transcript_id,
-        )
+        .cancel_record_transcribe(&audio, &transcriber, &streaming_actor, &mailbox)
         .map_err(render_workflow_error)
 }
 

@@ -192,9 +192,15 @@ const browserPreviewGateway: TauriGateway = {
       case "workflow_report_insert_failed":
         return previewWorkflow as T;
       case "rewrite_text":
-      case "workflow_rewrite":
         return {
           transcriptId: String((args?.req as Record<string, unknown> | undefined)?.transcriptId || "preview-transcript"),
+          finalText: String((args?.req as Record<string, unknown> | undefined)?.text || "").trim(),
+          rewriteMs: 80,
+          templateId: "clean-note",
+        } as T;
+      case "workflow_rewrite":
+        return {
+          transcriptId: "preview-transcript",
           finalText: String((args?.req as Record<string, unknown> | undefined)?.text || "").trim(),
           rewriteMs: 80,
           templateId: "clean-note",

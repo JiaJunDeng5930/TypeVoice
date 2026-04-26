@@ -78,13 +78,11 @@ export default function OverlayApp() {
   const [liveText, setLiveText] = useState("");
   const [detail, setDetail] = useState<string | null>(null);
   const [workflow, setWorkflow] = useState<WorkflowView | null>(null);
-  const [transcriptId, setTranscriptId] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<"rewrite" | "insert" | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const phaseRef = useRef("idle");
   const draftRef = useRef("");
   const liveRef = useRef("");
-  const transcriptIdRef = useRef<string | null>(null);
   const busyRef = useRef<"rewrite" | "insert" | null>(null);
 
   useEffect(() => {
@@ -99,10 +97,6 @@ export default function OverlayApp() {
   useEffect(() => {
     liveRef.current = liveText;
   }, [liveText]);
-
-  useEffect(() => {
-    transcriptIdRef.current = transcriptId;
-  }, [transcriptId]);
 
   useEffect(() => {
     busyRef.current = busyAction;
@@ -173,21 +167,18 @@ export default function OverlayApp() {
 
   const runRewrite = useCallback(async () => {
     if (busyRef.current) return;
-    const id = transcriptIdRef.current;
     const text = draftRef.current.trim();
-    if (!id || !text || isActivePhase(phaseRef.current)) return;
+    if (!text || isActivePhase(phaseRef.current)) return;
 
     setBusyAction("rewrite");
     setStatus("REWRITING");
     setDetail(null);
     try {
       const result = await client.workflowRewrite({
-        transcriptId: id,
         text,
       });
       setDraftText(result.finalText);
       setLiveText("");
-      setTranscriptId(result.transcriptId);
       setStatus("REWRITTEN");
     } catch (err) {
       setStatus("ERROR");
@@ -214,15 +205,11 @@ export default function OverlayApp() {
     });
 
     try {
-      const id = transcriptIdRef.current;
-      if (!id) throw new Error("E_INSERT_TRANSCRIPT_ID_MISSING: transcript_id is required");
       await client.workflowInsert({
-        transcriptId: id,
         text,
       });
       setDraftText("");
       setLiveText("");
-      setTranscriptId(null);
       await hideOverlay();
     } catch (err) {
       setVisible(true);
@@ -292,7 +279,6 @@ export default function OverlayApp() {
           const result = textFromTranscriptionCompleted(event);
           setDraftText((prev) => appendTranscript(prev, result.asrText));
           setLiveText("");
-          if (result.transcriptId) setTranscriptId(result.transcriptId);
           setVisible(true);
           setStatus("TRANSCRIBED");
           return;
@@ -302,7 +288,6 @@ export default function OverlayApp() {
           const result = textFromRewriteCompleted(event);
           if (result.finalText.trim()) setDraftText(result.finalText);
           setLiveText("");
-          if (result.transcriptId) setTranscriptId(result.transcriptId);
           setVisible(true);
           setStatus("REWRITTEN");
           return;
