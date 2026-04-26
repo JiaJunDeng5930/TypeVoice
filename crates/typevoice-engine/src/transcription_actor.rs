@@ -60,6 +60,7 @@ enum ActorMessage {
     Start {
         task_id: String,
         config: StreamingSessionConfig,
+        ack: mpsc::Sender<StartAck>,
     },
     AudioChunk {
         task_id: String,
@@ -74,6 +75,8 @@ enum ActorMessage {
         task_id: String,
     },
 }
+
+type StartAck = std::result::Result<(), String>;
 
 #[derive(Clone)]
 pub struct TranscriptionActor {
@@ -92,7 +95,11 @@ impl TranscriptionActor {
                 let mut session: Option<ActorSession> = None;
                 while let Ok(msg) = rx.recv() {
                     match msg {
-                        ActorMessage::Start { task_id, config } => {
+                        ActorMessage::Start {
+                            task_id,
+                            config,
+                            ack,
+                        } => {
                             if let Some(mut active) = session.take() {
                                 let stale_task_id = active.task_id.clone();
                                 active.cancel();
@@ -102,15 +109,11 @@ impl TranscriptionActor {
                                 Ok(next) => {
                                     started_for_thread.lock().unwrap().insert(task_id.clone());
                                     session = Some(next);
+                                    let _ = ack.send(Ok(()));
                                 }
                                 Err(e) => {
                                     started_for_thread.lock().unwrap().remove(&task_id);
-                                    send_failed(
-                                        &mailbox,
-                                        &task_id,
-                                        "E_STREAMING_TRANSCRIBE_START",
-                                        e.to_string(),
-                                    );
+                                    let _ = ack.send(Err(e.to_string()));
                                 }
                             }
                         }
@@ -202,12 +205,19 @@ impl TranscriptionActor {
     }
 
     pub fn start_session(&self, task_id: &str, config: StreamingSessionConfig) -> Result<()> {
+        let (ack_tx, ack_rx) = mpsc::channel::<StartAck>();
         self.tx
             .send(ActorMessage::Start {
                 task_id: task_id.to_string(),
                 config,
+                ack: ack_tx,
             })
-            .map_err(|e| anyhow!("E_STREAMING_ACTOR_SEND: {e}"))
+            .map_err(|e| anyhow!("E_STREAMING_ACTOR_SEND: {e}"))?;
+        match ack_rx.recv() {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(message)) => Err(anyhow!(message)),
+            Err(e) => Err(anyhow!("E_STREAMING_ACTOR_ACK: {e}")),
+        }
     }
 
     pub fn send_audio_chunk(
@@ -262,12 +272,6 @@ impl ActorSession {
         config: StreamingSessionConfig,
         mailbox: &UiEventMailbox,
     ) -> Result<Self> {
-        mailbox.send(UiEvent::stage(
-            &task_id,
-            "Transcribe",
-            UiEventStatus::Started,
-            format!("asr({})", config.provider.as_str()),
-        ));
         let doubao = if config.provider == StreamingProviderKind::Doubao {
             Some(DoubaoSessionHandle::start(
                 task_id.clone(),
@@ -276,6 +280,12 @@ impl ActorSession {
         } else {
             None
         };
+        mailbox.send(UiEvent::stage(
+            &task_id,
+            "Transcribe",
+            UiEventStatus::Started,
+            format!("asr({})", config.provider.as_str()),
+        ));
         Ok(Self {
             task_id,
             config,
@@ -777,6 +787,18 @@ mod tests {
 
         assert!(actor.is_session_started("task-2"));
         assert_no_failed_events(&rx);
+    }
+
+    #[test]
+    fn start_session_returns_after_actor_marks_session_started() {
+        let (mailbox, _rx) = UiEventMailbox::for_test();
+        let actor = TranscriptionActor::new(mailbox);
+
+        actor
+            .start_session("task-1", remote_streaming_config())
+            .expect("start succeeds");
+
+        assert!(actor.is_session_started("task-1"));
     }
 
     #[test]

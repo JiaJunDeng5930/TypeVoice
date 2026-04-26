@@ -45,6 +45,8 @@ function titleForCode(code: string, fallback: string): string {
   if (code === "E_TASK_ALREADY_ACTIVE") return "TASK BUSY";
   if (code === "E_RECORD_UNSUPPORTED") return "RECORDING UNSUPPORTED";
   if (code.startsWith("E_RECORD_")) return "RECORDING FAILED";
+  if (code.startsWith("E_STREAMING_TRANSCRIBE_")) return "ASR START FAILED";
+  if (code.startsWith("E_DOUBAO_ASR_")) return "ASR CONFIG FAILED";
   if (code === "E_CMD_CANCEL") return "CANCEL FAILED";
   if (code.startsWith("HTTP_")) return "LLM REQUEST FAILED";
   return fallback;
@@ -54,7 +56,12 @@ function actionHintForCode(code: string): string {
   if (code.startsWith("E_TOOLCHAIN_")) return "RUN WINDOWS GATE TO REPAIR TOOLCHAIN";
   if (code.startsWith("E_RECORD_")) return "CHECK MICROPHONE INPUT SPEC / DEVICE";
   if (code.startsWith("E_FFMPEG_")) return "CHECK FFMPEG TOOLCHAIN";
-  if (code.startsWith("E_ASR_") || code === "E_MODEL_LOAD_FAILED") {
+  if (
+    code.startsWith("E_ASR_") ||
+    code.startsWith("E_STREAMING_TRANSCRIBE_") ||
+    code.startsWith("E_DOUBAO_ASR_") ||
+    code === "E_MODEL_LOAD_FAILED"
+  ) {
     return "CHECK ASR PROVIDER SETTINGS";
   }
   if (code.startsWith("HTTP_")) return "CHECK LLM ENDPOINT / API KEY";
