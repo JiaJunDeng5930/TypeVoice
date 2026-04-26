@@ -197,7 +197,7 @@ export function MainScreen({
 
   const phase = String(workflow.phase || "idle").toLowerCase();
   const hint = workflow.primaryLabel || "START";
-  const streamText = liveTranscript || workflow.lastAsrText || "";
+  const streamText = phase === "recording" || phase === "transcribing" ? liveTranscript : "";
   const statusLabel = phase === "idle" ? "READY" : hint;
 
   return (
