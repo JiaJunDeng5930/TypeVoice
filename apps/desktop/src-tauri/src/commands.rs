@@ -215,11 +215,9 @@ pub async fn overlay_insert_text(
     if req.text.trim().is_empty() {
         return Err("E_EXPORT_EMPTY_TEXT: empty text cannot be exported".to_string());
     }
-    let target_hwnd = task_state
-        .last_external_hwnd_best_effort()
-        .ok_or_else(|| {
-            "E_OVERLAY_TARGET_UNAVAILABLE: no external target window captured".to_string()
-        })?;
+    let target_hwnd = task_state.last_external_hwnd_best_effort().ok_or_else(|| {
+        "E_OVERLAY_TARGET_UNAVAILABLE: no external target window captured".to_string()
+    })?;
     crate::insertion::insert_text_after_focus(
         InsertTextRequest {
             transcript_id: req.transcript_id,

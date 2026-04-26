@@ -5043,6 +5043,7 @@ dependencies = [
  "typevoice-providers",
  "typevoice-storage",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5093,6 +5094,7 @@ dependencies = [
  "sha2",
  "tauri",
  "tempfile",
+ "tokio",
  "tokio-util",
  "typevoice-core",
  "typevoice-observability",

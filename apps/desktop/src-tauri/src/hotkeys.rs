@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Runtime};
+use tauri::{AppHandle, Emitter};
 
 use crate::obs::Span;
 use crate::settings::Settings;
@@ -171,12 +171,7 @@ impl HotkeyManager {
         Self::default()
     }
 
-    pub fn apply_from_settings_best_effort<R: Runtime + Send + Sync + 'static>(
-        &self,
-        app: &AppHandle<R>,
-        data_dir: &Path,
-        s: &Settings,
-    ) {
+    pub fn apply_from_settings_best_effort(&self, app: &AppHandle, data_dir: &Path, s: &Settings) {
         let _g = self.lock.lock().unwrap();
 
         let cfg = match hotkey_config_from_settings(s) {
@@ -250,11 +245,12 @@ struct PlatformKeyboardListener;
 
 impl PlatformKeyboardListener {
     #[cfg(windows)]
-    fn start<R: Runtime + Send + Sync + 'static>(app: AppHandle<R>) -> anyhow::Result<Self> {
+    fn start(app: AppHandle) -> anyhow::Result<Self> {
         use std::sync::mpsc;
+        use windows_sys::Win32::System::Threading::GetCurrentThreadId;
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            DispatchMessageW, GetCurrentThreadId, GetMessageW, SetWindowsHookExW,
-            TranslateMessage, UnhookWindowsHookEx, HHOOK, MSG, WH_KEYBOARD_LL, WM_QUIT,
+            DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage,
+            UnhookWindowsHookEx, HHOOK, MSG, WH_KEYBOARD_LL, WM_QUIT,
         };
 
         unsafe extern "system" fn keyboard_proc(
@@ -263,14 +259,14 @@ impl PlatformKeyboardListener {
             l_param: windows_sys::Win32::Foundation::LPARAM,
         ) -> windows_sys::Win32::Foundation::LRESULT {
             use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-                KBDLLHOOKSTRUCT, VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_MENU, VK_RCONTROL,
-                VK_RETURN, VK_RMENU,
+                VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_MENU, VK_RCONTROL, VK_RETURN, VK_RMENU,
             };
             use windows_sys::Win32::UI::WindowsAndMessaging::{
-                CallNextHookEx, HC_ACTION, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+                CallNextHookEx, HC_ACTION, KBDLLHOOKSTRUCT, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN,
+                WM_SYSKEYUP,
             };
 
-            if code == HC_ACTION {
+            if code == HC_ACTION as i32 {
                 let state = match w_param as u32 {
                     WM_KEYDOWN | WM_SYSKEYDOWN => Some(KeyState::Down),
                     WM_KEYUP | WM_SYSKEYUP => Some(KeyState::Up),
@@ -279,9 +275,19 @@ impl PlatformKeyboardListener {
                 if let Some(state) = state {
                     let info = unsafe { *(l_param as *const KBDLLHOOKSTRUCT) };
                     let key = match info.vkCode {
-                        VK_MENU | VK_LMENU | VK_RMENU => KeyKind::Alt,
-                        VK_CONTROL | VK_LCONTROL | VK_RCONTROL => KeyKind::Ctrl,
-                        VK_RETURN => KeyKind::Enter,
+                        key if key == VK_MENU as u32
+                            || key == VK_LMENU as u32
+                            || key == VK_RMENU as u32 =>
+                        {
+                            KeyKind::Alt
+                        }
+                        key if key == VK_CONTROL as u32
+                            || key == VK_LCONTROL as u32
+                            || key == VK_RCONTROL as u32 =>
+                        {
+                            KeyKind::Ctrl
+                        }
+                        key if key == VK_RETURN as u32 => KeyKind::Enter,
                         _ => KeyKind::Other,
                     };
                     let signal = KeySignal {
@@ -358,13 +364,19 @@ impl PlatformKeyboardListener {
                 event_thread: Some(event_thread),
             }),
             Ok(Err(message)) => {
-                *KEY_SIGNAL_SLOT.get_or_init(|| Mutex::new(None)).lock().unwrap() = None;
+                *KEY_SIGNAL_SLOT
+                    .get_or_init(|| Mutex::new(None))
+                    .lock()
+                    .unwrap() = None;
                 let _ = hook_thread.join();
                 let _ = event_thread.join();
                 Err(anyhow::anyhow!(message))
             }
             Err(e) => {
-                *KEY_SIGNAL_SLOT.get_or_init(|| Mutex::new(None)).lock().unwrap() = None;
+                *KEY_SIGNAL_SLOT
+                    .get_or_init(|| Mutex::new(None))
+                    .lock()
+                    .unwrap() = None;
                 let _ = hook_thread.join();
                 let _ = event_thread.join();
                 Err(anyhow::anyhow!("keyboard hook thread failed: {e}"))
@@ -373,7 +385,7 @@ impl PlatformKeyboardListener {
     }
 
     #[cfg(not(windows))]
-    fn start<R: Runtime + Send + Sync + 'static>(_app: AppHandle<R>) -> anyhow::Result<Self> {
+    fn start(_app: AppHandle) -> anyhow::Result<Self> {
         Ok(Self)
     }
 
