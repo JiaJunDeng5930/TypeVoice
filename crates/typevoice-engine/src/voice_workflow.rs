@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::Path, sync::Mutex};
 
-use crate::audio_capture::RecordingRegistry;
+use crate::audio_capture::{RecordingRegistry, RecordingStopOutcome};
 use crate::context_capture;
 use crate::context_pack::ContextSnapshot;
 use serde::{Deserialize, Serialize};
@@ -609,7 +609,8 @@ impl VoiceWorkflow {
         let session = self.begin_transcribing(recording_session_id)?;
         self.emit_state(mailbox);
         let asset = match audio.stop_recording(recording_session_id) {
-            Ok(asset) => asset,
+            Ok(RecordingStopOutcome::Completed(asset)) => asset,
+            Ok(RecordingStopOutcome::Stale) => return Ok(()),
             Err(err) => {
                 let workflow_err = WorkflowError::new(&err.code, err.message);
                 self.mark_failed(workflow_err.clone());
@@ -643,11 +644,12 @@ impl VoiceWorkflow {
         transcriber: &TranscriptionService,
         mailbox: &UiEventMailbox,
         recording_session_id: &str,
-    ) -> WorkflowResult<TranscriptionResult> {
+    ) -> WorkflowResult<Option<TranscriptionResult>> {
         let session = self.begin_transcribing(recording_session_id)?;
         self.emit_state(mailbox);
         let asset = match audio.stop_recording(recording_session_id) {
-            Ok(asset) => asset,
+            Ok(RecordingStopOutcome::Completed(asset)) => asset,
+            Ok(RecordingStopOutcome::Stale) => return Ok(None),
             Err(err) => {
                 let workflow_err = WorkflowError::new(&err.code, err.message);
                 self.mark_failed(workflow_err.clone());
@@ -701,6 +703,7 @@ impl VoiceWorkflow {
             .await
         {
             Ok(result) => result,
+            Err(err) if err.code == "E_TASK_STALE" => return Ok(None),
             Err(err) => {
                 let workflow_err = WorkflowError::from_port(err);
                 self.mark_failed(workflow_err.clone());
@@ -731,7 +734,7 @@ impl VoiceWorkflow {
             "transcription completed",
             serde_json::to_value(&result).unwrap_or_default(),
         ));
-        Ok(result)
+        Ok(Some(result))
     }
 
     pub fn cancel_record_transcribe(

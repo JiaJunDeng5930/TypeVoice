@@ -1,7 +1,10 @@
 use std::{
     path::{Path, PathBuf},
     process::Command,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
 };
 
 use serde::{Deserialize, Serialize};
@@ -122,6 +125,7 @@ struct ActiveTranscription {
     task_id: String,
     token: CancellationToken,
     ffmpeg_pid: Arc<Mutex<Option<u32>>>,
+    stale: Arc<AtomicBool>,
 }
 
 #[derive(Clone)]
@@ -139,19 +143,17 @@ impl TranscriptionService {
     pub fn cancel(&self, task_id: Option<&str>) -> PortResult<()> {
         let active = {
             let g = self.inner.lock().unwrap();
-            g.as_ref()
-                .cloned()
-                .ok_or_else(|| PortError::new("E_TASK_NOT_ACTIVE", "no active transcription"))?
-        };
-        if let Some(expected) = task_id {
-            if !expected.trim().is_empty() && active.task_id != expected {
-                return Err(PortError::new("E_TASK_ID_MISMATCH", "task id mismatch"));
+            let Some(active) = g.as_ref().cloned() else {
+                return Ok(());
+            };
+            if let Some(expected) = task_id {
+                if !expected.trim().is_empty() && active.task_id != expected {
+                    return Ok(());
+                }
             }
-        }
-        active.token.cancel();
-        if let Some(pid) = *active.ffmpeg_pid.lock().unwrap() {
-            let _ = kill_pid(pid);
-        }
+            active
+        };
+        cancel_active_transcription(&active, false);
         Ok(())
     }
 
@@ -184,25 +186,14 @@ impl TranscriptionService {
             .filter(|v| !v.is_empty())
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        {
-            let mut g = self.inner.lock().unwrap();
-            if g.is_some() {
-                return Err(PortError::new(
-                    "E_TASK_ALREADY_ACTIVE",
-                    "another transcription is already running",
-                ));
-            }
-            *g = Some(ActiveTranscription {
-                task_id: task_id.clone(),
-                token: CancellationToken::new(),
-                ffmpeg_pid: Arc::new(Mutex::new(None)),
-            });
-        }
+        self.replace_active_task(task_id.clone());
 
         let result = self
             .transcribe_audio_inner(&data_dir, task_id.clone(), input, opts)
             .await;
-        self.clear_active(&task_id);
+        if !self.clear_active(&task_id) {
+            return Err(PortError::new("E_TASK_STALE", "stale transcription task"));
+        }
         result
     }
 
@@ -382,7 +373,11 @@ impl TranscriptionService {
             Ok(Err(e)) => {
                 let message = e.to_string();
                 if message.contains("cancelled") {
-                    Err(PortError::new("E_CANCELLED", "cancelled"))
+                    if active.stale.load(Ordering::SeqCst) {
+                        Err(PortError::new("E_TASK_STALE", "stale transcription task"))
+                    } else {
+                        Err(PortError::new("E_CANCELLED", "cancelled"))
+                    }
                 } else {
                     Err(PortError::from_message("E_PREPROCESS_FAILED", message))
                 }
@@ -439,7 +434,13 @@ impl TranscriptionService {
                 remote_slice_count: Some(v.metrics.slice_count),
                 remote_concurrency_used: Some(v.metrics.concurrency_used),
             }),
-            Err(e) if e.code == "E_CANCELLED" => Err(PortError::new("E_CANCELLED", e.message)),
+            Err(e) if e.code == "E_CANCELLED" => {
+                if active.stale.load(Ordering::SeqCst) {
+                    Err(PortError::new("E_TASK_STALE", "stale transcription task"))
+                } else {
+                    Err(PortError::new("E_CANCELLED", e.message))
+                }
+            }
             Err(e) => Err(PortError::new(&e.code, e.message)),
         }
     }
@@ -449,9 +450,9 @@ impl TranscriptionService {
         let active = g
             .as_ref()
             .cloned()
-            .ok_or_else(|| PortError::new("E_TASK_NOT_ACTIVE", "no active transcription"))?;
+            .ok_or_else(|| PortError::new("E_TASK_STALE", "stale transcription task"))?;
         if active.task_id != task_id {
-            return Err(PortError::new("E_TASK_ID_MISMATCH", "task id mismatch"));
+            return Err(PortError::new("E_TASK_STALE", "stale transcription task"));
         }
         Ok(active)
     }
@@ -466,11 +467,46 @@ impl TranscriptionService {
             .unwrap_or(false)
     }
 
-    fn clear_active(&self, task_id: &str) {
+    fn clear_active(&self, task_id: &str) -> bool {
         let mut g = self.inner.lock().unwrap();
         if g.as_ref().map(|active| active.task_id.as_str()) == Some(task_id) {
             *g = None;
+            return true;
         }
+        false
+    }
+
+    fn replace_active_task(&self, task_id: String) -> ActiveTranscription {
+        let active = ActiveTranscription::new(task_id);
+        let stale = {
+            let mut g = self.inner.lock().unwrap();
+            std::mem::replace(&mut *g, Some(active.clone()))
+        };
+        if let Some(stale) = stale {
+            cancel_active_transcription(&stale, true);
+        }
+        active
+    }
+}
+
+impl ActiveTranscription {
+    fn new(task_id: String) -> Self {
+        Self {
+            task_id,
+            token: CancellationToken::new(),
+            ffmpeg_pid: Arc::new(Mutex::new(None)),
+            stale: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+fn cancel_active_transcription(active: &ActiveTranscription, stale: bool) {
+    if stale {
+        active.stale.store(true, Ordering::SeqCst);
+    }
+    active.token.cancel();
+    if let Some(pid) = *active.ffmpeg_pid.lock().unwrap() {
+        let _ = kill_pid(pid);
     }
 }
 
@@ -681,5 +717,49 @@ mod tests {
         assert_eq!(result.transcript_id, "task-1");
         assert_eq!(result.asr_text, "hello");
         assert_eq!(result.final_text, "hello");
+    }
+
+    #[test]
+    fn new_transcription_replaces_existing_active_task() {
+        let service = TranscriptionService::new();
+
+        let first = service.replace_active_task("task-1".to_string());
+        let second = service.replace_active_task("task-2".to_string());
+
+        assert!(first.token.is_cancelled());
+        assert!(first.stale.load(Ordering::SeqCst));
+        assert!(!second.token.is_cancelled());
+        assert_eq!(
+            service.active_for_task("task-2").expect("current").task_id,
+            "task-2"
+        );
+        let stale = match service.active_for_task("task-1") {
+            Ok(_) => panic!("old task should be stale"),
+            Err(err) => err,
+        };
+        assert_eq!(stale.code, "E_TASK_STALE");
+    }
+
+    #[test]
+    fn stale_or_missing_cancel_succeeds_without_affecting_current_task() {
+        let service = TranscriptionService::new();
+
+        service.cancel(Some("missing")).expect("missing cancel");
+        let active = service.replace_active_task("task-2".to_string());
+
+        service.cancel(Some("task-1")).expect("stale cancel");
+        assert!(!active.token.is_cancelled());
+        assert!(!active.stale.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn current_cancel_cancels_current_task_without_marking_stale() {
+        let service = TranscriptionService::new();
+        let active = service.replace_active_task("task-1".to_string());
+
+        service.cancel(Some("task-1")).expect("current cancel");
+
+        assert!(active.token.is_cancelled());
+        assert!(!active.stale.load(Ordering::SeqCst));
     }
 }

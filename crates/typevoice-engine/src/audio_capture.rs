@@ -54,6 +54,12 @@ pub struct RecordedAsset {
     created_at: Instant,
 }
 
+#[derive(Debug, Clone)]
+pub enum RecordingStopOutcome {
+    Completed(RecordedAsset),
+    Stale,
+}
+
 struct RegistryInner {
     active: Option<ActiveRecording>,
     assets: HashMap<String, RecordedAsset>,
@@ -125,14 +131,12 @@ impl RecordingRegistry {
             return Err(err);
         }
         self.cleanup_expired_assets(Duration::from_secs(120));
-        {
-            let g = self.inner.lock().unwrap();
-            if g.active.is_some() {
-                let err =
-                    CaptureError::new("E_RECORD_ALREADY_ACTIVE", "recording is already active");
-                span.err("task", &err.code, &err.render(), None);
-                return Err(err);
-            }
+        let stale_active = {
+            let mut g = self.inner.lock().unwrap();
+            g.active.take()
+        };
+        if let Some(mut active) = stale_active {
+            discard_active_recording(&mut active);
         }
 
         let root = repo_root()?;
@@ -289,7 +293,7 @@ impl RecordingRegistry {
         Ok(session_id)
     }
 
-    pub fn stop_recording(&self, session_id: &str) -> Result<RecordedAsset, CaptureError> {
+    pub fn stop_recording(&self, session_id: &str) -> Result<RecordingStopOutcome, CaptureError> {
         let dir =
             data_dir::data_dir().map_err(|e| CaptureError::new("E_DATA_DIR", e.to_string()))?;
         let span = obs::Span::start(
@@ -305,9 +309,8 @@ impl RecordingRegistry {
             match g.active.take() {
                 Some(active) => active,
                 None => {
-                    let err = CaptureError::new("E_RECORD_NOT_ACTIVE", "no active recording");
-                    span.err("task", &err.code, &err.render(), None);
-                    return Err(err);
+                    span.ok(Some(serde_json::json!({"stale": true})));
+                    return Ok(RecordingStopOutcome::Stale);
                 }
             }
         };
@@ -315,9 +318,8 @@ impl RecordingRegistry {
         if !session_id.trim().is_empty() && active.session_id != session_id {
             let mut g = self.inner.lock().unwrap();
             g.active = Some(active);
-            let err = CaptureError::new("E_RECORD_ID_MISMATCH", "recording id mismatch");
-            span.err("task", &err.code, &err.render(), None);
-            return Err(err);
+            span.ok(Some(serde_json::json!({"stale": true})));
+            return Ok(RecordingStopOutcome::Stale);
         }
 
         let child = active
@@ -394,7 +396,7 @@ impl RecordingRegistry {
             "recording_asset_id": asset.asset_id,
             "record_elapsed_ms": elapsed_ms,
         })));
-        Ok(asset)
+        Ok(RecordingStopOutcome::Completed(asset))
     }
 
     pub fn abort_recording(&self, session_id: Option<String>) -> Result<(), CaptureError> {
@@ -423,9 +425,11 @@ impl RecordingRegistry {
             if !expected.trim().is_empty() && active.session_id != expected {
                 let mut g = self.inner.lock().unwrap();
                 g.active = Some(active);
-                let err = CaptureError::new("E_RECORD_ID_MISMATCH", "recording id mismatch");
-                span.err("task", &err.code, &err.render(), None);
-                return Err(err);
+                span.ok(Some(serde_json::json!({
+                    "aborted": false,
+                    "stale": true,
+                })));
+                return Ok(());
             }
         }
         if let Some(child) = active.child.as_mut() {
@@ -465,12 +469,6 @@ impl RecordingRegistry {
     #[cfg(test)]
     fn open_test_session(&self, session_id: &str) -> Result<(), CaptureError> {
         let mut g = self.inner.lock().unwrap();
-        if g.active.is_some() {
-            return Err(CaptureError::new(
-                "E_RECORD_ALREADY_ACTIVE",
-                "recording is already active",
-            ));
-        }
         g.active = Some(ActiveRecording {
             session_id: session_id.to_string(),
             task_id: None,
@@ -481,6 +479,16 @@ impl RecordingRegistry {
             finish_on_eof: Arc::new(AtomicBool::new(false)),
         });
         Ok(())
+    }
+
+    #[cfg(test)]
+    fn active_session_id_for_test(&self) -> Option<String> {
+        self.inner
+            .lock()
+            .unwrap()
+            .active
+            .as_ref()
+            .map(|active| active.session_id.clone())
     }
 
     #[cfg(test)]
@@ -624,6 +632,19 @@ fn join_meter_thread(active: &mut ActiveRecording) {
     }
 }
 
+fn discard_active_recording(active: &mut ActiveRecording) {
+    if let Some(child) = active.child.as_mut() {
+        if let Some(stdin) = child.stdin.as_mut() {
+            let _ = std::io::Write::write_all(stdin, b"q\n");
+            let _ = std::io::Write::flush(stdin);
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    join_meter_thread(active);
+    let _ = std::fs::remove_file(&active.output_path);
+}
+
 fn read_last_stderr_line(stderr: &mut ChildStderr) -> Option<String> {
     let mut buf = String::new();
     if stderr.read_to_string(&mut buf).is_err() {
@@ -655,16 +676,59 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_allows_only_one_active_recording() {
+    fn registry_replaces_active_recording_resource() {
         let registry = RecordingRegistry::new();
 
         let first = registry.open_test_session("session-1");
         assert!(first.is_ok());
 
-        let second = registry
-            .open_test_session("session-2")
-            .expect_err("second session fails");
-        assert_eq!(second.code, "E_RECORD_ALREADY_ACTIVE");
+        registry.open_test_session("session-2").expect("replace");
+
+        assert_eq!(
+            registry.active_session_id_for_test().as_deref(),
+            Some("session-2")
+        );
+    }
+
+    #[test]
+    fn stale_stop_preserves_current_recording() {
+        let registry = RecordingRegistry::new();
+        registry.open_test_session("session-2").expect("open");
+
+        let outcome = registry.stop_recording("session-1").expect("stale stop");
+
+        assert!(matches!(outcome, RecordingStopOutcome::Stale));
+        assert_eq!(
+            registry.active_session_id_for_test().as_deref(),
+            Some("session-2")
+        );
+    }
+
+    #[test]
+    fn stale_abort_preserves_current_recording() {
+        let registry = RecordingRegistry::new();
+        registry.open_test_session("session-2").expect("open");
+
+        registry
+            .abort_recording(Some("session-1".to_string()))
+            .expect("stale abort succeeds");
+
+        assert_eq!(
+            registry.active_session_id_for_test().as_deref(),
+            Some("session-2")
+        );
+    }
+
+    #[test]
+    fn matching_abort_clears_current_recording() {
+        let registry = RecordingRegistry::new();
+        registry.open_test_session("session-1").expect("open");
+
+        registry
+            .abort_recording(Some("session-1".to_string()))
+            .expect("matching abort succeeds");
+
+        assert_eq!(registry.active_session_id_for_test(), None);
     }
 
     #[test]

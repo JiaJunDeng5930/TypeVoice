@@ -140,7 +140,7 @@ pub async fn record_transcribe_stop(
     transcriber: State<'_, TranscriptionService>,
     mailbox: State<'_, UiEventMailbox>,
     req: RecordTranscribeStopRequest,
-) -> Result<TranscriptionResult, String> {
+) -> Result<Option<TranscriptionResult>, String> {
     workflow
         .stop_record_transcribe(&runtime, &audio, &transcriber, &mailbox, &req.session_id)
         .await

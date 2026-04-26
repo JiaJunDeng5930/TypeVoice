@@ -277,6 +277,12 @@ impl UiEventMailbox {
         Self { tx }
     }
 
+    #[cfg(test)]
+    pub fn for_test() -> (Self, mpsc::Receiver<UiEvent>) {
+        let (tx, rx) = mpsc::channel::<UiEvent>();
+        (Self { tx }, rx)
+    }
+
     pub fn send(&self, event: UiEvent) {
         let _ = self.tx.send(event);
     }

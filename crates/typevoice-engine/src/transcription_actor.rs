@@ -93,18 +93,14 @@ impl TranscriptionActor {
                 while let Ok(msg) = rx.recv() {
                     match msg {
                         ActorMessage::Start { task_id, config } => {
-                            if session.is_some() {
-                                send_failed(
-                                    &mailbox,
-                                    &task_id,
-                                    "E_STREAMING_TRANSCRIBE_BUSY",
-                                    "another streaming transcription is already running",
-                                );
-                                continue;
+                            if let Some(mut active) = session.take() {
+                                let stale_task_id = active.task_id.clone();
+                                active.cancel();
+                                started_for_thread.lock().unwrap().remove(&stale_task_id);
                             }
                             match ActorSession::start(task_id.clone(), config, &mailbox) {
                                 Ok(next) => {
-                                    started_for_thread.lock().unwrap().insert(task_id);
+                                    started_for_thread.lock().unwrap().insert(task_id.clone());
                                     session = Some(next);
                                 }
                                 Err(e) => {
@@ -125,21 +121,11 @@ impl TranscriptionActor {
                             is_last,
                         } => {
                             let Some(active) = session.as_mut() else {
-                                send_failed(
-                                    &mailbox,
-                                    &task_id,
-                                    "E_STREAMING_TRANSCRIBE_SESSION_MISSING",
-                                    "streaming transcription session is missing",
-                                );
+                                started_for_thread.lock().unwrap().remove(&task_id);
                                 continue;
                             };
                             if active.task_id != task_id {
-                                send_failed(
-                                    &mailbox,
-                                    &task_id,
-                                    "E_STREAMING_TRANSCRIBE_TASK_MISMATCH",
-                                    "streaming transcription task mismatch",
-                                );
+                                started_for_thread.lock().unwrap().remove(&task_id);
                                 continue;
                             }
                             if let Err(e) = active.handle_chunk(sequence, pcm, is_last) {
@@ -153,21 +139,11 @@ impl TranscriptionActor {
                         }
                         ActorMessage::Finish { task_id } => {
                             let Some(mut active) = session.take() else {
-                                send_failed(
-                                    &mailbox,
-                                    &task_id,
-                                    "E_STREAMING_TRANSCRIBE_SESSION_MISSING",
-                                    "streaming transcription session is missing",
-                                );
+                                started_for_thread.lock().unwrap().remove(&task_id);
                                 continue;
                             };
                             if active.task_id != task_id {
-                                send_failed(
-                                    &mailbox,
-                                    &task_id,
-                                    "E_STREAMING_TRANSCRIBE_TASK_MISMATCH",
-                                    "streaming transcription task mismatch",
-                                );
+                                started_for_thread.lock().unwrap().remove(&task_id);
                                 session = Some(active);
                                 continue;
                             }
@@ -738,6 +714,10 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use crate::ui_events::{UiEvent, UiEventMailbox};
 
     #[test]
     fn chunk_size_matches_pcm_duration() {
@@ -772,5 +752,69 @@ mod tests {
 
         assert!(parsed.is_last);
         assert_eq!(extract_text(&parsed.value).as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn second_start_replaces_existing_streaming_session() {
+        let (mailbox, rx) = UiEventMailbox::for_test();
+        let actor = TranscriptionActor::new(mailbox);
+
+        actor
+            .start_session("task-1", remote_streaming_config())
+            .expect("first start sends");
+        wait_until(|| actor.is_session_started("task-1"));
+
+        actor
+            .start_session("task-2", remote_streaming_config())
+            .expect("second start sends");
+        wait_until(|| actor.is_session_started("task-2") && !actor.is_session_started("task-1"));
+
+        actor
+            .send_audio_chunk("task-1", 1, vec![0, 0], false)
+            .expect("old chunk sends");
+        actor.finish_session("task-1").expect("old finish sends");
+        std::thread::sleep(Duration::from_millis(50));
+
+        assert!(actor.is_session_started("task-2"));
+        assert_no_failed_events(&rx);
+    }
+
+    #[test]
+    fn missing_streaming_session_finish_is_stale() {
+        let (mailbox, rx) = UiEventMailbox::for_test();
+        let actor = TranscriptionActor::new(mailbox);
+
+        actor.finish_session("task-1").expect("finish sends");
+        std::thread::sleep(Duration::from_millis(50));
+
+        assert_no_failed_events(&rx);
+    }
+
+    fn remote_streaming_config() -> StreamingSessionConfig {
+        StreamingSessionConfig {
+            provider: StreamingProviderKind::Remote,
+            chunk_ms: 1,
+            chunk_bytes: 2,
+        }
+    }
+
+    fn wait_until(mut condition: impl FnMut() -> bool) {
+        for _ in 0..100 {
+            if condition() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("condition did not become true");
+    }
+
+    fn assert_no_failed_events(rx: &mpsc::Receiver<UiEvent>) {
+        let events: Vec<UiEvent> = rx.try_iter().collect();
+        assert!(
+            events
+                .iter()
+                .all(|event| event.status.as_deref() != Some("failed")),
+            "unexpected failed event: {events:?}"
+        );
     }
 }

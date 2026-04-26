@@ -1,6 +1,6 @@
 use tauri::{Manager, Runtime};
 
-use crate::audio_capture::RecordingRegistry;
+use crate::audio_capture::{RecordingRegistry, RecordingStopOutcome};
 use crate::insertion;
 use crate::rewrite;
 use crate::task_manager::TaskManager;
@@ -106,7 +106,8 @@ async fn run_stop_record_transcribe(
     recording_session_id: String,
 ) {
     let asset = match audio.stop_recording(&recording_session_id) {
-        Ok(asset) => asset,
+        Ok(RecordingStopOutcome::Completed(asset)) => asset,
+        Ok(RecordingStopOutcome::Stale) => return,
         Err(err) => {
             send_failed(mailbox, &task_id, "Record", &err.code, err.message);
             return;
@@ -159,6 +160,7 @@ async fn run_stop_record_transcribe(
                 serde_json::to_value(&result).unwrap_or_default(),
             ));
         }
+        Err(err) if err.code == "E_TASK_STALE" => {}
         Err(err) if err.code == "E_CANCELLED" => {
             mailbox.send(UiEvent::stage(
                 &task_id,
