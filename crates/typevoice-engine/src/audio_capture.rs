@@ -16,6 +16,8 @@ use crate::transcription_actor::{StreamingSessionConfig, TranscriptionActor};
 use crate::ui_events::{UiEvent, UiEventMailbox};
 use crate::{data_dir, obs, pipeline};
 
+const STREAMING_FIRST_AUDIO_SEQUENCE: u64 = 2;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CaptureError {
     pub code: String,
@@ -526,7 +528,7 @@ fn spawn_meter_thread(
         const WINDOW_SAMPLES: usize = 800;
         let mut read_buf = [0_u8; 4096];
         let mut chunk = Vec::with_capacity(chunk_bytes.unwrap_or(0).max(1));
-        let mut sequence = 1_u64;
+        let mut sequence = STREAMING_FIRST_AUDIO_SEQUENCE;
         let mut carry_low_byte: Option<u8> = None;
         let mut sum_sq = 0.0_f64;
         let mut max_abs = 0_i32;
@@ -743,5 +745,10 @@ mod tests {
         assert_eq!(asset.record_elapsed_ms, 20);
         assert!(registry.take_asset(&asset.asset_id).is_some());
         assert!(registry.take_asset(&asset.asset_id).is_none());
+    }
+
+    #[test]
+    fn streaming_audio_sequence_starts_after_full_client_request() {
+        assert_eq!(STREAMING_FIRST_AUDIO_SEQUENCE, 2);
     }
 }
