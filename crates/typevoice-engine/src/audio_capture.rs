@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     io::Read,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, ChildStderr, ChildStdout, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -17,6 +17,44 @@ use crate::ui_events::{UiEvent, UiEventMailbox};
 use crate::{data_dir, obs, pipeline};
 
 const STREAMING_FIRST_AUDIO_SEQUENCE: u64 = 2;
+
+fn ffmpeg_record_args(input_spec: &str, output_path: &Path) -> Vec<std::ffi::OsString> {
+    [
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "dshow",
+        "-i",
+        input_spec,
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-c:a",
+        "pcm_s16le",
+    ]
+    .into_iter()
+    .map(std::ffi::OsString::from)
+    .chain(std::iter::once(output_path.as_os_str().to_os_string()))
+    .chain(
+        [
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-c:a",
+            "pcm_s16le",
+            "-f",
+            "s16le",
+            "pipe:1",
+        ]
+        .into_iter()
+        .map(std::ffi::OsString::from),
+    )
+    .collect()
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CaptureError {
@@ -176,24 +214,10 @@ impl RecordingRegistry {
             .map_err(|e| CaptureError::new("E_FFMPEG_NOT_FOUND", e.to_string()))?;
 
         let mut child = match std::process::Command::new(&ffmpeg)
-            .args([
-                "-y",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-f",
-                "dshow",
-                "-i",
+            .args(ffmpeg_record_args(
                 input_spec.as_str(),
-                "-ac",
-                "1",
-                "-ar",
-                "16000",
-                "-c:a",
-                "pcm_s16le",
-            ])
-            .arg(output_path.as_os_str())
-            .args(["-f", "s16le", "pipe:1"])
+                output_path.as_path(),
+            ))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -817,5 +841,39 @@ mod tests {
     #[test]
     fn streaming_audio_sequence_starts_after_full_client_request() {
         assert_eq!(STREAMING_FIRST_AUDIO_SEQUENCE, 2);
+    }
+
+    #[test]
+    fn ffmpeg_record_args_transcodes_file_and_stream_outputs() {
+        let args = ffmpeg_record_args(
+            "audio=@device_cm_{33D9A762-90C8-11D0-BD43-00A0C911CE86}\\wave_{52B28A7E-31C7-4BB2-AFB4-1529B7F2C7CD}",
+            Path::new("sample.wav"),
+        )
+        .into_iter()
+        .map(|v| v.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+
+        let output_idx = args
+            .iter()
+            .position(|v| v == "sample.wav")
+            .expect("wav output path exists");
+        assert_eq!(
+            &args[output_idx - 6..output_idx],
+            ["-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le"]
+        );
+        assert_eq!(
+            &args[output_idx + 1..],
+            [
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                "-c:a",
+                "pcm_s16le",
+                "-f",
+                "s16le",
+                "pipe:1"
+            ]
+        );
     }
 }
