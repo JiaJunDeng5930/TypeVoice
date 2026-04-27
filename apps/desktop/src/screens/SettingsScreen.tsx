@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { defaultTauriGateway, type TauriGateway } from "../infra/runtimePorts";
 import type {
-  ApiKeyStatus,
+  ApiCheckResult,
   AudioCaptureDevice,
   PromptTemplate,
   Settings,
@@ -94,6 +94,9 @@ export function SettingsScreen({
   const [templatesJson, setTemplatesJson] = useState("");
 
   const [confirmClear, setConfirmClear] = useState(false);
+  const [llmCheckPending, setLlmCheckPending] = useState(false);
+  const [remoteAsrCheckPending, setRemoteAsrCheckPending] = useState(false);
+  const [doubaoCheckPending, setDoubaoCheckPending] = useState(false);
 
   useEffect(() => {
     if (!settings) return;
@@ -476,14 +479,19 @@ export function SettingsScreen({
   }
 
   async function checkApiKey() {
+    if (llmCheckPending) return;
+    setLlmCheckPending(true);
     try {
-      const st = (await gateway.invoke("llm_api_key_status")) as ApiKeyStatus;
-      pushToast(
-        st.configured ? "KEY OK" : "KEY MISSING",
-        st.configured ? "ok" : "danger",
-      );
+      const result = (await gateway.invoke("check_llm_api_key", {
+        baseUrl: llmBaseUrl,
+        model: llmModel,
+        reasoningEffort: reasoning,
+      })) as ApiCheckResult;
+      pushToast(result.message, result.ok ? "ok" : "danger");
     } catch {
-      pushToast("KEY CHECK FAILED", "danger");
+      pushToast("API key check failed. Try again after checking the settings.", "danger");
+    } finally {
+      setLlmCheckPending(false);
     }
   }
 
@@ -509,14 +517,18 @@ export function SettingsScreen({
   }
 
   async function checkRemoteAsrApiKey() {
+    if (remoteAsrCheckPending) return;
+    setRemoteAsrCheckPending(true);
     try {
-      const st = (await gateway.invoke("remote_asr_api_key_status")) as ApiKeyStatus;
-      pushToast(
-        st.configured ? "REMOTE KEY OK" : "REMOTE KEY MISSING",
-        st.configured ? "ok" : "danger",
-      );
+      const result = (await gateway.invoke("check_remote_asr_api_key", {
+        url: remoteAsrUrl,
+        model: remoteAsrModel,
+      })) as ApiCheckResult;
+      pushToast(result.message, result.ok ? "ok" : "danger");
     } catch {
-      pushToast("REMOTE KEY CHECK FAILED", "danger");
+      pushToast("Remote ASR API check failed. Try again after checking the settings.", "danger");
+    } finally {
+      setRemoteAsrCheckPending(false);
     }
   }
 
@@ -544,14 +556,15 @@ export function SettingsScreen({
   }
 
   async function checkDoubaoAsrCredentials() {
+    if (doubaoCheckPending) return;
+    setDoubaoCheckPending(true);
     try {
-      const st = (await gateway.invoke("doubao_asr_credentials_status")) as ApiKeyStatus;
-      pushToast(
-        st.configured ? "DOUBAO KEY OK" : "DOUBAO KEY MISSING",
-        st.configured ? "ok" : "danger",
-      );
+      const result = (await gateway.invoke("check_doubao_asr_credentials")) as ApiCheckResult;
+      pushToast(result.message, result.ok ? "ok" : "danger");
     } catch {
-      pushToast("DOUBAO KEY CHECK FAILED", "danger");
+      pushToast("Doubao ASR API check failed. Try again after checking the settings.", "danger");
+    } finally {
+      setDoubaoCheckPending(false);
     }
   }
 
@@ -614,7 +627,9 @@ export function SettingsScreen({
                 <PixelButton onClick={clearDoubaoAsrCredentials} tone="danger">
                   CLEAR KEY
                 </PixelButton>
-                <PixelButton onClick={checkDoubaoAsrCredentials}>CHECK KEY</PixelButton>
+                <PixelButton onClick={checkDoubaoAsrCredentials} disabled={doubaoCheckPending}>
+                  {doubaoCheckPending ? "CHECKING" : "CHECK KEY"}
+                </PixelButton>
               </div>
             </>
           ) : (
@@ -653,7 +668,9 @@ export function SettingsScreen({
                 <PixelButton onClick={clearRemoteAsrApiKey} tone="danger">
                   CLEAR KEY
                 </PixelButton>
-                <PixelButton onClick={checkRemoteAsrApiKey}>CHECK KEY</PixelButton>
+                <PixelButton onClick={checkRemoteAsrApiKey} disabled={remoteAsrCheckPending}>
+                  {remoteAsrCheckPending ? "CHECKING" : "CHECK KEY"}
+                </PixelButton>
               </div>
             </>
           )}
@@ -784,7 +801,9 @@ export function SettingsScreen({
             <PixelButton onClick={clearApiKey} tone="danger">
               CLEAR
             </PixelButton>
-            <PixelButton onClick={checkApiKey}>CHECK</PixelButton>
+            <PixelButton onClick={checkApiKey} disabled={llmCheckPending}>
+              {llmCheckPending ? "CHECKING" : "CHECK"}
+            </PixelButton>
           </div>
         </div>
       </div>

@@ -174,6 +174,12 @@ const browserPreviewGateway: TauriGateway = {
       case "set_doubao_asr_credentials":
       case "clear_doubao_asr_credentials":
         return undefined as T;
+      case "check_llm_api_key":
+        return { ok: true, message: "LLM API check passed." } as T;
+      case "check_remote_asr_api_key":
+        return { ok: true, message: "Remote ASR API check passed." } as T;
+      case "check_doubao_asr_credentials":
+        return { ok: true, message: "Doubao ASR API check passed." } as T;
       case "get_settings":
         return previewSettings as T;
       case "update_settings": {

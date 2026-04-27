@@ -135,6 +135,28 @@ pub fn api_key_status() -> ApiKeyStatus {
     }
 }
 
+pub async fn check_api_key_live(cfg: &RemoteAsrConfig) -> Result<(), RemoteAsrError> {
+    let url = cfg.url.trim();
+    if url.is_empty() {
+        return Err(err("E_REMOTE_ASR_CONFIG", "remote_asr_url is required"));
+    }
+
+    let key = load_api_key()?;
+    let client = Client::new();
+    let token = CancellationToken::new();
+    let sample_count = 1_600usize;
+    let pcm = vec![0_u8; sample_count * 2];
+    let wav_bytes = build_wav_bytes(&pcm, 1, 16_000, 16, 2);
+    let slice = SliceRequest {
+        index: 0,
+        wav_bytes,
+    };
+
+    transcribe_one_slice(&client, url, &key, cfg.model.as_deref(), slice, &token)
+        .await
+        .map(|_| ())
+}
+
 fn load_api_key() -> Result<String, RemoteAsrError> {
     if let Ok(v) = std::env::var(API_KEY_ENV) {
         if !v.trim().is_empty() {

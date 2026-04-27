@@ -1,15 +1,11 @@
 use std::{
     collections::HashSet,
-    io::Write,
     sync::{mpsc, Arc, Mutex},
     time::Instant,
 };
 
 use anyhow::{anyhow, Context, Result};
-use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use futures_util::{SinkExt, StreamExt};
-use serde_json::Value;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 use crate::{
     data_dir, doubao_asr, obs,
@@ -20,11 +16,6 @@ use crate::{
 
 const REMOTE_CHUNK_MS: u64 = 60_000;
 const DOUBAO_CHUNK_MS: u64 = 200;
-const PCM_SAMPLE_RATE: u32 = 16_000;
-const PCM_CHANNELS: u16 = 1;
-const PCM_BITS: u16 = 16;
-const DOUBAO_WS_URL: &str = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async";
-const DOUBAO_RESOURCE_ID: &str = "volc.seedasr.sauc.duration";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamingProviderKind {
@@ -432,29 +423,7 @@ fn run_doubao_session(
         .build()
         .context("build doubao runtime failed")?;
     rt.block_on(async move {
-        let mut req = DOUBAO_WS_URL
-            .into_client_request()
-            .context("build doubao websocket request failed")?;
-        req.headers_mut().insert(
-            "X-Api-App-Key",
-            creds
-                .app_key
-                .parse()
-                .context("invalid doubao app key header")?,
-        );
-        req.headers_mut().insert(
-            "X-Api-Access-Key",
-            creds
-                .access_key
-                .parse()
-                .context("invalid doubao access key header")?,
-        );
-        req.headers_mut()
-            .insert("X-Api-Resource-Id", DOUBAO_RESOURCE_ID.parse().unwrap());
-        req.headers_mut().insert(
-            "X-Api-Connect-Id",
-            uuid::Uuid::new_v4().to_string().parse()?,
-        );
+        let req = doubao_asr::build_websocket_request(&creds)?;
 
         let (ws, resp) = tokio_tungstenite::connect_async(req)
             .await
@@ -467,7 +436,7 @@ fn run_doubao_session(
         let (mut write, mut read) = ws.split();
         write
             .send(tokio_tungstenite::tungstenite::Message::Binary(
-                build_full_client_request_frame()?,
+                doubao_asr::build_full_client_request_frame()?,
             ))
             .await
             .context("send doubao init frame failed")?;
@@ -483,7 +452,7 @@ fn run_doubao_session(
                             if !pcm.is_empty() {
                                 write
                                     .send(tokio_tungstenite::tungstenite::Message::Binary(
-                                        build_audio_frame(sequence, &pcm, is_last)?,
+                                        doubao_asr::build_audio_frame(sequence, &pcm, is_last)?,
                                     ))
                                     .await
                                     .context("send doubao audio frame failed")?;
@@ -508,8 +477,8 @@ fn run_doubao_session(
                     if !msg.is_binary() {
                         continue;
                     }
-                    let payload = parse_server_payload(&msg.into_data())?;
-                    if let Some(text) = extract_text(&payload.value) {
+                    let payload = doubao_asr::parse_server_payload(&msg.into_data())?;
+                    if let Some(text) = doubao_asr::extract_text(&payload.value) {
                         let delta = text_delta(&last_text, &text);
                         last_text = text.clone();
                         if !delta.trim().is_empty() {
@@ -556,132 +525,11 @@ async fn recv_doubao_command(
         .ok_or_else(|| anyhow!("doubao command channel closed"))
 }
 
-fn build_full_client_request_frame() -> Result<Vec<u8>> {
-    let payload = serde_json::json!({
-        "user": {"uid": "typevoice"},
-        "audio": {
-            "format": "pcm",
-            "codec": "raw",
-            "rate": PCM_SAMPLE_RATE,
-            "bits": PCM_BITS,
-            "channel": PCM_CHANNELS,
-        },
-        "request": {
-            "model_name": "bigmodel",
-            "enable_itn": true,
-            "enable_punc": true,
-            "show_utterances": true,
-            "result_type": "full",
-        },
-    });
-    let compressed = gzip(serde_json::to_string(&payload)?.as_bytes())?;
-    let mut out = vec![0x11, 0x11, 0x11, 0x00];
-    out.extend_from_slice(&1_i32.to_be_bytes());
-    out.extend_from_slice(&(compressed.len() as u32).to_be_bytes());
-    out.extend_from_slice(&compressed);
-    Ok(out)
-}
-
-fn build_audio_frame(sequence: u64, pcm: &[u8], is_last: bool) -> Result<Vec<u8>> {
-    let compressed = gzip(pcm)?;
-    let seq = if is_last {
-        -(sequence as i32)
-    } else {
-        sequence as i32
-    };
-    let flags = if is_last { 0x03 } else { 0x01 };
-    let mut out = vec![0x11, (0x02 << 4) | flags, 0x01, 0x00];
-    out.extend_from_slice(&seq.to_be_bytes());
-    out.extend_from_slice(&(compressed.len() as u32).to_be_bytes());
-    out.extend_from_slice(&compressed);
-    Ok(out)
-}
-
-struct DoubaoServerPayload {
-    value: Value,
-    is_last: bool,
-}
-
-fn parse_server_payload(frame: &[u8]) -> Result<DoubaoServerPayload> {
-    if frame.len() < 8 {
-        return Err(anyhow!("doubao response frame too short"));
-    }
-    let header_size = ((frame[0] & 0x0f) as usize) * 4;
-    if frame.len() < header_size + 4 {
-        return Err(anyhow!("doubao response frame header invalid"));
-    }
-    let msg_type = frame[1] >> 4;
-    let flags = frame[1] & 0x0f;
-    let compression = frame[2] & 0x0f;
-    let mut offset = header_size;
-    let mut is_last = false;
-    if flags == 0x01 || flags == 0x03 {
-        if frame.len() < offset + 4 {
-            return Err(anyhow!("doubao response sequence missing"));
-        }
-        let sequence = i32::from_be_bytes(frame[offset..offset + 4].try_into().unwrap());
-        is_last = sequence < 0;
-        offset += 4;
-    }
-    if msg_type == 0x0f {
-        if frame.len() < offset + 8 {
-            return Err(anyhow!("doubao error frame invalid"));
-        }
-        let code = u32::from_be_bytes(frame[offset..offset + 4].try_into().unwrap());
-        let size = u32::from_be_bytes(frame[offset + 4..offset + 8].try_into().unwrap()) as usize;
-        let start = offset + 8;
-        let end = start.saturating_add(size).min(frame.len());
-        let message = String::from_utf8_lossy(&frame[start..end]).to_string();
-        return Err(anyhow!("E_DOUBAO_ASR_ERROR_{code}: {message}"));
-    }
-    if frame.len() < offset + 4 {
-        return Err(anyhow!("doubao response payload missing"));
-    }
-    let size = u32::from_be_bytes(frame[offset..offset + 4].try_into().unwrap()) as usize;
-    let start = offset + 4;
-    let end = start.saturating_add(size);
-    if end > frame.len() {
-        return Err(anyhow!("doubao response payload out of bounds"));
-    }
-    let bytes = if compression == 0x01 {
-        gunzip(&frame[start..end])?
-    } else {
-        frame[start..end].to_vec()
-    };
-    Ok(DoubaoServerPayload {
-        value: serde_json::from_slice(&bytes).context("parse doubao response json failed")?,
-        is_last,
-    })
-}
-
-fn extract_text(payload: &Value) -> Option<String> {
-    payload
-        .get("result")
-        .and_then(|v| v.get("text"))
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(ToOwned::to_owned)
-}
-
 fn text_delta(previous: &str, current: &str) -> String {
     if current.starts_with(previous) {
         return current[previous.len()..].to_string();
     }
     current.to_string()
-}
-
-fn gzip(bytes: &[u8]) -> Result<Vec<u8>> {
-    let mut enc = GzEncoder::new(Vec::new(), Compression::default());
-    enc.write_all(bytes)?;
-    Ok(enc.finish()?)
-}
-
-fn gunzip(bytes: &[u8]) -> Result<Vec<u8>> {
-    let mut dec = GzDecoder::new(bytes);
-    let mut out = Vec::new();
-    std::io::copy(&mut dec, &mut out)?;
-    Ok(out)
 }
 
 fn send_failed(mailbox: &UiEventMailbox, task_id: &str, code: &str, message: impl Into<String>) {
@@ -698,8 +546,9 @@ fn send_failed(mailbox: &UiEventMailbox, task_id: &str, code: &str, message: imp
 }
 
 pub fn pcm_bytes_for_ms(ms: u64) -> usize {
-    let bytes_per_second =
-        PCM_SAMPLE_RATE as u64 * u64::from(PCM_CHANNELS) * u64::from(PCM_BITS / 8);
+    let bytes_per_second = doubao_asr::PCM_SAMPLE_RATE as u64
+        * u64::from(doubao_asr::PCM_CHANNELS)
+        * u64::from(doubao_asr::PCM_BITS / 8);
     ((bytes_per_second * ms) / 1000) as usize
 }
 
@@ -721,29 +570,6 @@ mod tests {
     fn text_delta_returns_append_only_suffix() {
         assert_eq!(text_delta("你好", "你好世界"), "世界");
         assert_eq!(text_delta("旧", "新文本"), "新文本");
-    }
-
-    #[test]
-    fn audio_frame_marks_last_sequence_negative() {
-        let frame = build_audio_frame(3, &[1, 2, 3, 4], true).expect("frame");
-        assert_eq!(frame[1] & 0x0f, 0x03);
-        let seq = i32::from_be_bytes(frame[4..8].try_into().unwrap());
-        assert_eq!(seq, -3);
-    }
-
-    #[test]
-    fn server_payload_marks_negative_sequence_as_last() {
-        let compressed =
-            gzip(br#"{"result":{"text":"hello"}}"#).expect("response payload compresses");
-        let mut frame = vec![0x11, 0x13, 0x01, 0x00];
-        frame.extend_from_slice(&(-1_i32).to_be_bytes());
-        frame.extend_from_slice(&(compressed.len() as u32).to_be_bytes());
-        frame.extend_from_slice(&compressed);
-
-        let parsed = parse_server_payload(&frame).expect("response parses");
-
-        assert!(parsed.is_last);
-        assert_eq!(extract_text(&parsed.value).as_deref(), Some("hello"));
     }
 
     #[test]

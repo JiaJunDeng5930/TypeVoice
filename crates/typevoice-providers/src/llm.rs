@@ -153,6 +153,24 @@ pub fn load_config(data_dir: &std::path::Path) -> Result<LlmConfig> {
     })
 }
 
+pub fn config_from_values(
+    base_url: &str,
+    model: &str,
+    reasoning_effort: Option<&str>,
+) -> Result<LlmConfig> {
+    let model = model.trim();
+    if model.is_empty() {
+        return Err(anyhow!(
+            "E_LLM_CONFIG_MODEL_MISSING: llm_model (or TYPEVOICE_LLM_MODEL) is required"
+        ));
+    }
+    Ok(LlmConfig {
+        base_url: normalize_base_url(base_url)?,
+        model: model.to_string(),
+        reasoning_effort: reasoning_effort.and_then(normalize_reasoning_effort),
+    })
+}
+
 pub fn load_api_key() -> Result<String> {
     if let Ok(k) = std::env::var("TYPEVOICE_LLM_API_KEY") {
         if !k.trim().is_empty() {
@@ -234,6 +252,64 @@ pub fn api_key_status() -> ApiKeyStatus {
         source: "keyring".to_string(),
         reason: None,
     }
+}
+
+pub async fn check_api_key_live(cfg: &LlmConfig) -> Result<()> {
+    let key = load_api_key()?;
+    let client = Client::new();
+    let url = format!("{}/chat/completions", cfg.base_url);
+    let req = ChatReq {
+        model: cfg.model.clone(),
+        messages: vec![
+            Message {
+                role: "system".to_string(),
+                content: MessageContent::Text(
+                    "You are checking whether this API key can call the configured model."
+                        .to_string(),
+                ),
+            },
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("Reply with OK.".to_string()),
+            },
+        ],
+        temperature: 0.0,
+        reasoning_effort: cfg.reasoning_effort.clone(),
+    };
+
+    let resp = client
+        .post(url.clone())
+        .bearer_auth(key)
+        .json(&req)
+        .send()
+        .await
+        .map_err(|e| anyhow!("E_LLM_CHECK_HTTP_SEND: request failed: {e}"))?;
+
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        let msg = if body.len() > 1024 {
+            format!("{}...(truncated)", &body[..1024])
+        } else {
+            body
+        };
+        return Err(anyhow!(
+            "E_LLM_CHECK_HTTP_STATUS_{}: {msg}",
+            status.as_u16()
+        ));
+    }
+
+    let r: ChatResp = serde_json::from_str(&body)
+        .map_err(|e| anyhow!("E_LLM_CHECK_PARSE: response parse failed: {e}"))?;
+    let content = r
+        .choices
+        .get(0)
+        .map(|c| c.message.content.trim())
+        .unwrap_or_default();
+    if content.is_empty() {
+        return Err(anyhow!("E_LLM_CHECK_EMPTY: model returned empty content"));
+    }
+    Ok(())
 }
 
 pub async fn rewrite(

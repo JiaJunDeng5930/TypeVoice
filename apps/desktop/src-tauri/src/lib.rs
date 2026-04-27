@@ -59,6 +59,12 @@ struct UiLogEventRequest {
     extra: Option<serde_json::Value>,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+struct ApiCheckResult {
+    ok: bool,
+    message: String,
+}
+
 fn sanitize_ui_text(raw: Option<String>, max_chars: usize) -> Option<String> {
     let input = raw?;
     let compact = input.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -428,6 +434,44 @@ fn llm_api_key_status() -> Result<ApiKeyStatus, String> {
 }
 
 #[tauri::command]
+async fn check_llm_api_key(
+    base_url: String,
+    model: String,
+    reasoning_effort: Option<String>,
+) -> Result<ApiCheckResult, String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(
+        &dir,
+        None,
+        "CMD.check_llm_api_key",
+        Some(serde_json::json!({
+            "has_base_url": !base_url.trim().is_empty(),
+            "has_model": !model.trim().is_empty(),
+            "reasoning_effort": reasoning_effort.as_deref().unwrap_or(""),
+        })),
+    );
+
+    let cfg = match llm::config_from_values(&base_url, &model, reasoning_effort.as_deref()) {
+        Ok(v) => v,
+        Err(e) => {
+            span.err_anyhow("config", "E_CMD_CHECK_LLM_KEY", &e, None);
+            return Ok(api_check_failure(llm_check_error_message(&e)));
+        }
+    };
+
+    match llm::check_api_key_live(&cfg).await {
+        Ok(()) => {
+            span.ok(Some(serde_json::json!({"provider": "llm"})));
+            Ok(api_check_success("LLM API check passed."))
+        }
+        Err(e) => {
+            span.err_anyhow("api", "E_CMD_CHECK_LLM_KEY", &e, None);
+            Ok(api_check_failure(llm_check_error_message(&e)))
+        }
+    }
+}
+
+#[tauri::command]
 fn set_remote_asr_api_key(api_key: &str) -> Result<(), String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let span = cmd_span(
@@ -473,6 +517,46 @@ fn remote_asr_api_key_status() -> Result<ApiKeyStatus, String> {
         serde_json::json!({"configured": st.configured, "source": st.source, "reason": st.reason}),
     ));
     Ok(st)
+}
+
+#[tauri::command]
+async fn check_remote_asr_api_key(
+    url: String,
+    model: Option<String>,
+) -> Result<ApiCheckResult, String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(
+        &dir,
+        None,
+        "CMD.check_remote_asr_api_key",
+        Some(serde_json::json!({
+            "has_url": !url.trim().is_empty(),
+            "has_model": model.as_deref().map(|v| !v.trim().is_empty()).unwrap_or(false),
+        })),
+    );
+    let cfg = remote_asr::RemoteAsrConfig {
+        url,
+        model: model.and_then(|v| {
+            let t = v.trim().to_string();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
+        }),
+        concurrency: 1,
+    };
+
+    match remote_asr::check_api_key_live(&cfg).await {
+        Ok(()) => {
+            span.ok(Some(serde_json::json!({"provider": "remote_asr"})));
+            Ok(api_check_success("Remote ASR API check passed."))
+        }
+        Err(e) => {
+            span.err("api", &e.code, &e.message, None);
+            Ok(api_check_failure(remote_asr_check_error_message(&e)))
+        }
+    }
 }
 
 #[tauri::command]
@@ -524,6 +608,110 @@ fn doubao_asr_credentials_status() -> Result<ApiKeyStatus, String> {
         serde_json::json!({"configured": st.configured, "source": st.source, "reason": st.reason}),
     ));
     Ok(st)
+}
+
+#[tauri::command]
+async fn check_doubao_asr_credentials() -> Result<ApiCheckResult, String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(&dir, None, "CMD.check_doubao_asr_credentials", None);
+    match doubao_asr::check_credentials_live().await {
+        Ok(()) => {
+            span.ok(Some(serde_json::json!({"provider": "doubao_asr"})));
+            Ok(api_check_success("Doubao ASR API check passed."))
+        }
+        Err(e) => {
+            span.err_anyhow("api", "E_CMD_CHECK_DOUBAO_ASR_CREDENTIALS", &e, None);
+            Ok(api_check_failure(doubao_check_error_message(&e)))
+        }
+    }
+}
+
+fn api_check_success(message: &str) -> ApiCheckResult {
+    ApiCheckResult {
+        ok: true,
+        message: message.to_string(),
+    }
+}
+
+fn api_check_failure(message: String) -> ApiCheckResult {
+    ApiCheckResult { ok: false, message }
+}
+
+fn llm_check_error_message(e: &anyhow::Error) -> String {
+    let raw = e.to_string();
+    if raw.contains("E_LLM_CONFIG_BASE_URL_MISSING") {
+        return "Enter the LLM API base URL.".to_string();
+    }
+    if raw.contains("E_LLM_CONFIG_MODEL_MISSING") {
+        return "Enter the LLM model.".to_string();
+    }
+    if raw.contains("keyring") || raw.contains("empty api key") {
+        return "Save the LLM API key or set TYPEVOICE_LLM_API_KEY.".to_string();
+    }
+    if raw.contains("E_LLM_CHECK_HTTP_STATUS_401") || raw.contains("E_LLM_CHECK_HTTP_STATUS_403") {
+        return "The LLM API rejected the key or account permission.".to_string();
+    }
+    if raw.contains("E_LLM_CHECK_HTTP_STATUS_404") {
+        return "The LLM API base URL or model was not found.".to_string();
+    }
+    if raw.contains("E_LLM_CHECK_HTTP_STATUS_429") {
+        return "The LLM API rate limit has been reached.".to_string();
+    }
+    if raw.contains("E_LLM_CHECK_HTTP_SEND") {
+        return "Cannot reach the LLM API. Check the base URL and network.".to_string();
+    }
+    if raw.contains("E_LLM_CHECK_PARSE") || raw.contains("E_LLM_CHECK_EMPTY") {
+        return "The LLM API responded in an unexpected format.".to_string();
+    }
+    "LLM API check failed. Check the base URL, model, key, and account permissions.".to_string()
+}
+
+fn remote_asr_check_error_message(e: &remote_asr::RemoteAsrError) -> String {
+    match e.code.as_str() {
+        "E_REMOTE_ASR_CONFIG" => "Enter the remote ASR URL.".to_string(),
+        "E_REMOTE_ASR_API_KEY_MISSING" => {
+            "Save the remote ASR API key or set TYPEVOICE_REMOTE_ASR_API_KEY.".to_string()
+        }
+        "E_REMOTE_ASR_HTTP_STATUS_401" | "E_REMOTE_ASR_HTTP_STATUS_403" => {
+            "The remote ASR API rejected the key or account permission.".to_string()
+        }
+        "E_REMOTE_ASR_HTTP_STATUS_404" => "The remote ASR API URL was not found.".to_string(),
+        "E_REMOTE_ASR_HTTP_STATUS_429" => {
+            "The remote ASR API rate limit has been reached.".to_string()
+        }
+        "E_REMOTE_ASR_HTTP_SEND" => {
+            "Cannot reach the remote ASR API. Check the URL and network.".to_string()
+        }
+        "E_REMOTE_ASR_PARSE" => "The remote ASR API responded in an unexpected format.".to_string(),
+        code if code.starts_with("E_REMOTE_ASR_HTTP_STATUS_5") => {
+            "The remote ASR API service returned a server error.".to_string()
+        }
+        _ => {
+            "Remote ASR API check failed. Check the URL, key, and account permissions.".to_string()
+        }
+    }
+}
+
+fn doubao_check_error_message(e: &anyhow::Error) -> String {
+    let raw = e.to_string();
+    if raw.contains("E_DOUBAO_ASR_CREDENTIALS_MISSING")
+        || raw.contains("E_DOUBAO_ASR_APP_KEY_MISSING")
+        || raw.contains("E_DOUBAO_ASR_ACCESS_KEY_MISSING")
+        || raw.contains("keyring")
+    {
+        return "Save the Doubao ASR App Key and Access Key or set the Doubao ASR environment variables.".to_string();
+    }
+    if raw.contains("E_DOUBAO_ASR_CHECK_TIMEOUT") {
+        return "Doubao ASR did not respond before the check timed out.".to_string();
+    }
+    if raw.contains("E_DOUBAO_ASR_ERROR_") {
+        return "Doubao ASR rejected the credentials or account permission.".to_string();
+    }
+    if raw.contains("E_DOUBAO_ASR_CHECK_CONNECT") {
+        return "Cannot reach Doubao ASR. Check the network connection.".to_string();
+    }
+    "Doubao ASR API check failed. Check the App Key, Access Key, and account permissions."
+        .to_string()
 }
 
 fn history_db_path() -> Result<std::path::PathBuf, String> {
@@ -915,12 +1103,15 @@ pub fn run() {
             set_llm_api_key,
             clear_llm_api_key,
             llm_api_key_status,
+            check_llm_api_key,
             set_remote_asr_api_key,
             clear_remote_asr_api_key,
             remote_asr_api_key_status,
+            check_remote_asr_api_key,
             set_doubao_asr_credentials,
             clear_doubao_asr_credentials,
             doubao_asr_credentials_status,
+            check_doubao_asr_credentials,
             history_append,
             history_list,
             history_clear,

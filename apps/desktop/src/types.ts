@@ -188,6 +188,11 @@ export type ApiKeyStatus = {
   reason?: string | null;
 };
 
+export type ApiCheckResult = {
+  ok: boolean;
+  message: string;
+};
+
 export type RuntimeToolchainStatus = {
   ready: boolean;
   code?: string | null;
