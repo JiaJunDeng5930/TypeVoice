@@ -49,7 +49,7 @@ let previewSettings: Record<string, unknown> = {
 };
 
 const previewWorkflow = {
-  phase: "recording",
+  phase: "idle",
   taskId: null,
   recordingSessionId: null,
   lastTranscriptId: "preview-transcript",
@@ -58,7 +58,7 @@ const previewWorkflow = {
   lastCreatedAtMs: previewNow - 8 * 60 * 1000,
   diagnosticCode: null,
   diagnosticLine: "",
-  primaryLabel: "STOP",
+  primaryLabel: "START",
   primaryDisabled: false,
   canRewrite: false,
   canInsert: false,

@@ -4,7 +4,7 @@ import {
   type TauriGateway,
 } from "../infra/runtimePorts";
 import { createBackendClient, type BackendClient } from "../infra/backendClient";
-import { buildDiagnostic } from "../domain/diagnostic";
+import { buildDiagnostic, userMessageFromDiagnosticLine } from "../domain/diagnostic";
 import type {
   RuntimeToolchainStatus,
   Settings,
@@ -65,7 +65,7 @@ export function MainScreen({
     (async () => {
       try {
         const runtime = await client.runtimeToolchainStatus() as RuntimeToolchainStatus;
-        if (!runtime.ready) pushToast("TOOLCHAIN NOT READY", "danger");
+        if (!runtime.ready) pushToast("Local audio tools need repair", "danger");
       } catch {
       }
     })();
@@ -120,10 +120,10 @@ export function MainScreen({
             }
           }
           const title = ev.stage === "Rewrite"
-            ? "REWRITE FAILED"
+            ? "Text improvement failed"
             : ev.stage === "Insert"
-              ? "INSERT FAILED"
-              : "TRANSCRIBE FAILED";
+              ? "Text could not be pasted"
+              : "Speech recognition failed";
           pushToast(title, "danger");
           return;
         }
@@ -134,7 +134,7 @@ export function MainScreen({
         if (ev.kind === "transcription.completed") {
           const completed = transcriptionCompletedPayload(ev.payload);
           if (!completed) {
-            pushToast("TRANSCRIBE FAILED", "danger");
+            pushToast("Speech recognition failed", "danger");
             return;
           }
           try {
@@ -145,7 +145,7 @@ export function MainScreen({
             });
             setWorkflow(next);
             setLiveTranscript("");
-            pushToast("TRANSCRIBED", "ok");
+            pushToast("Text ready", "ok");
             onHistoryChanged();
           } catch (err) {
             const diag = buildDiagnostic(err, "WORKFLOW EVENT FAILED");
@@ -154,16 +154,16 @@ export function MainScreen({
           return;
         }
         if (ev.kind === "rewrite.completed") {
-          pushToast("REWRITTEN", "ok");
+          pushToast("Text improved", "ok");
           onHistoryChanged();
           return;
         }
         if (ev.kind === "insertion.completed") {
           const inserted = insertionPayload(ev.payload);
           if (inserted?.autoPasteAttempted && !inserted.autoPasteOk) {
-            pushToast(`AUTO PASTE FAILED: ${inserted.errorCode || "E_EXPORT_PASTE_FAILED"}`, "danger");
+            pushToast("Text could not be pasted", "danger");
           } else {
-            pushToast(inserted?.autoPasteAttempted ? "COPIED + PASTED" : "COPIED", "ok");
+            pushToast(inserted?.autoPasteAttempted ? "Text pasted" : "Text copied", "ok");
           }
         }
       });
@@ -189,7 +189,7 @@ export function MainScreen({
       const next = await client.workflowCommand({ command });
       setWorkflow(next);
       if (command === "copyLast") {
-        pushToast("COPIED", "ok");
+        pushToast("Text copied", "ok");
       }
     } catch (err) {
       const diag = buildDiagnostic(err, commandErrorTitle(command));
@@ -205,9 +205,10 @@ export function MainScreen({
   }
 
   const phase = String(workflow.phase || "idle").toLowerCase();
-  const hint = workflow.primaryLabel || "START";
+  const hint = primaryActionLabel(workflow.primaryLabel || "START");
   const streamText = phase === "recording" || phase === "transcribing" ? liveTranscript : "";
-  const statusLabel = phase === "idle" ? "READY" : hint;
+  const statusLabel = phase === "idle" ? "Ready" : hint;
+  const diagnosticMessage = userMessageFromDiagnosticLine(workflow.diagnosticLine);
 
   return (
     <div className="pageSurface mainSurface">
@@ -240,7 +241,7 @@ export function MainScreen({
       <div className="resultSheet">
         <div className="resultHeader">
           <div className="sectionTitle">CURRENT TRANSCRIPT</div>
-          <span className="resultStatus">READY</span>
+          <span className="resultStatus">Ready</span>
         </div>
 
         <div className="streamCanvas" aria-live="polite">
@@ -253,7 +254,7 @@ export function MainScreen({
           className={`mainDiag ${workflow.diagnosticLine ? "isVisible" : ""}`}
           aria-hidden={!workflow.diagnosticLine}
         >
-          {workflow.diagnosticLine || "NO ERRORS"}
+          {diagnosticMessage || "Ready"}
         </div>
 
         <div className="mainActions">
@@ -263,7 +264,7 @@ export function MainScreen({
             onClick={() => void sendWorkflowCommand("rewriteLast")}
             disabled={true}
           >
-            REWRITE
+            Improve
           </button>
           <button
             type="button"
@@ -271,7 +272,7 @@ export function MainScreen({
             onClick={() => void sendWorkflowCommand("insertLast")}
             disabled={true}
           >
-            INSERT
+            Paste
           </button>
         </div>
       </div>
@@ -354,9 +355,21 @@ function optionalNumber(value: unknown): number | null {
 }
 
 function commandErrorTitle(command: WorkflowCommand): string {
-  if (command === "rewriteLast") return "REWRITE FAILED";
-  if (command === "insertLast") return "INSERT FAILED";
-  if (command === "copyLast") return "COPY FAILED";
-  if (command === "cancel") return "CANCEL FAILED";
-  return "WORKFLOW COMMAND FAILED";
+  if (command === "rewriteLast") return "Text improvement failed";
+  if (command === "insertLast") return "Text could not be pasted";
+  if (command === "copyLast") return "Copy failed";
+  if (command === "cancel") return "Cancel failed";
+  return "Recording action failed";
+}
+
+function primaryActionLabel(raw: string): string {
+  const label = raw.trim().toUpperCase();
+  if (label === "START") return "Start";
+  if (label === "STOP") return "Stop";
+  if (label === "TRANSCRIBING") return "Creating text";
+  if (label === "TRANSCRIBED") return "Text ready";
+  if (label === "REWRITING") return "Improving text";
+  if (label === "REWRITTEN") return "Text improved";
+  if (label === "INSERTING") return "Pasting text";
+  return raw.trim() || "Start";
 }

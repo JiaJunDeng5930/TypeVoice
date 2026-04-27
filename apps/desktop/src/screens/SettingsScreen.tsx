@@ -128,7 +128,7 @@ export function SettingsScreen({
     setReasoning(settings.llm_reasoning_effort ?? "default");
 
     if (typeof settings.rewrite_enabled !== "boolean") {
-      pushToast("SETTINGS INVALID: rewrite_enabled missing", "danger");
+      pushToast("Settings need attention", "danger");
       return;
     }
     setRewriteEnabled(settings.rewrite_enabled);
@@ -150,11 +150,11 @@ export function SettingsScreen({
     setRecordFixedFriendlyName(settings.record_fixed_friendly_name ?? "");
 
     if (typeof settings.hotkeys_enabled !== "boolean") {
-      pushToast("SETTINGS INVALID: hotkeys_enabled missing", "danger");
+      pushToast("Settings need attention", "danger");
       return;
     }
     if (typeof settings.hotkeys_show_overlay !== "boolean") {
-      pushToast("SETTINGS INVALID: hotkeys_show_overlay missing", "danger");
+      pushToast("Settings need attention", "danger");
       return;
     }
     setHotkeysEnabled(settings.hotkeys_enabled);
@@ -814,38 +814,38 @@ export function SettingsScreen({
       </div>
 
       <div className="card">
-        <div className="sectionTitle">REWRITE CONTEXT SWITCH</div>
+        <div className="sectionTitle">WHAT IMPROVEMENT CAN USE</div>
         <div className="stack">
           <div className="row" style={{ justifyContent: "space-between" }}>
-            <div className="muted">Context 历史片段</div>
+            <div className="muted">Recent dictated text</div>
             <PixelToggle
               value={contextIncludeHistory}
               onChange={setContextIncludeHistory}
-              label="history"
+              label="recent dictated text"
             />
           </div>
           <div className="row" style={{ justifyContent: "space-between" }}>
-            <div className="muted">Context 剪贴板</div>
+            <div className="muted">Clipboard text</div>
             <PixelToggle
               value={contextIncludeClipboard}
               onChange={setContextIncludeClipboard}
-              label="clipboard"
+              label="clipboard text"
             />
           </div>
           <div className="row" style={{ justifyContent: "space-between" }}>
-            <div className="muted">Window 元信息</div>
+            <div className="muted">Current app name and title</div>
             <PixelToggle
               value={contextIncludePrevWindowMeta}
               onChange={setContextIncludePrevWindowMeta}
-              label="prev window meta"
+              label="current app name and title"
             />
           </div>
           <div className="row" style={{ justifyContent: "space-between" }}>
-            <div className="muted">Window 截图</div>
+            <div className="muted">Current screen image</div>
             <PixelToggle
               value={contextIncludePrevWindowScreenshot}
               onChange={setContextIncludePrevWindowScreenshot}
-              label="prev window screenshot"
+              label="current screen image"
             />
           </div>
           <div className="row" style={{ justifyContent: "flex-end" }}>

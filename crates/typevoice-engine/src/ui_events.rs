@@ -295,7 +295,7 @@ fn overlay_state_from_event(event: &UiEvent) -> Option<OverlayState> {
     if !overlay_enabled() {
         return Some(OverlayState {
             visible: false,
-            status: "IDLE".to_string(),
+            status: "Ready".to_string(),
             detail: None,
             ts_ms: now_ms(),
         });
@@ -311,13 +311,13 @@ fn overlay_state_from_event(event: &UiEvent) -> Option<OverlayState> {
         .filter(|v| !v.trim().is_empty())
         .map(ToOwned::to_owned);
     let (visible, status, detail) = match phase {
-        "recording" => (true, "REC".to_string(), None),
-        "transcribing" => (true, "TRANSCRIBING".to_string(), None),
-        "transcribed" => (true, "TRANSCRIBED".to_string(), None),
-        "rewriting" => (true, "REWRITING".to_string(), None),
-        "rewritten" => (true, "REWRITTEN".to_string(), None),
-        "inserting" => (true, "INSERTING".to_string(), None),
-        _ => (false, "IDLE".to_string(), diagnostic_code),
+        "recording" => (true, "Listening".to_string(), None),
+        "transcribing" => (true, "Creating text".to_string(), None),
+        "transcribed" => (true, "Text ready".to_string(), None),
+        "rewriting" => (true, "Improving text".to_string(), None),
+        "rewritten" => (true, "Text improved".to_string(), None),
+        "inserting" => (true, "Pasting text".to_string(), None),
+        _ => (false, "Ready".to_string(), diagnostic_code),
     };
     Some(OverlayState {
         visible,

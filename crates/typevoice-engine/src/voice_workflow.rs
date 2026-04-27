@@ -1118,7 +1118,7 @@ impl VoiceWorkflow {
         let diagnostic_line = snapshot
             .last_error
             .as_ref()
-            .map(|err| format!("{}: {}", err.code, err.message))
+            .map(user_facing_error_line)
             .unwrap_or_default();
         let active = matches!(
             phase,
@@ -1789,6 +1789,67 @@ fn primary_label(phase: WorkflowPhase) -> &'static str {
     }
 }
 
+fn user_facing_error_line(err: &WorkflowError) -> String {
+    let title = user_facing_error_title(&err.code);
+    let action = user_facing_error_action(&err.code);
+    format!("{title}. {action}")
+}
+
+fn user_facing_error_title(code: &str) -> &'static str {
+    if code.starts_with("E_TOOLCHAIN_") {
+        return "Local audio tools need repair";
+    }
+    if code.starts_with("E_RECORD_")
+        || code.starts_with("E_STREAMING_TRANSCRIBE_")
+        || code.starts_with("E_DOUBAO_ASR_")
+        || code.starts_with("E_ASR_")
+    {
+        return "Speech recognition could not start";
+    }
+    if code.starts_with("E_REWRITE_") || code.starts_with("HTTP_") {
+        return "Text improvement failed";
+    }
+    if code.starts_with("E_INSERT_")
+        || code.starts_with("E_EXPORT_")
+        || code.starts_with("E_OVERLAY_")
+    {
+        return "Text could not be pasted";
+    }
+    if code == "E_TASK_ALREADY_ACTIVE" || code == "E_RECORD_ALREADY_ACTIVE" {
+        return "An action is already running";
+    }
+    if code.starts_with("E_SETTINGS_") {
+        return "Settings need attention";
+    }
+    "Something went wrong"
+}
+
+fn user_facing_error_action(code: &str) -> &'static str {
+    if code.starts_with("E_TOOLCHAIN_") {
+        return "Repair the local audio tools, then restart the app.";
+    }
+    if code.starts_with("E_RECORD_")
+        || code.starts_with("E_STREAMING_TRANSCRIBE_")
+        || code.starts_with("E_DOUBAO_ASR_")
+        || code.starts_with("E_ASR_")
+    {
+        return "Check the selected microphone and speech recognition settings.";
+    }
+    if code.starts_with("E_REWRITE_") || code.starts_with("HTTP_") {
+        return "Check text improvement settings and try again.";
+    }
+    if code.starts_with("E_INSERT_")
+        || code.starts_with("E_EXPORT_")
+        || code.starts_with("E_OVERLAY_")
+    {
+        return "Select the target app and try again.";
+    }
+    if code == "E_TASK_ALREADY_ACTIVE" || code == "E_RECORD_ALREADY_ACTIVE" {
+        return "Wait for the current action to finish.";
+    }
+    "Check settings and try again."
+}
+
 fn primary_phase_error(phase: WorkflowPhase) -> WorkflowError {
     match phase {
         WorkflowPhase::Transcribing => WorkflowError::new(
@@ -1931,6 +1992,19 @@ mod tests {
         assert!(!view.primary_disabled);
         assert!(!view.can_insert);
         assert!(!view.can_copy);
+    }
+
+    #[test]
+    fn diagnostic_line_uses_user_facing_text() {
+        let err = WorkflowError::new("E_ASR_FAILED", "provider returned E_ASR_FAILED");
+
+        let line = user_facing_error_line(&err);
+
+        assert_eq!(
+            line,
+            "Speech recognition could not start. Check the selected microphone and speech recognition settings.",
+        );
+        assert!(!line.contains("E_ASR_FAILED"));
     }
 
     #[test]

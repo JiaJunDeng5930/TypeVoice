@@ -6,6 +6,7 @@ import { PixelToastHost, type ToastItem, type ToastTone } from "./ui/PixelToast"
 import { MainScreen } from "./screens/MainScreen";
 import { HistoryScreen } from "./screens/HistoryScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
+import { userMessageFromError } from "./domain/diagnostic";
 
 let toastSeq = 0;
 
@@ -55,8 +56,7 @@ export default function App() {
       setSettingsError(null);
     } catch (err) {
       setSettings(null);
-      const msg = typeof err === "string" ? err : String(err);
-      setSettingsError(msg);
+      setSettingsError(userMessageFromError(err, "Settings need attention"));
     }
   }, []);
 
@@ -110,7 +110,7 @@ export default function App() {
               pushToast={pushToast}
               onHistoryCleared={onHistoryChanged}
             />
-            {settingsError ? <div className="muted">SETTINGS ERROR: {settingsError}</div> : null}
+            {settingsError ? <div className="muted">{settingsError}</div> : null}
           </div>
         </main>
       </div>

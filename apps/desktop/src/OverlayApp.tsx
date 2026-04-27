@@ -8,6 +8,7 @@ import {
   textFromTranscriptionCompleted,
   textFromTranscriptionPartial,
 } from "./domain/overlaySession";
+import { userMessageFromDiagnosticLine, userMessageFromError } from "./domain/diagnostic";
 import type { WorkflowView } from "./types";
 
 type OverlayState = {
@@ -35,14 +36,27 @@ function canAltToggle(phase: string): boolean {
 }
 
 function statusFromPhase(phase: string): string {
-  if (phase === "recording") return "REC";
-  if (phase === "transcribing") return "TRANSCRIBING";
-  if (phase === "rewriting") return "REWRITING";
-  if (phase === "rewritten") return "REWRITTEN";
-  if (phase === "inserting") return "INSERTING";
-  if (phase === "transcribed") return "TRANSCRIBED";
-  if (phase === "failed") return "ERROR";
-  return "READY";
+  if (phase === "recording") return "Listening";
+  if (phase === "transcribing") return "Creating text";
+  if (phase === "rewriting") return "Improving text";
+  if (phase === "rewritten") return "Text improved";
+  if (phase === "inserting") return "Pasting text";
+  if (phase === "transcribed") return "Text ready";
+  if (phase === "failed") return "Action needed";
+  return "Ready";
+}
+
+function statusFromRaw(raw: string): string {
+  const value = raw.trim().toLowerCase();
+  if (value === "rec" || value === "recording") return "Listening";
+  if (value === "transcribing") return "Creating text";
+  if (value === "rewriting") return "Improving text";
+  if (value === "rewritten") return "Text improved";
+  if (value === "inserting") return "Pasting text";
+  if (value === "transcribed") return "Text ready";
+  if (value === "error" || value === "failed") return "Action needed";
+  if (value === "idle" || value === "ready") return "Ready";
+  return raw.trim() || "Ready";
 }
 
 function workflowViewFromPayload(payload: unknown): WorkflowView | null {
@@ -73,7 +87,7 @@ function optionalString(value: unknown): string | null {
 export default function OverlayApp() {
   const client = useMemo(() => createBackendClient(defaultTauriGateway), []);
   const [visible, setVisible] = useState(false);
-  const [status, setStatus] = useState("READY");
+  const [status, setStatus] = useState("Ready");
   const [draftText, setDraftText] = useState("");
   const [liveText, setLiveText] = useState("");
   const [detail, setDetail] = useState<string | null>(null);
@@ -130,11 +144,11 @@ export default function OverlayApp() {
 
   const hideOverlay = useCallback(async () => {
     setVisible(false);
-    setStatus("READY");
+    setStatus("Ready");
     setDetail(null);
     await client.overlaySetState({
       visible: false,
-      status: "READY",
+      status: "Ready",
       detail: null,
       ts_ms: Date.now(),
     });
@@ -150,7 +164,7 @@ export default function OverlayApp() {
     const phase = phaseRef.current;
     if (!canAltToggle(phase) || busyRef.current) return;
 
-    showOverlay(phase === "recording" ? "TRANSCRIBING" : "REC");
+    showOverlay(phase === "recording" ? "Creating text" : "Listening");
     if (phase !== "recording") {
       setLiveText("");
     }
@@ -160,8 +174,8 @@ export default function OverlayApp() {
       setWorkflow(next);
       setStatus(statusFromPhase(String(next.phase || "idle").toLowerCase()));
     } catch (err) {
-      setStatus("ERROR");
-      setDetail(String(err));
+      setStatus("Action needed");
+      setDetail(userMessageFromError(err, "Recording action failed"));
     }
   }, [client, showOverlay]);
 
@@ -171,7 +185,7 @@ export default function OverlayApp() {
     if (!text || isActivePhase(phaseRef.current)) return;
 
     setBusyAction("rewrite");
-    setStatus("REWRITING");
+    setStatus("Improving text");
     setDetail(null);
     try {
       const result = await client.workflowRewrite({
@@ -179,10 +193,10 @@ export default function OverlayApp() {
       });
       setDraftText(result.finalText);
       setLiveText("");
-      setStatus("REWRITTEN");
+      setStatus("Text improved");
     } catch (err) {
-      setStatus("ERROR");
-      setDetail(String(err));
+      setStatus("Action needed");
+      setDetail(userMessageFromError(err, "Text improvement failed"));
     } finally {
       setBusyAction(null);
     }
@@ -194,12 +208,12 @@ export default function OverlayApp() {
     if (!text) return;
 
     setBusyAction("insert");
-    setStatus("INSERTING");
+    setStatus("Pasting text");
     setDetail(null);
     setVisible(false);
     await client.overlaySetState({
       visible: false,
-      status: "INSERTING",
+      status: "Pasting text",
       detail: null,
       ts_ms: Date.now(),
     });
@@ -213,8 +227,8 @@ export default function OverlayApp() {
       await hideOverlay();
     } catch (err) {
       setVisible(true);
-      setStatus("ERROR");
-      setDetail(String(err));
+      setStatus("Action needed");
+      setDetail(userMessageFromError(err, "Text could not be pasted"));
     } finally {
       setBusyAction(null);
     }
@@ -248,8 +262,8 @@ export default function OverlayApp() {
         if (!state.visible && !draftRef.current.trim() && !liveRef.current.trim()) {
           setVisible(false);
         }
-        if (state.status) setStatus(String(state.status).toUpperCase());
-        setDetail(state.detail || null);
+        if (state.status) setStatus(statusFromRaw(String(state.status)));
+        setDetail(state.detail ? userMessageFromDiagnosticLine(state.detail) : null);
       }));
 
       track(await client.listenUiEvent((event) => {
@@ -271,7 +285,7 @@ export default function OverlayApp() {
           const text = textFromTranscriptionPartial(event);
           setLiveText(text);
           setVisible(true);
-          setStatus("REC");
+          setStatus("Listening");
           return;
         }
 
@@ -280,7 +294,7 @@ export default function OverlayApp() {
           setDraftText((prev) => appendTranscript(prev, result.asrText));
           setLiveText("");
           setVisible(true);
-          setStatus("TRANSCRIBED");
+          setStatus("Text ready");
           return;
         }
 
@@ -289,20 +303,20 @@ export default function OverlayApp() {
           if (result.finalText.trim()) setDraftText(result.finalText);
           setLiveText("");
           setVisible(true);
-          setStatus("REWRITTEN");
+          setStatus("Text improved");
           return;
         }
 
         if (event.status === "failed") {
           setVisible(true);
-          setStatus("ERROR");
-          setDetail(event.errorCode || event.message);
+          setStatus("Action needed");
+          setDetail(userMessageFromError(event.errorCode || event.message));
         }
       }));
     })().catch((err) => {
       setVisible(true);
-      setStatus("ERROR");
-      setDetail(String(err));
+      setStatus("Action needed");
+      setDetail(userMessageFromError(err));
     });
 
     return () => {
@@ -315,7 +329,7 @@ export default function OverlayApp() {
     () => appendTranscript(draftText, liveText),
     [draftText, liveText],
   );
-  const tone = status === "ERROR" ? "danger" : status === "REWRITTEN" || status === "TRANSCRIBED" ? "ok" : "default";
+  const tone = status === "Action needed" ? "danger" : status === "Text improved" || status === "Text ready" ? "ok" : "default";
 
   if (!visible) {
     return <div ref={rootRef} className="transcriptOverlayRoot isHidden" />;
