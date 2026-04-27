@@ -7,7 +7,7 @@ pub use typevoice_platform::{
     pipeline, record_input, record_input_cache, subprocess, toolchain,
 };
 pub use typevoice_providers::{doubao_asr, llm, remote_asr};
-pub use typevoice_storage::{data_dir, history, settings, templates};
+pub use typevoice_storage::{data_dir, history, settings};
 
 pub mod audio_capture;
 pub mod rewrite;

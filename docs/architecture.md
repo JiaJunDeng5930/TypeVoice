@@ -93,9 +93,9 @@ Provider：
 职责：
 
 - 独立执行文本改写。
-- 读取模板、上下文和术语表。
+- 读取 LLM 提示词、上下文和术语表。
 - 接收 `voice_workflow` 传入的 hotkey 预采集上下文。
-- 成功后更新同一条历史记录的 `final_text` 与 `template_id`。
+- 成功后更新同一条历史记录的 `final_text`。
 
 状态机调用：
 
@@ -143,7 +143,7 @@ Provider：
 核心结果类型：
 
 - `TranscriptionResult { transcriptId, asrText, finalText, metrics, historyId }`
-- `RewriteResult { transcriptId, finalText, rewriteMs, templateId }`
+- `RewriteResult { transcriptId, finalText, rewriteMs }`
 - `InsertResult { copied, autoPasteAttempted, autoPasteOk, errorCode, errorMessage }`
 - `WorkflowView { phase, taskId, recordingSessionId, lastTranscriptId, lastAsrText, lastText, lastCreatedAtMs, diagnosticCode, diagnosticLine, primaryLabel, primaryDisabled, canRewrite, canInsert, canCopy }`
 - `UiEvent { kind, effect, eventId, sequence, taskId, stage, status, message, elapsedMs, errorCode, payload, tsMs }`

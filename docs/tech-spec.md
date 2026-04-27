@@ -16,7 +16,7 @@
 - `rewrite`：LLM 改写。
 - `insertion`：复制和自动写入。
 - `ui_events`：前端显示事件 actor。
-- `settings`、`templates`、`history`、`obs`：配置、模板、历史、日志指标。
+- `settings`、`history`、`obs`：配置、历史、日志指标。
 
 调用方向：
 
@@ -106,7 +106,7 @@ Doubao provider：
 
 - `workflow_rewrite` 使用当前工作流结果和输入文本执行改写。
 - `rewrite_text` 使用 `transcriptId` 和输入文本执行底层显式改写。
-- 模板来自设置或请求参数。
+- LLM 提示词来自设置。
 - 改写成功后更新历史记录。
 - 改写失败返回结构化错误，调用方保留原始转录文本。
 - hotkey 预采集上下文由 `voice_workflow` 保存，并在改写时一次性传入。
@@ -154,7 +154,7 @@ Doubao provider：
 - `created_at_ms`
 - `asr_text`
 - `final_text`
-- `template_id`
+- `template_id`（历史兼容字段，新记录为空）
 - `preprocess_ms`
 - `asr_ms`
 - `rtf`

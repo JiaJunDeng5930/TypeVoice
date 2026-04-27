@@ -3,7 +3,6 @@ import { defaultTauriGateway, type TauriGateway } from "../infra/runtimePorts";
 import type {
   ApiCheckResult,
   AudioCaptureDevice,
-  PromptTemplate,
   Settings,
 } from "../types";
 import { PixelButton } from "../ui/PixelButton";
@@ -67,8 +66,8 @@ export function SettingsScreen({
   const [llmBaseUrl, setLlmBaseUrl] = useState("");
   const [llmModel, setLlmModel] = useState("");
   const [reasoning, setReasoning] = useState("default");
+  const [llmPrompt, setLlmPrompt] = useState("");
   const [rewriteEnabled, setRewriteEnabled] = useState(false);
-  const [rewriteTemplateId, setRewriteTemplateId] = useState("");
   const [rewriteGlossaryDraft, setRewriteGlossaryDraft] = useState("");
   const [autoPasteEnabled, setAutoPasteEnabled] = useState(true);
   const [recordInputStrategy, setRecordInputStrategy] = useState("follow_default");
@@ -86,12 +85,7 @@ export function SettingsScreen({
     useState(true);
   const [rewriteIncludeGlossary, setRewriteIncludeGlossary] = useState(true);
 
-  const [templates, setTemplates] = useState<PromptTemplate[]>([]);
-  const [tplId, setTplId] = useState("");
-  const [tplDraft, setTplDraft] = useState("");
-
   const [keyDraft, setKeyDraft] = useState("");
-  const [templatesJson, setTemplatesJson] = useState("");
 
   const [confirmClear, setConfirmClear] = useState(false);
   const [llmCheckPending, setLlmCheckPending] = useState(false);
@@ -129,13 +123,13 @@ export function SettingsScreen({
     setLlmBaseUrl(settings.llm_base_url ?? "");
     setLlmModel(settings.llm_model ?? "");
     setReasoning(settings.llm_reasoning_effort ?? "default");
+    setLlmPrompt(settings.llm_prompt ?? "");
 
     if (typeof settings.rewrite_enabled !== "boolean") {
       pushToast("Settings need attention", "danger");
       return;
     }
     setRewriteEnabled(settings.rewrite_enabled);
-    setRewriteTemplateId(settings.rewrite_template_id ?? "");
     setRewriteGlossaryDraft((settings.rewrite_glossary || []).join("\n"));
     setRewriteIncludeGlossary(settings.rewrite_include_glossary ?? true);
     setAutoPasteEnabled(settings.auto_paste_enabled ?? true);
@@ -173,20 +167,10 @@ export function SettingsScreen({
 
   useEffect(() => {
     (async () => {
-      await refreshTemplates();
       await refreshAudioCaptureDevices();
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  useEffect(() => {
-    const tpl = templates.find((t) => t.id === tplId);
-    if (tpl) setTplDraft(tpl.system_prompt || "");
-  }, [tplId, templates]);
-
-  const templateOptions: PixelSelectOption[] = useMemo(() => {
-    return templates.map((t) => ({ value: t.id, label: t.name }));
-  }, [templates]);
 
   const captureDeviceOptions: PixelSelectOption[] = useMemo(() => {
     return audioCaptureDevices.map((v) => {
@@ -201,32 +185,11 @@ export function SettingsScreen({
     });
   }, [audioCaptureDevices]);
 
-  const selectedRewriteLabel = useMemo(() => {
-    const t = templates.find((x) => x.id === rewriteTemplateId);
-    return t?.name || "";
-  }, [rewriteTemplateId, templates]);
-
   useEffect(() => {
     const found = audioCaptureDevices.find((v) => v.endpoint_id === recordFixedEndpointId);
     if (!found) return;
     setRecordFixedFriendlyName(found.friendly_name);
   }, [audioCaptureDevices, recordFixedEndpointId]);
-
-  async function refreshTemplates() {
-    try {
-      const t = (await gateway.invoke("list_templates")) as PromptTemplate[];
-      setTemplates(t);
-      if (!tplId) setTplId(t[0]?.id || "");
-
-      // Keep rewrite template id valid when templates list changes.
-      if (rewriteTemplateId && !t.some((x) => x.id === rewriteTemplateId)) {
-        setRewriteTemplateId("");
-      }
-    } catch {
-      // templates are optional
-      setTemplates([]);
-    }
-  }
 
   async function refreshAudioCaptureDevices() {
     try {
@@ -352,14 +315,14 @@ export function SettingsScreen({
   }
 
   async function saveRewrite() {
-    if (rewriteEnabled && !rewriteTemplateId.trim()) {
-      pushToast("REWRITE TEMPLATE REQUIRED", "danger");
+    if (rewriteEnabled && !llmPrompt.trim()) {
+      pushToast("LLM PROMPT REQUIRED", "danger");
       return;
     }
     try {
       await savePatch({
         rewrite_enabled: rewriteEnabled,
-        rewrite_template_id: rewriteTemplateId.trim() ? rewriteTemplateId.trim() : null,
+        llm_prompt: llmPrompt,
         rewrite_include_glossary: rewriteIncludeGlossary,
       });
       pushToast("SAVED", "ok");
@@ -417,43 +380,6 @@ export function SettingsScreen({
       pushToast("SAVED", "ok");
     } catch {
       pushToast("SAVE FAILED", "danger");
-    }
-  }
-
-  async function saveTemplate() {
-    if (!tplId) return;
-    const base = templates.find((t) => t.id === tplId);
-    if (!base) return;
-    try {
-      const updated = (await gateway.invoke("upsert_template", {
-        tpl: { ...base, system_prompt: tplDraft },
-      })) as PromptTemplate;
-      setTemplates((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
-      pushToast("TEMPLATE SAVED", "ok");
-    } catch {
-      pushToast("TEMPLATE SAVE FAILED", "danger");
-    }
-  }
-
-  async function exportTemplates() {
-    try {
-      const s = (await gateway.invoke("templates_export_json")) as string;
-      setTemplatesJson(s);
-      pushToast("EXPORTED", "ok");
-    } catch {
-      pushToast("EXPORT FAILED", "danger");
-    }
-  }
-
-  async function importTemplates(mode: "merge" | "replace") {
-    const json = templatesJson.trim();
-    if (!json) return;
-    try {
-      await gateway.invoke("templates_import_json", { json, mode });
-      await refreshTemplates();
-      pushToast("IMPORTED", "ok");
-    } catch {
-      pushToast("IMPORT FAILED", "danger");
     }
   }
 
@@ -811,18 +737,15 @@ export function SettingsScreen({
       <div className="card">
         <div className="sectionTitle">REWRITE</div>
         <div className="row" style={{ justifyContent: "space-between" }}>
-          <div className="muted">
-            {rewriteEnabled ? "ON" : "OFF"}
-            {rewriteEnabled && selectedRewriteLabel ? `  /  ${selectedRewriteLabel}` : ""}
-          </div>
+          <div className="muted">{rewriteEnabled ? "ON" : "OFF"}</div>
           <PixelToggle value={rewriteEnabled} onChange={setRewriteEnabled} label="rewrite" />
         </div>
         <div style={{ marginTop: 12 }} className="stack">
-          <PixelSelect
-            value={rewriteTemplateId}
-            onChange={setRewriteTemplateId}
-            options={[{ value: "", label: "- template -" }, ...templateOptions]}
-            disabled={!templates.length}
+          <PixelTextarea
+            value={llmPrompt}
+            onChange={setLlmPrompt}
+            placeholder="LLM prompt..."
+            rows={10}
           />
           <div className="row" style={{ justifyContent: "flex-end" }}>
             <PixelButton onClick={saveRewrite} tone="accent">
@@ -950,60 +873,6 @@ export function SettingsScreen({
           <div className="row" style={{ justifyContent: "flex-end" }}>
             <PixelButton onClick={saveHotkeys} tone="accent">
               SAVE
-            </PixelButton>
-          </div>
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="sectionTitle">TEMPLATES</div>
-        <div className="stack">
-          <PixelSelect
-            value={tplId}
-            onChange={setTplId}
-            options={templateOptions}
-            placeholder="-"
-            disabled={!templates.length}
-          />
-          <PixelTextarea
-            value={tplDraft}
-            onChange={setTplDraft}
-            placeholder="system prompt..."
-            rows={8}
-            disabled={!tplId}
-          />
-          <div className="row" style={{ justifyContent: "flex-end" }}>
-            <PixelButton onClick={saveTemplate} tone="accent" disabled={!tplId}>
-              SAVE
-            </PixelButton>
-          </div>
-        </div>
-
-        <div className="sectionTitle" style={{ marginTop: 18 }}>
-          IMPORT / EXPORT
-        </div>
-        <div className="stack">
-          <PixelTextarea
-            value={templatesJson}
-            onChange={setTemplatesJson}
-            placeholder='[{"id","name","system_prompt"}, ...]'
-            rows={7}
-          />
-          <div className="row" style={{ justifyContent: "flex-end" }}>
-            <PixelButton onClick={exportTemplates}>EXPORT</PixelButton>
-            <PixelButton
-              onClick={() => importTemplates("merge")}
-              tone="accent"
-              disabled={!templatesJson.trim()}
-            >
-              IMPORT MERGE
-            </PixelButton>
-            <PixelButton
-              onClick={() => importTemplates("replace")}
-              tone="danger"
-              disabled={!templatesJson.trim()}
-            >
-              IMPORT REPLACE
             </PixelButton>
           </div>
         </div>

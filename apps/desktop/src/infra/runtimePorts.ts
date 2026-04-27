@@ -31,8 +31,8 @@ let previewSettings: Record<string, unknown> = {
   llm_base_url: "",
   llm_model: "",
   llm_reasoning_effort: "default",
+  llm_prompt: "",
   rewrite_enabled: true,
-  rewrite_template_id: "clean-note",
   rewrite_glossary: ["TypeVoice", "meeting note"],
   rewrite_include_glossary: true,
   auto_paste_enabled: true,
@@ -65,19 +65,6 @@ const previewWorkflow = {
   canCopy: false,
 };
 
-const previewTemplates = [
-  {
-    id: "clean-note",
-    name: "Clean note",
-    system_prompt: "Rewrite the transcript into a concise note.",
-  },
-  {
-    id: "direct-message",
-    name: "Direct message",
-    system_prompt: "Rewrite the transcript as a direct message.",
-  },
-];
-
 const previewHistory = [
   "Send the revised note after the meeting.",
   "Confirm the schedule for tomorrow morning.",
@@ -92,7 +79,7 @@ const previewHistory = [
   rewritten_text: "",
   inserted_text: "",
   final_text: text,
-  template_id: index % 2 === 0 ? "clean-note" : null,
+  template_id: null,
   rtf: 0.18,
   device_used: "Preview microphone",
   preprocess_ms: 12,
@@ -203,14 +190,12 @@ const browserPreviewGateway: TauriGateway = {
           transcriptId: String((args?.req as Record<string, unknown> | undefined)?.transcriptId || "preview-transcript"),
           finalText: String((args?.req as Record<string, unknown> | undefined)?.text || "").trim(),
           rewriteMs: 80,
-          templateId: "clean-note",
         } as T;
       case "workflow_rewrite":
         return {
           transcriptId: "preview-transcript",
           finalText: String((args?.req as Record<string, unknown> | undefined)?.text || "").trim(),
           rewriteMs: 80,
-          templateId: "clean-note",
         } as T;
       case "overlay_insert_text":
       case "workflow_insert":
@@ -233,14 +218,6 @@ const browserPreviewGateway: TauriGateway = {
       case "history_list":
         return previewHistory as T;
       case "history_clear":
-        return undefined as T;
-      case "list_templates":
-        return previewTemplates as T;
-      case "upsert_template":
-        return (args?.tpl || previewTemplates[0]) as T;
-      case "templates_export_json":
-        return JSON.stringify(previewTemplates, null, 2) as T;
-      case "templates_import_json":
         return undefined as T;
       case "list_audio_capture_devices":
         return [

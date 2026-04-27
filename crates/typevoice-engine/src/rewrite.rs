@@ -3,16 +3,13 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 
 use crate::ports::{PortError, PortResult};
-use crate::{
-    context_capture, context_pack, data_dir, history, llm, settings, task_manager, templates,
-};
+use crate::{context_capture, context_pack, data_dir, history, llm, settings, task_manager};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RewriteTextRequest {
     pub transcript_id: String,
     pub text: String,
-    pub template_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,7 +18,6 @@ pub struct RewriteResult {
     pub transcript_id: String,
     pub final_text: String,
     pub rewrite_ms: u128,
-    pub template_id: Option<String>,
 }
 
 pub async fn rewrite_text(
@@ -49,27 +45,13 @@ pub async fn rewrite_text(
             "rewrite is disabled in settings",
         ));
     }
-    let template_id = req
-        .template_id
+    let llm_prompt = s
+        .llm_prompt
         .as_deref()
         .map(str::trim)
         .filter(|v| !v.is_empty())
         .map(ToOwned::to_owned)
-        .or_else(|| {
-            s.rewrite_template_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|v| !v.is_empty())
-                .map(ToOwned::to_owned)
-        })
-        .ok_or_else(|| {
-            PortError::new(
-                "E_SETTINGS_REWRITE_TEMPLATE_MISSING",
-                "rewrite_template_id is required",
-            )
-        })?;
-    let template = templates::get_template(&data_dir, &template_id)
-        .map_err(|e| PortError::from_message("E_TEMPLATE_NOT_FOUND", e.to_string()))?;
+        .ok_or_else(|| PortError::new("E_SETTINGS_LLM_PROMPT_MISSING", "llm_prompt is required"))?;
     let ctx_cfg = context_capture::config_from_settings(&s);
     let ctx_snap = rewrite_context(
         task_state,
@@ -98,7 +80,7 @@ pub async fn rewrite_text(
     let final_text = match llm::rewrite_with_context(
         &data_dir,
         task_id,
-        &template.system_prompt,
+        &llm_prompt,
         &req.text,
         Some(&prepared),
         glossary_ref,
@@ -117,14 +99,13 @@ pub async fn rewrite_text(
         &data_dir.join("history.sqlite3"),
         task_id,
         &final_text,
-        Some(&template_id),
+        None,
     )
     .map_err(|e| PortError::from_message("E_HISTORY_UPDATE", e.to_string()))?;
     let result = RewriteResult {
         transcript_id: task_id.to_string(),
         final_text,
         rewrite_ms,
-        template_id: Some(template_id),
     };
     Ok(result)
 }
@@ -188,11 +169,9 @@ mod tests {
             transcript_id: "task-1".to_string(),
             final_text: "rewritten".to_string(),
             rewrite_ms: 15,
-            template_id: Some("template-1".to_string()),
         };
 
         assert_eq!(result.transcript_id, "task-1");
         assert_eq!(result.final_text, "rewritten");
-        assert_eq!(result.template_id.as_deref(), Some("template-1"));
     }
 }

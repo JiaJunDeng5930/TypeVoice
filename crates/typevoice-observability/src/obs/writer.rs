@@ -113,6 +113,12 @@ fn dropped_counts() -> &'static Mutex<HashMap<DropKey, u64>> {
     DROPPED.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+#[cfg(test)]
+pub(crate) fn test_writer_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 fn note_dropped(data_dir: &Path, stream: StreamKind) {
     let mut g = dropped_counts().lock().unwrap();
     let key = DropKey {
@@ -277,19 +283,11 @@ pub fn flush(timeout_ms: u64) -> bool {
 mod tests {
     use super::*;
     use crate::obs::schema::{now_ms, MetricsRecord, TraceEvent};
-    use std::{
-        fs,
-        sync::{Mutex, OnceLock},
-        thread,
-    };
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
+    use std::{fs, thread};
 
     #[test]
     fn concurrent_metrics_emit_keeps_jsonl_lines_parseable() {
+        let _writer_guard = test_writer_lock().lock().unwrap();
         let td = tempfile::tempdir().expect("tempdir");
         let data_dir = td.path().to_path_buf();
         let threads = 8;
@@ -335,7 +333,7 @@ mod tests {
 
     #[test]
     fn trace_rotation_creates_suffix_file() {
-        let _env_guard = env_lock().lock().unwrap();
+        let _writer_guard = test_writer_lock().lock().unwrap();
         std::env::set_var("TYPEVOICE_TRACE_MAX_BYTES", "1800");
         std::env::set_var("TYPEVOICE_TRACE_MAX_FILES", "2");
 

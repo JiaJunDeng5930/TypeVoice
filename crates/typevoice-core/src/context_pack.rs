@@ -125,10 +125,7 @@ pub fn prepare(asr_text: &str, snap: &ContextSnapshot, budget: &ContextBudget) -
             if clipped.is_empty() {
                 continue;
             }
-            let meta = match &h.template_id {
-                Some(tid) => format!("- [t={} template={}] ", h.created_at_ms, tid),
-                None => format!("- [t={}] ", h.created_at_ms),
-            };
+            let meta = format!("- [t={}] ", h.created_at_ms);
             push_with_budget(&mut context_out, &meta, &mut remaining);
             push_with_budget(&mut context_out, &clipped, &mut remaining);
             push_with_budget(&mut context_out, "\n", &mut remaining);

@@ -397,6 +397,7 @@ mod tests {
 
     #[test]
     fn concurrent_emit_keeps_jsonl_lines_parseable() {
+        let _writer_guard = writer::test_writer_lock().lock().unwrap();
         let td = tempfile::tempdir().expect("tempdir");
         let dir = td.path().to_path_buf();
         let threads = 8;
@@ -442,6 +443,7 @@ mod tests {
 
     #[test]
     fn event_err_serializes_raw_error_fields() {
+        let _writer_guard = writer::test_writer_lock().lock().unwrap();
         let td = tempfile::tempdir().expect("tempdir");
         let dir = td.path().to_path_buf();
 
@@ -483,6 +485,7 @@ mod tests {
 
     #[test]
     fn event_err_anyhow_serializes_error_chain() {
+        let _writer_guard = writer::test_writer_lock().lock().unwrap();
         let td = tempfile::tempdir().expect("tempdir");
         let dir = td.path().to_path_buf();
         let err = anyhow::anyhow!("root cause").context("outer context");

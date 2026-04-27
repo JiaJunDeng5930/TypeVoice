@@ -26,7 +26,7 @@ export type BackendClient = {
   workflowReportAsrFailed(req: WorkflowTaskFailedRequest): Promise<WorkflowView>;
   workflowRewrite(req: WorkflowTextCommandRequest): Promise<RewriteResult>;
   workflowInsert(req: WorkflowTextCommandRequest): Promise<InsertResult>;
-  rewriteText(req: { transcriptId: string; text: string; templateId?: string | null }): Promise<RewriteResult>;
+  rewriteText(req: { transcriptId: string; text: string }): Promise<RewriteResult>;
   insertOverlayText(req: { transcriptId?: string | null; text: string }): Promise<InsertResult>;
   overlaySetState(state: {
     visible: boolean;

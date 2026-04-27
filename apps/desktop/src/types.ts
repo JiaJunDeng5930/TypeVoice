@@ -77,7 +77,6 @@ export type RewriteResult = {
   transcriptId: string;
   finalText: string;
   rewriteMs: number;
-  templateId?: string | null;
 };
 
 export type InsertResult = {
@@ -117,7 +116,6 @@ export type TaskDone = {
   asr_ms: number;
   rewrite_ms?: number | null;
   rewrite_enabled: boolean;
-  template_id?: string | null;
 };
 
 export type ExportTextResult = {
@@ -126,12 +124,6 @@ export type ExportTextResult = {
   auto_paste_ok: boolean;
   error_code?: string | null;
   error_message?: string | null;
-};
-
-export type PromptTemplate = {
-  id: string;
-  name: string;
-  system_prompt: string;
 };
 
 export type Settings = {
@@ -146,6 +138,7 @@ export type Settings = {
   llm_base_url?: string | null;
   llm_model?: string | null;
   llm_reasoning_effort?: string | null;
+  llm_prompt?: string | null;
   record_input_spec?: string | null;
   record_input_strategy?: string | null;
   record_follow_default_role?: string | null;
@@ -156,7 +149,6 @@ export type Settings = {
   record_last_working_dshow_spec?: string | null;
   record_last_working_ts_ms?: number | null;
   rewrite_enabled?: boolean | null;
-  rewrite_template_id?: string | null;
   rewrite_glossary?: string[] | null;
   auto_paste_enabled?: boolean | null;
   rewrite_include_glossary?: boolean | null;

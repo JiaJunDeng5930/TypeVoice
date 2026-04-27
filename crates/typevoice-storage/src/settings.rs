@@ -28,6 +28,7 @@ pub struct Settings {
     pub llm_base_url: Option<String>, // e.g. https://api.openai.com/v1
     pub llm_model: Option<String>,    // e.g. gpt-4o-mini
     pub llm_reasoning_effort: Option<String>, // e.g. none|minimal|low|medium|high|xhigh
+    pub llm_prompt: Option<String>,
 
     // UX settings
     pub record_input_spec: Option<String>, // ffmpeg dshow input spec, e.g. audio=default
@@ -40,7 +41,6 @@ pub struct Settings {
     pub record_last_working_dshow_spec: Option<String>,
     pub record_last_working_ts_ms: Option<i64>,
     pub rewrite_enabled: Option<bool>,
-    pub rewrite_template_id: Option<String>,
     pub rewrite_glossary: Option<Vec<String>>,
     pub auto_paste_enabled: Option<bool>,
 
@@ -77,6 +77,7 @@ pub struct SettingsPatch {
     pub llm_base_url: Option<Option<String>>,
     pub llm_model: Option<Option<String>>,
     pub llm_reasoning_effort: Option<Option<String>>,
+    pub llm_prompt: Option<Option<String>>,
 
     pub record_input_spec: Option<Option<String>>,
     pub record_input_strategy: Option<Option<String>>,
@@ -84,7 +85,6 @@ pub struct SettingsPatch {
     pub record_fixed_endpoint_id: Option<Option<String>>,
     pub record_fixed_friendly_name: Option<Option<String>>,
     pub rewrite_enabled: Option<Option<bool>>,
-    pub rewrite_template_id: Option<Option<String>>,
     pub rewrite_glossary: Option<Option<Vec<String>>>,
     pub auto_paste_enabled: Option<Option<bool>>,
 
@@ -137,6 +137,9 @@ pub fn apply_patch(mut s: Settings, p: SettingsPatch) -> Settings {
     if let Some(v) = p.llm_reasoning_effort {
         s.llm_reasoning_effort = v;
     }
+    if let Some(v) = p.llm_prompt {
+        s.llm_prompt = v;
+    }
     if let Some(v) = p.record_input_spec {
         s.record_input_spec = v;
     }
@@ -154,9 +157,6 @@ pub fn apply_patch(mut s: Settings, p: SettingsPatch) -> Settings {
     }
     if let Some(v) = p.rewrite_enabled {
         s.rewrite_enabled = v;
-    }
-    if let Some(v) = p.rewrite_template_id {
-        s.rewrite_template_id = v;
     }
     if let Some(v) = p.rewrite_glossary {
         s.rewrite_glossary = v;
@@ -352,9 +352,9 @@ mod tests {
             llm_base_url: Some("https://x/v1".to_string()),
             llm_model: Some("m1".to_string()),
             llm_reasoning_effort: Some("low".to_string()),
+            llm_prompt: Some("prompt 1".to_string()),
             record_input_spec: None,
             rewrite_enabled: Some(false),
-            rewrite_template_id: Some("t1".to_string()),
             rewrite_glossary: None,
             auto_paste_enabled: Some(true),
             context_include_history: None,
@@ -379,8 +379,8 @@ mod tests {
             remote_asr_concurrency: Some(Some(6)),
             llm_model: Some(Some("m2".to_string())),
             llm_reasoning_effort: Some(None),
+            llm_prompt: Some(Some("prompt 2".to_string())),
             rewrite_enabled: Some(Some(true)),
-            rewrite_template_id: Some(None),
             context_history_n: Some(Some(5)),
             context_include_prev_window_meta: Some(Some(true)),
             rewrite_include_glossary: Some(Some(false)),
@@ -399,8 +399,8 @@ mod tests {
         assert_eq!(next.llm_base_url.as_deref(), Some("https://x/v1"));
         assert_eq!(next.llm_model.as_deref(), Some("m2"));
         assert_eq!(next.llm_reasoning_effort, None);
+        assert_eq!(next.llm_prompt.as_deref(), Some("prompt 2"));
         assert_eq!(next.rewrite_enabled, Some(true));
-        assert_eq!(next.rewrite_template_id, None);
         assert_eq!(next.rewrite_glossary.as_deref(), None);
         assert_eq!(next.auto_paste_enabled, Some(false));
         assert_eq!(next.context_history_n, Some(5));

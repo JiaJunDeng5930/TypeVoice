@@ -154,7 +154,6 @@ pub struct WorkflowRewriteCompletedRequest {
     pub transcript_id: String,
     pub text: String,
     pub rewrite_ms: u128,
-    pub template_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -997,7 +996,6 @@ impl VoiceWorkflow {
             transcript_id,
             final_text: req.text,
             rewrite_ms: req.rewrite_ms,
-            template_id: req.template_id,
         };
         self.complete_rewrite(result.clone())?;
         self.persist_rewrite_result(&result)?;
@@ -1276,7 +1274,6 @@ impl VoiceWorkflow {
         Ok(RewriteTextRequest {
             transcript_id: current.transcript_id,
             text: req.text,
-            template_id: None,
         })
     }
 
@@ -1326,7 +1323,7 @@ impl VoiceWorkflow {
             &dir.join("history.sqlite3"),
             &result.transcript_id,
             &result.final_text,
-            result.template_id.as_deref(),
+            None,
         )
         .map_err(|e| WorkflowError::from_message("E_HISTORY_UPDATE", e.to_string()))
     }
@@ -2303,7 +2300,6 @@ mod tests {
                 transcript_id: "task-1".to_string(),
                 final_text: "final text".to_string(),
                 rewrite_ms: 30,
-                template_id: Some("template-1".to_string()),
             })
             .expect("rewrite completes");
 
@@ -2610,7 +2606,6 @@ mod tests {
                     "transcriptId": "task-1",
                     "finalText": "final text",
                     "rewriteMs": 12,
-                    "templateId": null,
                 }),
             ))
             .expect("event applies");

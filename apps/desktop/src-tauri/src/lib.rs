@@ -12,7 +12,7 @@ pub use typevoice_platform::{
     pipeline, record_input, record_input_cache, subprocess, toolchain,
 };
 pub use typevoice_providers::{doubao_asr, llm, remote_asr};
-pub use typevoice_storage::{data_dir, history, settings, templates};
+pub use typevoice_storage::{data_dir, history, settings};
 mod hotkeys;
 
 use history::HistoryItem;
@@ -23,7 +23,6 @@ use settings::SettingsPatch;
 use task_manager::TaskManager;
 use tauri::Emitter;
 use tauri::Manager;
-use templates::PromptTemplate;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct OverlayState {
@@ -282,107 +281,6 @@ fn abort_pending_task(
     let removed = workflow.abort_pending_task(task_id.trim());
     span.ok(Some(serde_json::json!({"removed": removed})));
     Ok(())
-}
-
-#[tauri::command]
-fn list_templates() -> Result<Vec<PromptTemplate>, String> {
-    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let span = cmd_span(&dir, None, "CMD.list_templates", None);
-    match templates::load_templates(&dir) {
-        Ok(v) => {
-            span.ok(Some(serde_json::json!({"count": v.len()})));
-            Ok(v)
-        }
-        Err(e) => {
-            span.err_anyhow("templates", "E_CMD_TPL_LIST", &e, None);
-            Err(e.to_string())
-        }
-    }
-}
-
-#[tauri::command]
-fn upsert_template(tpl: PromptTemplate) -> Result<PromptTemplate, String> {
-    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let tpl_id = tpl.id.clone();
-    let has_id = !tpl_id.trim().is_empty();
-    let name_chars = tpl.name.len();
-    let prompt_chars = tpl.system_prompt.len();
-    let span = cmd_span(
-        &dir,
-        None,
-        "CMD.upsert_template",
-        Some(
-            serde_json::json!({"has_id": has_id, "id": tpl_id, "name_chars": name_chars, "prompt_chars": prompt_chars}),
-        ),
-    );
-    match templates::upsert_template(&dir, tpl) {
-        Ok(v) => {
-            span.ok(Some(serde_json::json!({"id": v.id})));
-            Ok(v)
-        }
-        Err(e) => {
-            span.err_anyhow("templates", "E_CMD_TPL_UPSERT", &e, None);
-            Err(e.to_string())
-        }
-    }
-}
-
-#[tauri::command]
-fn delete_template(id: &str) -> Result<(), String> {
-    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let span = cmd_span(
-        &dir,
-        None,
-        "CMD.delete_template",
-        Some(serde_json::json!({"id": id})),
-    );
-    match templates::delete_template(&dir, id) {
-        Ok(()) => {
-            span.ok(None);
-            Ok(())
-        }
-        Err(e) => {
-            span.err_anyhow("templates", "E_CMD_TPL_DELETE", &e, None);
-            Err(e.to_string())
-        }
-    }
-}
-
-#[tauri::command]
-fn templates_export_json() -> Result<String, String> {
-    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let span = cmd_span(&dir, None, "CMD.templates_export_json", None);
-    match templates::export_templates_json(&dir) {
-        Ok(s) => {
-            span.ok(Some(serde_json::json!({"bytes": s.len()})));
-            Ok(s)
-        }
-        Err(e) => {
-            span.err_anyhow("templates", "E_CMD_TPL_EXPORT", &e, None);
-            Err(e.to_string())
-        }
-    }
-}
-
-#[tauri::command]
-fn templates_import_json(json: &str, mode: &str) -> Result<usize, String> {
-    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let span = cmd_span(
-        &dir,
-        None,
-        "CMD.templates_import_json",
-        Some(serde_json::json!({"mode": mode, "json_chars": json.len()})),
-    );
-    match templates::import_templates_json(&dir, json, mode) {
-        Ok(n) => {
-            span.ok(Some(serde_json::json!({"count": n})));
-            Ok(n)
-        }
-        Err(e) => {
-            span.err_anyhow("templates", "E_CMD_TPL_IMPORT", &e, None);
-            Err(e.to_string())
-        }
-    }
 }
 
 #[tauri::command]
@@ -788,7 +686,7 @@ fn get_settings() -> Result<Settings, String> {
     match settings::load_settings_strict(&dir) {
         Ok(s) => {
             span.ok(Some(
-                serde_json::json!({"rewrite_enabled": s.rewrite_enabled, "template_id": s.rewrite_template_id}),
+                serde_json::json!({"rewrite_enabled": s.rewrite_enabled, "has_llm_prompt": s.llm_prompt.as_deref().map(|v| !v.trim().is_empty()).unwrap_or(false)}),
             ));
             Ok(s)
         }
@@ -855,12 +753,12 @@ fn update_settings(
         "llm_base_url": patch.llm_base_url.is_some(),
         "llm_model": patch.llm_model.is_some(),
         "llm_reasoning_effort": patch.llm_reasoning_effort.is_some(),
+        "llm_prompt": patch.llm_prompt.is_some(),
         "record_input_strategy": patch.record_input_strategy.is_some(),
         "record_follow_default_role": patch.record_follow_default_role.is_some(),
         "record_fixed_endpoint_id": patch.record_fixed_endpoint_id.is_some(),
         "record_fixed_friendly_name": patch.record_fixed_friendly_name.is_some(),
         "rewrite_enabled": patch.rewrite_enabled.is_some(),
-        "rewrite_template_id": patch.rewrite_template_id.is_some(),
         "rewrite_glossary": patch.rewrite_glossary.is_some(),
         "auto_paste_enabled": patch.auto_paste_enabled.is_some(),
         "rewrite_include_glossary": patch.rewrite_include_glossary.is_some(),
@@ -1095,11 +993,6 @@ pub fn run() {
             commands::overlay_insert_text,
             commands::transcribe_fixture,
             abort_pending_task,
-            list_templates,
-            upsert_template,
-            delete_template,
-            templates_export_json,
-            templates_import_json,
             set_llm_api_key,
             clear_llm_api_key,
             llm_api_key_status,
