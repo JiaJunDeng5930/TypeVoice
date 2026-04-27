@@ -12,8 +12,6 @@ use crate::obs::debug;
 use crate::obs::Span;
 use crate::subprocess::CommandNoConsoleExt;
 
-const MAX_TOOL_STDERR_BYTES: usize = 4096;
-
 fn cmd_hint_for_trace(cmd: &str) -> String {
     let t = cmd.trim();
     if t.is_empty() {
@@ -73,19 +71,11 @@ pub fn ffprobe_cmd() -> Result<String> {
     resolve_tool_path("TYPEVOICE_FFPROBE", "ffprobe")
 }
 
-fn truncate_stderr_bytes(mut b: Vec<u8>) -> Vec<u8> {
-    if b.len() > MAX_TOOL_STDERR_BYTES {
-        b.truncate(MAX_TOOL_STDERR_BYTES);
-    }
-    b
-}
-
 fn stderr_excerpt_from_child(mut stderr: Option<std::process::ChildStderr>) -> String {
     let mut buf = Vec::new();
     if let Some(ref mut s) = stderr {
         let _ = s.read_to_end(&mut buf);
     }
-    let buf = truncate_stderr_bytes(buf);
     String::from_utf8_lossy(&buf).trim().to_string()
 }
 
@@ -287,20 +277,17 @@ pub fn preprocess_ffmpeg_cancellable(
                         excerpt.as_bytes().to_vec(),
                     );
                 }
+                let message = format!("ffmpeg preprocess failed: exit={status} stderr={excerpt}");
                 span.err(
                     "process",
                     "E_FFMPEG_FAILED",
-                    &format!("ffmpeg preprocess failed: exit={status}"),
+                    &message,
                     Some(serde_json::json!({
                         "exit": status.to_string(),
                         "stderr_chars": excerpt.len(),
                     })),
                 );
-                return Err(anyhow!(
-                    "E_FFMPEG_FAILED: ffmpeg preprocess failed: exit={} stderr={}",
-                    status,
-                    excerpt
-                ));
+                return Err(anyhow!("E_FFMPEG_FAILED: {message}"));
             }
             break;
         }

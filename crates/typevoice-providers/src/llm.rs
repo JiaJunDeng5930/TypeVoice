@@ -288,19 +288,15 @@ pub async fn check_api_key_live(cfg: &LlmConfig) -> Result<()> {
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     if !status.is_success() {
-        let msg = if body.len() > 1024 {
-            format!("{}...(truncated)", &body[..1024])
-        } else {
-            body
-        };
         return Err(anyhow!(
-            "E_LLM_CHECK_HTTP_STATUS_{}: {msg}",
-            status.as_u16()
+            "E_LLM_CHECK_HTTP_STATUS_{}: {}",
+            status.as_u16(),
+            body
         ));
     }
 
     let r: ChatResp = serde_json::from_str(&body)
-        .map_err(|e| anyhow!("E_LLM_CHECK_PARSE: response parse failed: {e}"))?;
+        .map_err(|e| anyhow!("E_LLM_CHECK_PARSE: response parse failed: {e}; body={body}"))?;
     let content = r
         .choices
         .get(0)
@@ -483,12 +479,7 @@ pub async fn rewrite_with_context(
     }
 
     if !status.is_success() {
-        let msg = if body.len() > 1024 {
-            format!("{}...(truncated)", &body[..1024])
-        } else {
-            body
-        };
-        let ae = anyhow!("llm http {status}: {msg}");
+        let ae = anyhow!("llm http {status}: {body}");
         span.err_anyhow(
             "http",
             &format!("HTTP_{}", status.as_u16()),
@@ -501,12 +492,12 @@ pub async fn rewrite_with_context(
     let r: ChatResp = match serde_json::from_str(&body) {
         Ok(v) => v,
         Err(e) => {
-            let ae = anyhow!("llm response parse failed: {e}");
+            let ae = anyhow!("llm response parse failed: {e}; body={body}");
             span.err_anyhow(
                 "parse",
                 "E_LLM_PARSE",
                 &ae,
-                Some(serde_json::json!({"body_len": body.len()})),
+                Some(serde_json::json!({"body_len": body.len(), "body": body})),
             );
             return Err(ae);
         }

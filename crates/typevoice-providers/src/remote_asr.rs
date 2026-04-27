@@ -376,16 +376,15 @@ async fn transcribe_one_slice(
 
     if !status.is_success() {
         let code = format!("E_REMOTE_ASR_HTTP_STATUS_{}", status.as_u16());
-        let msg = if body.len() > 512 {
-            format!("{}...(truncated)", &body[..512])
-        } else {
-            body
-        };
-        return Err(err(&code, msg));
+        return Err(err(&code, body));
     }
 
-    let parsed: RemoteResp = serde_json::from_str(&body)
-        .map_err(|e| err("E_REMOTE_ASR_PARSE", format!("invalid json response: {e}")))?;
+    let parsed: RemoteResp = serde_json::from_str(&body).map_err(|e| {
+        err(
+            "E_REMOTE_ASR_PARSE",
+            format!("invalid json response: {e}; body={body}"),
+        )
+    })?;
     let text = parsed.text.unwrap_or_default().trim().to_string();
     Ok((slice.index, text))
 }

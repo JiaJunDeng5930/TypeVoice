@@ -3,6 +3,7 @@ use tauri::{AppHandle, State};
 
 use crate::audio_capture::RecordingRegistry;
 use crate::insertion::{InsertResult, InsertTextRequest};
+use crate::ports::PortError;
 use crate::record_input_cache::RecordInputCacheState;
 use crate::rewrite::{RewriteResult, RewriteTextRequest};
 use crate::transcription::{TranscribeFixtureRequest, TranscriptionResult, TranscriptionService};
@@ -324,7 +325,7 @@ pub async fn overlay_insert_text(
         Some(target_hwnd),
     )
     .await
-    .map_err(|err| format!("{}: {}", err.code, err.message))
+    .map_err(render_port_error)
 }
 
 fn normalize_task_id(task_id: Option<String>) -> Result<Option<String>, String> {
@@ -341,7 +342,43 @@ fn normalize_task_id(task_id: Option<String>) -> Result<Option<String>, String> 
 }
 
 fn render_workflow_error(err: WorkflowError) -> String {
-    format!("{}: {}", err.code, err.message)
+    let rendered = err.render();
+    if let Ok(dir) = data_dir::data_dir() {
+        crate::obs::event_err(
+            &dir,
+            None,
+            "Cmd",
+            "CMD.workflow_error",
+            "workflow",
+            &err.code,
+            &err.message,
+            Some(serde_json::json!({
+                "rendered": rendered.clone(),
+                "raw": err.raw_message(),
+            })),
+        );
+    }
+    rendered
+}
+
+fn render_port_error(err: PortError) -> String {
+    let rendered = err.to_string();
+    if let Ok(dir) = data_dir::data_dir() {
+        crate::obs::event_err(
+            &dir,
+            None,
+            "Cmd",
+            "CMD.port_error",
+            "port",
+            &err.code,
+            &err.message,
+            Some(serde_json::json!({
+                "rendered": rendered.clone(),
+                "raw": err.raw_message(),
+            })),
+        );
+    }
+    rendered
 }
 
 #[allow(dead_code)]

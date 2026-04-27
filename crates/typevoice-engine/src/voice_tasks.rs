@@ -2,6 +2,7 @@ use tauri::{Manager, Runtime};
 
 use crate::audio_capture::{RecordingRegistry, RecordingStopOutcome};
 use crate::insertion;
+use crate::obs;
 use crate::rewrite;
 use crate::task_manager::TaskManager;
 use crate::transcription::{TranscriptionInput, TranscriptionService};
@@ -189,6 +190,18 @@ async fn run_stop_record_transcribe(
 }
 
 fn send_failed(mailbox: &UiEventMailbox, task_id: &str, stage: &str, code: &str, message: String) {
+    if let Ok(dir) = crate::data_dir::data_dir() {
+        obs::event_err(
+            &dir,
+            Some(task_id),
+            stage,
+            "TASK.failed",
+            "task",
+            code,
+            &message,
+            None,
+        );
+    }
     mailbox.send(UiEvent::stage_with_elapsed(
         task_id,
         stage,

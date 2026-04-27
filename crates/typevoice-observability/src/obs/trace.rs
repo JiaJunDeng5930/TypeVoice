@@ -86,6 +86,31 @@ fn anyhow_chain(err: &AnyhowError) -> Vec<String> {
     err.chain().map(|e| e.to_string()).collect()
 }
 
+fn message_trace_error(kind: &str, code: &str, message: &str) -> TraceError {
+    TraceError {
+        kind: kind.to_string(),
+        code: code.to_string(),
+        message: message.to_string(),
+        raw: Some(message.to_string()),
+        debug: Some(message.to_string()),
+        chain: None,
+        source_type: Some("message".to_string()),
+    }
+}
+
+fn anyhow_trace_error(kind: &str, code: &str, err: &AnyhowError) -> TraceError {
+    let chain = anyhow_chain(err);
+    TraceError {
+        kind: kind.to_string(),
+        code: code.to_string(),
+        message: err.to_string(),
+        raw: Some(format!("{err:#}")),
+        debug: Some(format!("{err:?}")),
+        chain: Some(chain),
+        source_type: Some("anyhow::Error".to_string()),
+    }
+}
+
 fn maybe_backtrace_string() -> Option<String> {
     if !backtrace_enabled() {
         return None;
@@ -192,11 +217,7 @@ pub fn event_err(
             op: "event".to_string(),
             status: "err".to_string(),
             duration_ms: None,
-            error: Some(TraceError {
-                kind: kind.to_string(),
-                code: code.to_string(),
-                message: message.to_string(),
-            }),
+            error: Some(message_trace_error(kind, code, message)),
             ctx: ctx_with_backtrace(ctx),
         },
     );
@@ -222,11 +243,7 @@ pub fn event_err_anyhow(
             op: "event".to_string(),
             status: "err".to_string(),
             duration_ms: None,
-            error: Some(TraceError {
-                kind: kind.to_string(),
-                code: code.to_string(),
-                message: err.to_string(),
-            }),
+            error: Some(anyhow_trace_error(kind, code, err)),
             ctx: Some(ctx_for_anyhow_error(err, ctx)),
         },
     );
@@ -304,11 +321,7 @@ impl Span {
                 op: "end".to_string(),
                 status: "skipped".to_string(),
                 duration_ms: Some(self.t0.elapsed().as_millis()),
-                error: Some(TraceError {
-                    kind: "logic".to_string(),
-                    code: "SKIPPED".to_string(),
-                    message: reason.to_string(),
-                }),
+                error: Some(message_trace_error("logic", "SKIPPED", reason)),
                 ctx,
             },
         );
@@ -326,11 +339,7 @@ impl Span {
                 op: "end".to_string(),
                 status: "err".to_string(),
                 duration_ms: Some(self.t0.elapsed().as_millis()),
-                error: Some(TraceError {
-                    kind: kind.to_string(),
-                    code: code.to_string(),
-                    message: message.to_string(),
-                }),
+                error: Some(message_trace_error(kind, code, message)),
                 ctx: ctx_with_backtrace(ctx),
             },
         );
@@ -348,11 +357,7 @@ impl Span {
                 op: "end".to_string(),
                 status: "err".to_string(),
                 duration_ms: Some(self.t0.elapsed().as_millis()),
-                error: Some(TraceError {
-                    kind: kind.to_string(),
-                    code: code.to_string(),
-                    message: err.to_string(),
-                }),
+                error: Some(anyhow_trace_error(kind, code, err)),
                 ctx: Some(ctx_for_anyhow_error(err, ctx)),
             },
         );
@@ -374,11 +379,11 @@ impl Drop for Span {
                 op: "end".to_string(),
                 status: "aborted".to_string(),
                 duration_ms: Some(self.t0.elapsed().as_millis()),
-                error: Some(TraceError {
-                    kind: "logic".to_string(),
-                    code: "ABORTED".to_string(),
-                    message: "span dropped without explicit ok/err".to_string(),
-                }),
+                error: Some(message_trace_error(
+                    "logic",
+                    "ABORTED",
+                    "span dropped without explicit ok/err",
+                )),
                 ctx: ctx_with_backtrace(None),
             },
         );
@@ -433,5 +438,94 @@ mod tests {
             lines <= threads * per_thread,
             "trace lines should not exceed emitted count"
         );
+    }
+
+    #[test]
+    fn event_err_serializes_raw_error_fields() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let dir = td.path().to_path_buf();
+
+        event_err(
+            &dir,
+            Some("task-error"),
+            "TraceTest",
+            "TRACE.event_err",
+            "io",
+            "E_TRACE_TEST",
+            "read failed: raw detail",
+            None,
+        );
+
+        assert!(writer::flush(2_000), "trace writer flush timeout");
+        let raw = fs::read_to_string(trace_path(&dir)).expect("read trace");
+        let v: serde_json::Value =
+            serde_json::from_str(raw.lines().last().expect("trace line")).expect("valid json");
+        let error = v.get("error").expect("error object");
+
+        assert_eq!(error.get("kind").and_then(|v| v.as_str()), Some("io"));
+        assert_eq!(
+            error.get("code").and_then(|v| v.as_str()),
+            Some("E_TRACE_TEST")
+        );
+        assert_eq!(
+            error.get("raw").and_then(|v| v.as_str()),
+            Some("read failed: raw detail")
+        );
+        assert_eq!(
+            error.get("debug").and_then(|v| v.as_str()),
+            Some("read failed: raw detail")
+        );
+        assert_eq!(
+            error.get("source_type").and_then(|v| v.as_str()),
+            Some("message")
+        );
+    }
+
+    #[test]
+    fn event_err_anyhow_serializes_error_chain() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let dir = td.path().to_path_buf();
+        let err = anyhow::anyhow!("root cause").context("outer context");
+
+        event_err_anyhow(
+            &dir,
+            Some("task-anyhow"),
+            "TraceTest",
+            "TRACE.event_err_anyhow",
+            "io",
+            "E_TRACE_ANYHOW",
+            &err,
+            None,
+        );
+
+        assert!(writer::flush(2_000), "trace writer flush timeout");
+        let raw = fs::read_to_string(trace_path(&dir)).expect("read trace");
+        let v: serde_json::Value =
+            serde_json::from_str(raw.lines().last().expect("trace line")).expect("valid json");
+        let error = v.get("error").expect("error object");
+        let chain = error
+            .get("chain")
+            .and_then(|v| v.as_array())
+            .expect("error chain");
+
+        assert_eq!(
+            error.get("message").and_then(|v| v.as_str()),
+            Some("outer context")
+        );
+        assert_eq!(
+            error.get("source_type").and_then(|v| v.as_str()),
+            Some("anyhow::Error")
+        );
+        assert!(error
+            .get("raw")
+            .and_then(|v| v.as_str())
+            .is_some_and(|v| v.contains("root cause")));
+        assert!(error
+            .get("debug")
+            .and_then(|v| v.as_str())
+            .is_some_and(|v| v.contains("outer context")));
+        assert_eq!(chain.len(), 2);
+        assert_eq!(chain[0].as_str(), Some("outer context"));
+        assert_eq!(chain[1].as_str(), Some("root cause"));
     }
 }

@@ -534,6 +534,18 @@ fn text_delta(previous: &str, current: &str) -> String {
 
 fn send_failed(mailbox: &UiEventMailbox, task_id: &str, code: &str, message: impl Into<String>) {
     let message = message.into();
+    if let Ok(dir) = data_dir::data_dir() {
+        obs::event_err(
+            &dir,
+            Some(task_id),
+            "Transcribe",
+            "ASR.streaming_failed",
+            "asr",
+            code,
+            &message,
+            None,
+        );
+    }
     mailbox.send(UiEvent::stage_with_elapsed(
         task_id,
         "Transcribe",

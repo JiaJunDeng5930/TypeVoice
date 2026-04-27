@@ -14,6 +14,14 @@ pub struct TraceError {
     pub kind: String,    // winapi|http|io|process|logic|parse|unknown
     pub code: String,    // E_* | HTTP_401 | WIN_LAST_ERROR_...
     pub message: String, // short
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub debug: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chain: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

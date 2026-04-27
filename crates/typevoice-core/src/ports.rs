@@ -4,20 +4,31 @@ use serde::Serialize;
 pub struct PortError {
     pub code: String,
     pub message: String,
+    pub raw: Option<String>,
 }
 
 impl PortError {
     pub fn new(code: &str, message: impl Into<String>) -> Self {
+        let message = message.into();
         Self {
             code: code.to_string(),
-            message: message.into(),
+            raw: Some(message.clone()),
+            message,
         }
     }
 
     pub fn from_message(default_code: &str, message: impl Into<String>) -> Self {
         let message = message.into();
         let code = parse_error_code(&message).unwrap_or_else(|| default_code.to_string());
-        Self { code, message }
+        Self {
+            code,
+            raw: Some(message.clone()),
+            message,
+        }
+    }
+
+    pub fn raw_message(&self) -> &str {
+        self.raw.as_deref().unwrap_or(&self.message)
     }
 }
 
@@ -56,5 +67,6 @@ mod tests {
 
         assert_eq!(err.code, "E_TEST");
         assert_eq!(err.message, "failed");
+        assert_eq!(err.raw.as_deref(), Some("failed"));
     }
 }

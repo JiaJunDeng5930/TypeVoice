@@ -168,13 +168,16 @@ pub struct WorkflowInsertCompletedRequest {
 pub struct WorkflowError {
     pub code: String,
     pub message: String,
+    pub raw: Option<String>,
 }
 
 impl WorkflowError {
     fn new(code: &str, message: impl Into<String>) -> Self {
+        let message = message.into();
         Self {
             code: code.to_string(),
-            message: message.into(),
+            raw: Some(message.clone()),
+            message,
         }
     }
 
@@ -183,11 +186,20 @@ impl WorkflowError {
     }
 
     fn from_port(err: PortError) -> Self {
-        Self::new(&err.code, err.message)
+        let PortError { code, message, raw } = err;
+        Self {
+            code,
+            raw: Some(raw.unwrap_or_else(|| message.clone())),
+            message,
+        }
     }
 
     pub(crate) fn from_message(code: &str, message: impl Into<String>) -> Self {
         Self::new(code, message)
+    }
+
+    pub fn raw_message(&self) -> &str {
+        self.raw.as_deref().unwrap_or(&self.message)
     }
 }
 
@@ -1327,6 +1339,14 @@ impl VoiceWorkflow {
     }
 
     fn remember_error(&self, err: WorkflowError) {
+        let task_id = {
+            let state = self.state.lock().unwrap();
+            state
+                .session
+                .as_ref()
+                .map(|session| session.session_id.clone())
+        };
+        log_workflow_error(task_id.as_deref(), "WF.remember_error", &err);
         let mut state = self.state.lock().unwrap();
         state.last_error = Some(err);
     }
@@ -1768,6 +1788,14 @@ impl VoiceWorkflow {
     }
 
     fn mark_failed(&self, err: WorkflowError) {
+        let task_id = {
+            let state = self.state.lock().unwrap();
+            state
+                .session
+                .as_ref()
+                .map(|session| session.session_id.clone())
+        };
+        log_workflow_error(task_id.as_deref(), "WF.mark_failed", &err);
         let mut state = self.state.lock().unwrap();
         state.phase = WorkflowPhase::Failed;
         state.insert_previous_phase = None;
@@ -2084,6 +2112,24 @@ fn now_ms() -> i64 {
     }
 }
 
+fn log_workflow_error(task_id: Option<&str>, step_id: &str, err: &WorkflowError) {
+    if let Ok(dir) = data_dir::data_dir() {
+        crate::obs::event_err(
+            &dir,
+            task_id,
+            "Workflow",
+            step_id,
+            "workflow",
+            &err.code,
+            &err.message,
+            Some(serde_json::json!({
+                "raw": err.raw_message(),
+                "rendered": err.render(),
+            })),
+        );
+    }
+}
+
 fn ensure_toolchain_ready(runtime: &RuntimeState) -> WorkflowResult<()> {
     let tc = runtime.get_toolchain();
     if !tc.ready {
@@ -2135,6 +2181,23 @@ mod tests {
             "Speech recognition could not start. Check the selected microphone and speech recognition settings.",
         );
         assert!(!line.contains("E_ASR_FAILED"));
+    }
+
+    #[test]
+    fn workflow_error_preserves_port_error_raw_message() {
+        let port = PortError::from_message(
+            "E_PORT_DEFAULT",
+            "E_PORT_REAL: provider returned raw diagnostic",
+        );
+
+        let err = WorkflowError::from_port(port);
+
+        assert_eq!(err.code, "E_PORT_REAL");
+        assert_eq!(err.message, "E_PORT_REAL: provider returned raw diagnostic");
+        assert_eq!(
+            err.raw_message(),
+            "E_PORT_REAL: provider returned raw diagnostic"
+        );
     }
 
     #[test]
