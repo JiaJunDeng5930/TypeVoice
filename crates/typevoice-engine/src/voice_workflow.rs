@@ -417,7 +417,7 @@ impl VoiceWorkflow {
                     WorkflowError::new("E_WORKFLOW_SESSION_MISSING", "recording session missing")
                 })?;
                 if session.streaming_transcription {
-                    self.stop_streaming_record_transcribe(audio, mailbox)?;
+                    self.stop_streaming_record_transcribe(audio, streaming_actor, mailbox)?;
                     Ok(None)
                 } else {
                     self.prepare_stop_record_transcribe().map(Some)
@@ -504,8 +504,8 @@ impl VoiceWorkflow {
 
         match audio.start_recording(
             mailbox,
-            streaming_enabled.then_some(streaming_actor),
-            streaming_enabled.then_some(streaming_config),
+            None,
+            None,
             record_input_cache,
             Some(transcript_id.clone()),
         ) {
@@ -546,6 +546,7 @@ impl VoiceWorkflow {
     pub fn stop_streaming_record_transcribe(
         &self,
         audio: &RecordingRegistry,
+        streaming_actor: &TranscriptionActor,
         mailbox: &UiEventMailbox,
     ) -> WorkflowResult<()> {
         let session = self.begin_transcribing_current()?;
@@ -576,6 +577,21 @@ impl VoiceWorkflow {
             Some(consumed.record_elapsed_ms),
             None,
         ));
+        if let Err(e) =
+            streaming_actor.send_wav_file_and_finish(&session.session_id, &consumed.output_path)
+        {
+            let workflow_err = WorkflowError::new("E_STREAMING_TRANSCRIBE_SEND", e.to_string());
+            self.mark_failed(workflow_err.clone());
+            mailbox.send(UiEvent::stage_with_elapsed(
+                session.session_id,
+                "Transcribe",
+                UiEventStatus::Failed,
+                workflow_err.message.clone(),
+                None,
+                Some(workflow_err.code.clone()),
+            ));
+            return Err(workflow_err);
+        }
         Ok(())
     }
 

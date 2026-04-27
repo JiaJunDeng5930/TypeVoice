@@ -1,5 +1,6 @@
 use std::{
     collections::HashSet,
+    path::Path,
     sync::{mpsc, Arc, Mutex},
     time::Instant,
 };
@@ -235,6 +236,25 @@ impl TranscriptionActor {
                 task_id: task_id.to_string(),
             })
             .map_err(|e| anyhow!("E_STREAMING_ACTOR_SEND: {e}"))
+    }
+
+    pub fn send_wav_file_and_finish(&self, task_id: &str, input_path: &Path) -> Result<()> {
+        let pcm = read_pcm16_mono_16k_wav(input_path)?;
+        let mut sequence = 2_u64;
+        let chunk_bytes = pcm_bytes_for_ms(DOUBAO_CHUNK_MS);
+        if pcm.is_empty() {
+            self.send_audio_chunk(task_id, sequence, Vec::new(), true)?;
+            return self.finish_session(task_id);
+        }
+        let mut offset = 0_usize;
+        while offset < pcm.len() {
+            let end = (offset + chunk_bytes).min(pcm.len());
+            let is_last = end == pcm.len();
+            self.send_audio_chunk(task_id, sequence, pcm[offset..end].to_vec(), is_last)?;
+            sequence += 1;
+            offset = end;
+        }
+        self.finish_session(task_id)
     }
 
     pub fn cancel_session(&self, task_id: &str) -> Result<()> {
@@ -635,6 +655,54 @@ pub fn pcm_bytes_for_ms(ms: u64) -> usize {
     ((bytes_per_second * ms) / 1000) as usize
 }
 
+fn read_pcm16_mono_16k_wav(path: &Path) -> Result<Vec<u8>> {
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("read recorded wav failed: {}", path.display()))?;
+    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return Err(anyhow!("E_RECORD_WAV_INVALID: invalid wav header"));
+    }
+
+    let mut offset = 12_usize;
+    let mut fmt_ok = false;
+    let mut data = None;
+    while offset + 8 <= bytes.len() {
+        let id = &bytes[offset..offset + 4];
+        let size = u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap()) as usize;
+        let start = offset + 8;
+        let end = start
+            .checked_add(size)
+            .ok_or_else(|| anyhow!("E_RECORD_WAV_INVALID: wav chunk size overflow"))?;
+        if end > bytes.len() {
+            return Err(anyhow!("E_RECORD_WAV_INVALID: wav chunk out of bounds"));
+        }
+
+        if id == b"fmt " {
+            if size < 16 {
+                return Err(anyhow!("E_RECORD_WAV_INVALID: wav fmt chunk too short"));
+            }
+            let audio_format = u16::from_le_bytes(bytes[start..start + 2].try_into().unwrap());
+            let channels = u16::from_le_bytes(bytes[start + 2..start + 4].try_into().unwrap());
+            let sample_rate = u32::from_le_bytes(bytes[start + 4..start + 8].try_into().unwrap());
+            let bits = u16::from_le_bytes(bytes[start + 14..start + 16].try_into().unwrap());
+            fmt_ok = audio_format == 1
+                && channels == doubao_asr::PCM_CHANNELS
+                && sample_rate == doubao_asr::PCM_SAMPLE_RATE
+                && bits == doubao_asr::PCM_BITS;
+        } else if id == b"data" {
+            data = Some(bytes[start..end].to_vec());
+        }
+
+        offset = end + (size % 2);
+    }
+
+    if !fmt_ok {
+        return Err(anyhow!(
+            "E_RECORD_WAV_UNSUPPORTED: expected pcm_s16le mono 16000 Hz wav"
+        ));
+    }
+    data.ok_or_else(|| anyhow!("E_RECORD_WAV_INVALID: wav data chunk missing"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -647,6 +715,19 @@ mod tests {
     fn chunk_size_matches_pcm_duration() {
         assert_eq!(pcm_bytes_for_ms(200), 6_400);
         assert_eq!(pcm_bytes_for_ms(60_000), 1_920_000);
+    }
+
+    #[test]
+    fn reads_pcm_payload_from_recorded_wav() {
+        let path =
+            std::env::temp_dir().join(format!("typevoice-test-{}.wav", uuid::Uuid::new_v4()));
+        let pcm = vec![1_u8, 0, 2, 0, 3, 0, 4, 0];
+        std::fs::write(&path, test_wav_bytes(&pcm)).expect("wav writes");
+
+        let parsed = read_pcm16_mono_16k_wav(&path).expect("wav parses");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(parsed, pcm);
     }
 
     #[test]
@@ -755,5 +836,24 @@ mod tests {
                 .all(|event| event.status.as_deref() != Some("failed")),
             "unexpected failed event: {events:?}"
         );
+    }
+
+    fn test_wav_bytes(pcm: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(b"RIFF");
+        out.extend_from_slice(&(36_u32 + pcm.len() as u32).to_le_bytes());
+        out.extend_from_slice(b"WAVE");
+        out.extend_from_slice(b"fmt ");
+        out.extend_from_slice(&16_u32.to_le_bytes());
+        out.extend_from_slice(&1_u16.to_le_bytes());
+        out.extend_from_slice(&1_u16.to_le_bytes());
+        out.extend_from_slice(&16_000_u32.to_le_bytes());
+        out.extend_from_slice(&32_000_u32.to_le_bytes());
+        out.extend_from_slice(&2_u16.to_le_bytes());
+        out.extend_from_slice(&16_u16.to_le_bytes());
+        out.extend_from_slice(b"data");
+        out.extend_from_slice(&(pcm.len() as u32).to_le_bytes());
+        out.extend_from_slice(pcm);
+        out
     }
 }
