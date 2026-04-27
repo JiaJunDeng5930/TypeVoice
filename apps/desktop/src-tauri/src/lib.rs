@@ -896,6 +896,7 @@ pub fn run() {
             commands::workflow_command,
             commands::workflow_apply_event,
             commands::workflow_report_asr_completed,
+            commands::workflow_report_asr_empty,
             commands::workflow_report_asr_failed,
             commands::workflow_rewrite,
             commands::workflow_insert,

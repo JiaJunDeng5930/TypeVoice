@@ -9,9 +9,10 @@ use crate::transcription::{TranscribeFixtureRequest, TranscriptionResult, Transc
 use crate::transcription_actor::TranscriptionActor;
 use crate::ui_events::UiEventMailbox;
 use crate::voice_workflow::{
-    VoiceWorkflow, WorkflowApplyEventRequest, WorkflowAsrCompletedRequest, WorkflowCommandRequest,
-    WorkflowError, WorkflowInsertCompletedRequest, WorkflowRewriteCompletedRequest,
-    WorkflowTaskFailedRequest, WorkflowTextCommandRequest, WorkflowView,
+    VoiceWorkflow, WorkflowApplyEventRequest, WorkflowAsrCompletedRequest, WorkflowAsrEmptyRequest,
+    WorkflowCommandRequest, WorkflowError, WorkflowInsertCompletedRequest,
+    WorkflowRewriteCompletedRequest, WorkflowTaskFailedRequest, WorkflowTextCommandRequest,
+    WorkflowView,
 };
 use crate::{data_dir, RuntimeState};
 
@@ -27,6 +28,7 @@ pub fn command_names() -> &'static [&'static str] {
         "workflow_command",
         "workflow_apply_event",
         "workflow_report_asr_completed",
+        "workflow_report_asr_empty",
         "workflow_report_asr_failed",
         "workflow_rewrite",
         "workflow_insert",
@@ -141,13 +143,26 @@ pub fn workflow_report_asr_completed(
 }
 
 #[tauri::command]
+pub fn workflow_report_asr_empty(
+    workflow: State<'_, VoiceWorkflow>,
+    mailbox: State<'_, UiEventMailbox>,
+    req: WorkflowAsrEmptyRequest,
+) -> Result<WorkflowView, String> {
+    workflow
+        .report_asr_empty(&mailbox, req)
+        .map_err(render_workflow_error)
+}
+
+#[tauri::command]
 pub fn workflow_report_asr_failed(
     workflow: State<'_, VoiceWorkflow>,
+    audio: State<'_, RecordingRegistry>,
+    streaming_actor: State<'_, TranscriptionActor>,
     mailbox: State<'_, UiEventMailbox>,
     req: WorkflowTaskFailedRequest,
 ) -> Result<WorkflowView, String> {
     workflow
-        .report_asr_failed(&mailbox, req)
+        .report_asr_failed(&audio, &streaming_actor, &mailbox, req)
         .map_err(render_workflow_error)
 }
 
@@ -354,6 +369,7 @@ mod tests {
         assert!(names.contains(&"workflow_command"));
         assert!(names.contains(&"workflow_apply_event"));
         assert!(names.contains(&"workflow_report_asr_completed"));
+        assert!(names.contains(&"workflow_report_asr_empty"));
         assert!(names.contains(&"workflow_report_asr_failed"));
         assert!(names.contains(&"workflow_rewrite"));
         assert!(names.contains(&"workflow_insert"));

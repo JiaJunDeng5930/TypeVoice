@@ -318,7 +318,16 @@ impl ActorSession {
             self.text = text;
         }
         if self.text.trim().is_empty() {
-            return Err(anyhow!("E_ASR_EMPTY_TEXT: empty transcription"));
+            mailbox.send(UiEvent::stage_with_elapsed(
+                &self.task_id,
+                "Transcribe",
+                UiEventStatus::Completed,
+                "empty",
+                Some(self.started_at.elapsed().as_millis()),
+                None,
+            ));
+            mailbox.send(UiEvent::transcription_empty(&self.task_id));
+            return Ok(());
         }
         let elapsed = self.started_at.elapsed().as_millis();
         let result = TranscriptionResult::new(
@@ -783,6 +792,32 @@ mod tests {
         std::thread::sleep(Duration::from_millis(50));
 
         assert_no_failed_events(&rx);
+    }
+
+    #[test]
+    fn empty_streaming_finish_sends_empty_event_without_failure() {
+        let (mailbox, rx) = UiEventMailbox::for_test();
+        let actor = TranscriptionActor::new(mailbox);
+
+        actor
+            .start_session("task-1", remote_streaming_config())
+            .expect("start succeeds");
+        actor.finish_session("task-1").expect("finish sends");
+        std::thread::sleep(Duration::from_millis(50));
+
+        let events: Vec<UiEvent> = rx.try_iter().collect();
+        assert!(
+            events
+                .iter()
+                .any(|event| event.kind == "transcription.empty"),
+            "expected empty transcription event: {events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| event.status.as_deref() != Some("failed")),
+            "unexpected failed event: {events:?}"
+        );
     }
 
     fn remote_streaming_config() -> StreamingSessionConfig {

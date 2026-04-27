@@ -4,7 +4,7 @@ import {
   type TauriGateway,
 } from "../infra/runtimePorts";
 import { createBackendClient, type BackendClient } from "../infra/backendClient";
-import { buildDiagnostic, userMessageFromDiagnosticLine } from "../domain/diagnostic";
+import { buildDiagnostic, buildUiEventDiagnostic, userMessageFromDiagnostic } from "../domain/diagnostic";
 import type {
   RuntimeToolchainStatus,
   Settings,
@@ -103,6 +103,7 @@ export function MainScreen({
           return;
         }
         if (ev.status === "failed") {
+          const diag = buildUiEventDiagnostic(ev, "Speech recognition failed");
           if (ev.stage === "Transcribe") {
             const transcriptId = optionalString(ev.taskId);
             if (transcriptId) {
@@ -119,16 +120,27 @@ export function MainScreen({
               }
             }
           }
-          const title = ev.stage === "Rewrite"
-            ? "Text improvement failed"
-            : ev.stage === "Insert"
-              ? "Text could not be pasted"
-              : "Speech recognition failed";
-          pushToast(title, "danger");
+          pushToast(diag.title, "danger");
           return;
         }
         if (ev.status === "cancelled") {
           pushToast("CANCELLED", "default");
+          return;
+        }
+        if (ev.kind === "transcription.empty") {
+          const transcriptId = optionalString(ev.taskId);
+          if (transcriptId) {
+            try {
+              const next = await client.workflowReportAsrEmpty({ transcriptId });
+              setWorkflow(next);
+            } catch (err) {
+              const diag = buildDiagnostic(err, "WORKFLOW EVENT FAILED");
+              pushToast(diag.title, "danger");
+              return;
+            }
+          }
+          setLiveTranscript("");
+          pushToast("未检测到语音", "default");
           return;
         }
         if (ev.kind === "transcription.completed") {
@@ -208,7 +220,7 @@ export function MainScreen({
   const hint = primaryActionLabel(workflow.primaryLabel || "START");
   const streamText = phase === "recording" || phase === "transcribing" ? liveTranscript : "";
   const statusLabel = phase === "idle" ? "Ready" : hint;
-  const diagnosticMessage = userMessageFromDiagnosticLine(workflow.diagnosticLine);
+  const diagnosticMessage = userMessageFromDiagnostic(workflow.diagnosticCode, workflow.diagnosticLine);
 
   return (
     <div className="pageSurface mainSurface">

@@ -130,6 +130,12 @@ pub struct WorkflowAsrCompletedRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WorkflowAsrEmptyRequest {
+    pub transcript_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkflowTaskFailedRequest {
     pub transcript_id: String,
     pub code: String,
@@ -627,6 +633,18 @@ impl VoiceWorkflow {
         {
             Ok(result) => result,
             Err(err) if err.code == "E_TASK_STALE" => return Ok(None),
+            Err(err) if is_empty_asr_failure(&err.code, &err.message) => {
+                self.complete_empty_transcription(&session.session_id)?;
+                self.emit_state(mailbox);
+                mailbox.send(UiEvent::stage(
+                    &session.session_id,
+                    "Transcribe",
+                    UiEventStatus::Completed,
+                    "empty",
+                ));
+                mailbox.send(UiEvent::transcription_empty(&session.session_id));
+                return Ok(None);
+            }
             Err(err) => {
                 let workflow_err = WorkflowError::from_port(err);
                 self.mark_failed(workflow_err.clone());
@@ -641,6 +659,20 @@ impl VoiceWorkflow {
                 return Err(workflow_err);
             }
         };
+        if result.asr_text.trim().is_empty() {
+            self.complete_empty_transcription(&result.transcript_id)?;
+            self.emit_state(mailbox);
+            mailbox.send(UiEvent::stage_with_elapsed(
+                &result.transcript_id,
+                "Transcribe",
+                UiEventStatus::Completed,
+                "empty",
+                Some(result.metrics.asr_ms),
+                None,
+            ));
+            mailbox.send(UiEvent::transcription_empty(&result.transcript_id));
+            return Ok(None);
+        }
         mailbox.send(UiEvent::stage_with_elapsed(
             &result.transcript_id,
             "Transcribe",
@@ -671,10 +703,12 @@ impl VoiceWorkflow {
             ));
         }
         if req.text.trim().is_empty() {
-            return Err(WorkflowError::new(
-                "E_WORKFLOW_ASR_TEXT_MISSING",
-                "text is required",
-            ));
+            return self.report_asr_empty(
+                mailbox,
+                WorkflowAsrEmptyRequest {
+                    transcript_id: transcript_id.clone(),
+                },
+            );
         }
         self.ensure_transcribing_task(&transcript_id)?;
         let result = TranscriptionResult::new(transcript_id, req.text, req.metrics);
@@ -685,12 +719,37 @@ impl VoiceWorkflow {
         Ok(view)
     }
 
+    pub fn report_asr_empty(
+        &self,
+        mailbox: &UiEventMailbox,
+        req: WorkflowAsrEmptyRequest,
+    ) -> WorkflowResult<WorkflowView> {
+        let transcript_id = req.transcript_id.trim().to_string();
+        if transcript_id.is_empty() {
+            return Err(WorkflowError::new(
+                "E_WORKFLOW_ASR_TRANSCRIPT_ID_MISSING",
+                "transcript_id is required",
+            ));
+        }
+        let snapshot = self.snapshot();
+        if snapshot.phase == WorkflowPhase::Idle && snapshot.session.is_none() {
+            return Ok(self.view());
+        }
+        self.ensure_transcribing_task(&transcript_id)?;
+        self.complete_empty_transcription(&transcript_id)?;
+        let view = self.view();
+        self.emit_state(mailbox);
+        Ok(view)
+    }
+
     pub fn report_asr_failed(
         &self,
+        audio: &RecordingRegistry,
+        streaming_actor: &TranscriptionActor,
         mailbox: &UiEventMailbox,
         req: WorkflowTaskFailedRequest,
     ) -> WorkflowResult<WorkflowView> {
-        self.ensure_transcribing_task(&req.transcript_id)?;
+        self.ensure_asr_report_task(&req.transcript_id)?;
         let code = req.code.trim();
         if code.is_empty() {
             return Err(WorkflowError::new(
@@ -698,8 +757,25 @@ impl VoiceWorkflow {
                 "code is required",
             ));
         }
+        if is_empty_asr_failure(code, &req.message) {
+            return self.report_asr_empty(
+                mailbox,
+                WorkflowAsrEmptyRequest {
+                    transcript_id: req.transcript_id,
+                },
+            );
+        }
+        let snapshot = self.snapshot();
         let err = WorkflowError::new(code, req.message);
         self.mark_failed(err);
+        if snapshot.phase == WorkflowPhase::Recording {
+            if let Some(session) = snapshot.session {
+                audio
+                    .abort_recording(Some(session.recording_session_id.clone()))
+                    .map_err(|err| WorkflowError::new(&err.code, err.message))?;
+                let _ = streaming_actor.cancel_session(&session.session_id);
+            }
+        }
         let view = self.view();
         self.emit_state(mailbox);
         Ok(view)
@@ -1309,6 +1385,20 @@ impl VoiceWorkflow {
         )
     }
 
+    fn ensure_asr_report_task(&self, task_id: &str) -> WorkflowResult<()> {
+        let snapshot = self.snapshot();
+        if !matches!(
+            snapshot.phase,
+            WorkflowPhase::Recording | WorkflowPhase::Transcribing
+        ) {
+            return Err(WorkflowError::new(
+                "E_WORKFLOW_ASR_REPORT_INVALID_PHASE",
+                format!("workflow phase is {}", snapshot.phase.as_str()),
+            ));
+        }
+        self.ensure_active_task(task_id)
+    }
+
     fn ensure_rewriting_task(&self, task_id: &str) -> WorkflowResult<()> {
         self.ensure_phase_task(
             WorkflowPhase::Rewriting,
@@ -1424,6 +1514,7 @@ impl VoiceWorkflow {
         Ok(())
     }
 
+    #[cfg(test)]
     fn begin_transcribing(&self, recording_session_id: &str) -> WorkflowResult<WorkflowSession> {
         let mut state = self.state.lock().unwrap();
         if state.phase != WorkflowPhase::Recording {
@@ -1491,6 +1582,35 @@ impl VoiceWorkflow {
         state.transcription = Some(result);
         state.last_created_at_ms = Some(now_ms());
         state.insert_previous_phase = None;
+        state.last_error = None;
+        Ok(())
+    }
+
+    fn complete_empty_transcription(&self, transcript_id: &str) -> WorkflowResult<()> {
+        let mut state = self.state.lock().unwrap();
+        if state.phase != WorkflowPhase::Transcribing {
+            return Err(WorkflowError::new(
+                "E_WORKFLOW_INVALID_PHASE",
+                "workflow is not transcribing",
+            ));
+        }
+        let session_id = state
+            .session
+            .as_ref()
+            .map(|session| session.session_id.as_str())
+            .ok_or_else(|| WorkflowError::new("E_WORKFLOW_SESSION_MISSING", "session missing"))?;
+        if session_id != transcript_id {
+            return Err(WorkflowError::new(
+                "E_WORKFLOW_TRANSCRIPT_MISMATCH",
+                "empty transcription does not match active session",
+            ));
+        }
+        state.phase = WorkflowPhase::Idle;
+        state.session = None;
+        state.transcription = None;
+        state.rewrite = None;
+        state.insert_previous_phase = None;
+        state.last_created_at_ms = None;
         state.last_error = None;
         Ok(())
     }
@@ -1934,6 +2054,16 @@ fn last_result_from_snapshot(snapshot: &WorkflowSnapshot) -> Option<WorkflowActi
     })
 }
 
+fn is_empty_asr_failure(code: &str, message: &str) -> bool {
+    matches!(
+        code,
+        "E_ASR_EMPTY_TEXT" | "E_REMOTE_ASR_EMPTY_TEXT" | "E_WORKFLOW_ASR_TEXT_MISSING"
+    ) || message.contains("Empty ASR text")
+        || message.contains("empty transcription")
+        || message.contains("merged text is empty")
+        || message.contains("response.text is missing or empty")
+}
+
 fn normalize_optional_task_id(task_id: Option<String>) -> WorkflowResult<Option<String>> {
     let raw = match task_id {
         Some(v) => v.trim().to_string(),
@@ -2290,6 +2420,8 @@ mod tests {
     #[test]
     fn report_failed_event_rejects_mismatched_task_id() {
         let (mailbox, _rx) = UiEventMailbox::for_test();
+        let audio = RecordingRegistry::new();
+        let actor = TranscriptionActor::new(mailbox.clone());
         let workflow = VoiceWorkflow::new();
         workflow
             .open_recording_for_test("task-1", "recording-1")
@@ -2300,6 +2432,8 @@ mod tests {
 
         let err = workflow
             .report_asr_failed(
+                &audio,
+                &actor,
                 &mailbox,
                 WorkflowTaskFailedRequest {
                     transcript_id: "task-2".to_string(),
@@ -2311,6 +2445,63 @@ mod tests {
 
         assert_eq!(err.code, "E_WORKFLOW_TRANSCRIPT_MISMATCH");
         assert_eq!(workflow.phase(), WorkflowPhase::Transcribing);
+    }
+
+    #[test]
+    fn report_failed_event_accepts_recording_phase_for_active_task() {
+        let (mailbox, _rx) = UiEventMailbox::for_test();
+        let audio = RecordingRegistry::new();
+        let actor = TranscriptionActor::new(mailbox.clone());
+        let workflow = VoiceWorkflow::new();
+        workflow
+            .open_recording_for_test("task-1", "recording-1")
+            .expect("recording starts");
+
+        let view = workflow
+            .report_asr_failed(
+                &audio,
+                &actor,
+                &mailbox,
+                WorkflowTaskFailedRequest {
+                    transcript_id: "task-1".to_string(),
+                    code: "E_DOUBAO_ASR_CREDENTIALS_MISSING".to_string(),
+                    message: "missing credentials".to_string(),
+                },
+            )
+            .expect("recording phase ASR failure is accepted");
+
+        assert_eq!(view.phase, "failed");
+        assert_eq!(
+            view.diagnostic_code.as_deref(),
+            Some("E_DOUBAO_ASR_CREDENTIALS_MISSING")
+        );
+        assert_eq!(workflow.phase(), WorkflowPhase::Failed);
+    }
+
+    #[test]
+    fn report_empty_event_clears_transcribing_without_failure() {
+        let (mailbox, _rx) = UiEventMailbox::for_test();
+        let workflow = VoiceWorkflow::new();
+        workflow
+            .open_recording_for_test("task-1", "recording-1")
+            .expect("recording starts");
+        workflow
+            .begin_transcribing_for_test("recording-1")
+            .expect("transcribing starts");
+
+        let view = workflow
+            .report_asr_empty(
+                &mailbox,
+                WorkflowAsrEmptyRequest {
+                    transcript_id: "task-1".to_string(),
+                },
+            )
+            .expect("empty transcription is accepted");
+
+        assert_eq!(view.phase, "idle");
+        assert_eq!(view.diagnostic_code.as_deref(), None);
+        assert_eq!(view.last_text, "");
+        assert_eq!(workflow.phase(), WorkflowPhase::Idle);
     }
 
     #[test]

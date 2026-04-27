@@ -295,10 +295,6 @@ async fn transcribe_remote_inner(
     }
 
     let text = merge_slices(&parts);
-    if text.trim().is_empty() {
-        return Err(err("E_REMOTE_ASR_EMPTY_TEXT", "merged text is empty"));
-    }
-
     let elapsed_ms = started.elapsed().as_millis() as i64;
     let audio_seconds = wav.duration_seconds;
     let rtf = (elapsed_ms as f64 / 1000.0) / audio_seconds.max(1e-6);
@@ -369,12 +365,6 @@ async fn transcribe_one_slice(
     let parsed: RemoteResp = serde_json::from_str(&body)
         .map_err(|e| err("E_REMOTE_ASR_PARSE", format!("invalid json response: {e}")))?;
     let text = parsed.text.unwrap_or_default().trim().to_string();
-    if text.is_empty() {
-        return Err(err(
-            "E_REMOTE_ASR_EMPTY_TEXT",
-            "response.text is missing or empty",
-        ));
-    }
     Ok((slice.index, text))
 }
 

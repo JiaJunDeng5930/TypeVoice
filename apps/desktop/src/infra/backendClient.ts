@@ -5,6 +5,7 @@ import type {
   UiEvent,
   WorkflowApplyEventRequest,
   WorkflowAsrCompletedRequest,
+  WorkflowAsrEmptyRequest,
   WorkflowCommand,
   WorkflowTaskFailedRequest,
   WorkflowTextCommandRequest,
@@ -21,6 +22,7 @@ export type BackendClient = {
   }): Promise<WorkflowView>;
   workflowApplyEvent(req: WorkflowApplyEventRequest): Promise<WorkflowView>;
   workflowReportAsrCompleted(req: WorkflowAsrCompletedRequest): Promise<WorkflowView>;
+  workflowReportAsrEmpty(req: WorkflowAsrEmptyRequest): Promise<WorkflowView>;
   workflowReportAsrFailed(req: WorkflowTaskFailedRequest): Promise<WorkflowView>;
   workflowRewrite(req: WorkflowTextCommandRequest): Promise<RewriteResult>;
   workflowInsert(req: WorkflowTextCommandRequest): Promise<InsertResult>;
@@ -52,6 +54,9 @@ export function createBackendClient(gateway: TauriGateway = defaultTauriGateway)
     },
     workflowReportAsrCompleted(req) {
       return gateway.invoke<WorkflowView>("workflow_report_asr_completed", { req });
+    },
+    workflowReportAsrEmpty(req) {
+      return gateway.invoke<WorkflowView>("workflow_report_asr_empty", { req });
     },
     workflowReportAsrFailed(req) {
       return gateway.invoke<WorkflowView>("workflow_report_asr_failed", { req });

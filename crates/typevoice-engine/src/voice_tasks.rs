@@ -145,6 +145,18 @@ async fn run_stop_record_transcribe(
         .await
     {
         Ok(result) => {
+            if result.asr_text.trim().is_empty() {
+                mailbox.send(UiEvent::stage_with_elapsed(
+                    &result.transcript_id,
+                    "Transcribe",
+                    UiEventStatus::Completed,
+                    "empty",
+                    Some(result.metrics.asr_ms),
+                    None,
+                ));
+                mailbox.send(UiEvent::transcription_empty(&result.transcript_id));
+                return;
+            }
             mailbox.send(UiEvent::stage_with_elapsed(
                 &result.transcript_id,
                 "Transcribe",

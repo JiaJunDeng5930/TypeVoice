@@ -185,6 +185,7 @@ const browserPreviewGateway: TauriGateway = {
       case "workflow_command":
       case "workflow_apply_event":
       case "workflow_report_asr_completed":
+      case "workflow_report_asr_empty":
       case "workflow_report_asr_failed":
       case "workflow_report_rewrite_completed":
       case "workflow_report_rewrite_failed":

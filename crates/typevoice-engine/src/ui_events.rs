@@ -118,6 +118,15 @@ impl UiEvent {
         Self::completed_with_effect(task_id, kind, message, payload, "displayOnly")
     }
 
+    pub fn transcription_empty(task_id: impl Into<String>) -> Self {
+        Self::completed(
+            task_id,
+            "transcription.empty",
+            "no speech detected",
+            serde_json::json!({}),
+        )
+    }
+
     pub fn state_completed(
         task_id: impl Into<String>,
         kind: impl Into<String>,

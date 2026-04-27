@@ -40,6 +40,10 @@ export type WorkflowAsrCompletedRequest = {
   metrics: TranscriptionMetrics;
 };
 
+export type WorkflowAsrEmptyRequest = {
+  transcriptId: string;
+};
+
 export type WorkflowTaskFailedRequest = {
   transcriptId: string;
   code: string;
