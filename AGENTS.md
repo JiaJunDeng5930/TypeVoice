@@ -2,6 +2,12 @@
 
 你当前的环境是 WSL2，host 为 Win11
 
+Windows Rust 工具链位于 D 盘：
+
+- WSL 路径：`/mnt/d/Rust/.cargo/bin/cargo.exe`
+- Windows 路径：`D:\Rust\.cargo\bin\cargo.exe`
+- 若当前 shell 找不到 `cargo`，在 WSL 中使用 `/mnt/d/Rust/.cargo/bin/cargo.exe` 执行 Rust 命令；在 PowerShell 中使用 `D:\Rust\.cargo\bin\cargo.exe`。
+
 # Repository Guidelines
 
 ## Project Structure & Module Organization
