@@ -123,29 +123,6 @@ fn parse_default_role(settings: &Settings) -> Result<DefaultRole, String> {
     }
 }
 
-fn collapse_ws_lower(v: &str) -> String {
-    v.split_whitespace()
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
-}
-
-fn match_priority(endpoint_name: &str, candidate_name: &str) -> Option<u8> {
-    if endpoint_name.eq_ignore_ascii_case(candidate_name) {
-        return Some(0);
-    }
-    let lhs = collapse_ws_lower(endpoint_name);
-    let rhs = collapse_ws_lower(candidate_name);
-    if lhs == rhs {
-        return Some(1);
-    }
-    if lhs.contains(&rhs) || rhs.contains(&lhs) {
-        return Some(2);
-    }
-    None
-}
-
 fn normalize_record_input_spec(raw: &str) -> String {
     let trimmed = raw.trim();
     if let Some(rest) = trimmed.strip_prefix("audio=") {
@@ -174,7 +151,7 @@ fn endpoint_wave_guid_marker(endpoint_id: &str) -> Option<String> {
     if guid.is_empty() {
         return None;
     }
-    Some(format!("wave_{{{}}}", guid.to_ascii_lowercase()))
+    Some(format!("wave_{{{}}}", guid.to_ascii_uppercase()))
 }
 
 fn push_resolution_log(
@@ -259,35 +236,6 @@ fn list_dshow_audio_devices(ffmpeg: &Path) -> Result<Vec<DshowDevice>, String> {
     Ok(devices)
 }
 
-fn read_last_stderr_line_from_bytes(stderr: &[u8]) -> Option<String> {
-    let buf = String::from_utf8_lossy(stderr);
-    buf.lines()
-        .rev()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map(|line| line.to_string())
-}
-
-fn probe_record_input_spec(ffmpeg: &Path, spec: &str) -> Result<(), String> {
-    let null_sink = if cfg!(windows) { "NUL" } else { "-" };
-    let output = std::process::Command::new(ffmpeg)
-        .args(["-hide_banner", "-loglevel", "error", "-f", "dshow", "-i"])
-        .arg(spec)
-        .args(["-t", "0.15", "-f", "null", null_sink])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .no_console()
-        .output()
-        .map_err(|e| format!("probe spawn failed: {e}"))?;
-    if output.status.success() {
-        return Ok(());
-    }
-    let tail = read_last_stderr_line_from_bytes(&output.stderr)
-        .unwrap_or_else(|| "probe failed without stderr".to_string());
-    Err(format!("{tail} (status={})", output.status))
-}
-
 fn score_audio_device_name(name: &str) -> i32 {
     let lower = name.to_lowercase();
     let mut score = 0_i32;
@@ -320,7 +268,6 @@ fn score_audio_device_name(name: &str) -> i32 {
 }
 
 fn attempt_auto_select(
-    ffmpeg: &Path,
     devices: &[DshowDevice],
     strategy_used: InputStrategy,
 ) -> Result<ResolvedRecordInput, String> {
@@ -343,123 +290,39 @@ fn attempt_auto_select(
         .collect();
     candidates.sort_by(|a, b| b.score.cmp(&a.score).then(a.order.cmp(&b.order)));
 
-    let mut failures: Vec<String> = Vec::new();
-    for cand in candidates {
-        match probe_record_input_spec(ffmpeg, cand.spec.as_str()) {
-            Ok(()) => {
-                return Ok(ResolvedRecordInput {
-                    spec: normalize_record_input_spec(cand.spec.as_str()),
-                    strategy_used: strategy_used.as_str().to_string(),
-                    endpoint_id: None,
-                    friendly_name: Some(cand.display_name),
-                    resolved_by: "auto_select_probe".to_string(),
-                    resolution_log: Vec::new(),
-                });
-            }
-            Err(e) => failures.push(format!("{} => {e}", cand.display_name)),
-        }
-    }
-    let summary = failures
+    let cand = candidates
         .into_iter()
-        .take(3)
-        .collect::<Vec<String>>()
-        .join(" | ");
-    Err(format!(
-        "E_RECORD_INPUT_AUTO_RESOLVE_FAILED: no probeable dshow audio input ({summary})"
-    ))
+        .next()
+        .ok_or_else(|| "E_RECORD_INPUT_AUTO_RESOLVE_FAILED: no dshow audio input".to_string())?;
+    Ok(ResolvedRecordInput {
+        spec: normalize_record_input_spec(cand.spec.as_str()),
+        strategy_used: strategy_used.as_str().to_string(),
+        endpoint_id: None,
+        friendly_name: Some(cand.display_name),
+        resolved_by: "auto_select_ranked".to_string(),
+        resolution_log: Vec::new(),
+    })
 }
 
-fn endpoint_to_dshow_spec(
-    ffmpeg: &Path,
-    endpoint: &AudioEndpointInfo,
-    devices: &[DshowDevice],
-) -> Result<(String, String), String> {
-    // Prefer endpoint-ID GUID -> dshow alternative name mapping.
-    // This gives deterministic matching when multiple devices share similar names.
-    if let Some(marker) = endpoint_wave_guid_marker(endpoint.endpoint_id.as_str()) {
-        let mut guid_failures: Vec<String> = Vec::new();
-        let mut guid_matched = false;
-        for d in devices {
-            let Some(alt) = d.alternative_name.as_deref() else {
-                continue;
-            };
-            if !alt.to_ascii_lowercase().contains(marker.as_str()) {
-                continue;
-            }
-            guid_matched = true;
-            let spec = normalize_record_input_spec(format!("audio={alt}").as_str());
-            match probe_record_input_spec(ffmpeg, spec.as_str()) {
-                Ok(()) => return Ok((spec, "endpoint_guid_alt".to_string())),
-                Err(e) => guid_failures.push(format!("{alt} => {e}")),
-            }
-        }
-        if guid_matched {
-            let summary = guid_failures
-                .into_iter()
-                .take(3)
-                .collect::<Vec<String>>()
-                .join(" | ");
-            return Err(format!(
-                "E_RECORD_INPUT_MAP_FAILED: endpoint GUID matched dshow alt but probe failed ({summary})"
-            ));
-        }
-    }
-
-    let mut ranked: Vec<(u8, usize)> = Vec::new();
-    for (idx, d) in devices.iter().enumerate() {
-        let mut best: Option<u8> = match_priority(endpoint.friendly_name.as_str(), d.name.as_str());
-        if let Some(alt) = d.alternative_name.as_deref() {
-            if let Some(p) = match_priority(endpoint.friendly_name.as_str(), alt) {
-                best = Some(best.map(|old| old.min(p)).unwrap_or(p));
-            }
-        }
-        if let Some(priority) = best {
-            ranked.push((priority, idx));
-        }
-    }
-    if ranked.is_empty() {
-        return Err(format!(
-            "E_RECORD_INPUT_MAP_FAILED: no dshow device matched endpoint friendly name=\"{}\"",
+fn endpoint_to_dshow_spec(endpoint: &AudioEndpointInfo) -> Result<(String, String), String> {
+    let marker = endpoint_wave_guid_marker(endpoint.endpoint_id.as_str()).ok_or_else(|| {
+        format!(
+            "E_RECORD_INPUT_MAP_FAILED: endpoint id has no wave GUID, friendly name=\"{}\"",
             endpoint.friendly_name
-        ));
-    }
-    ranked.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
-
-    let mut failures = Vec::new();
-    for (_, idx) in ranked {
-        let d = &devices[idx];
-        let mut targets = Vec::new();
-        if let Some(alt) = d.alternative_name.as_deref() {
-            targets.push(alt.to_string());
-        }
-        targets.push(d.name.clone());
-        targets.dedup();
-        for target in targets {
-            let spec = normalize_record_input_spec(format!("audio={target}").as_str());
-            match probe_record_input_spec(ffmpeg, spec.as_str()) {
-                Ok(()) => return Ok((spec, "friendly_name_map".to_string())),
-                Err(e) => failures.push(format!("{target} => {e}")),
-            }
-        }
-    }
-    let summary = failures
-        .into_iter()
-        .take(3)
-        .collect::<Vec<String>>()
-        .join(" | ");
-    Err(format!(
-        "E_RECORD_INPUT_MAP_FAILED: matched endpoint but probe failed ({summary})"
-    ))
+        )
+    })?;
+    let spec = normalize_record_input_spec(
+        format!("audio=@device_cm_{{33D9A762-90C8-11D0-BD43-00A0C911CE86}}\\{marker}").as_str(),
+    );
+    Ok((spec, "endpoint_guid".to_string()))
 }
 
 fn attempt_follow_default(
-    ffmpeg: &Path,
     role: DefaultRole,
-    devices: &[DshowDevice],
     strategy_used: InputStrategy,
 ) -> Result<ResolvedRecordInput, String> {
     let endpoint = audio_devices_windows::get_default_capture_endpoint(role.to_windows_role())?;
-    let (spec, resolved_by) = endpoint_to_dshow_spec(ffmpeg, &endpoint, devices)?;
+    let (spec, resolved_by) = endpoint_to_dshow_spec(&endpoint)?;
     Ok(ResolvedRecordInput {
         spec,
         strategy_used: strategy_used.as_str().to_string(),
@@ -471,13 +334,11 @@ fn attempt_follow_default(
 }
 
 fn attempt_fixed(
-    ffmpeg: &Path,
     endpoint_id: &str,
-    devices: &[DshowDevice],
     strategy_used: InputStrategy,
 ) -> Result<ResolvedRecordInput, String> {
     let endpoint = audio_devices_windows::get_capture_endpoint_by_id(endpoint_id)?;
-    let (spec, resolved_by) = endpoint_to_dshow_spec(ffmpeg, &endpoint, devices)?;
+    let (spec, resolved_by) = endpoint_to_dshow_spec(&endpoint)?;
     Ok(ResolvedRecordInput {
         spec,
         strategy_used: strategy_used.as_str().to_string(),
@@ -488,7 +349,7 @@ fn attempt_fixed(
     })
 }
 
-fn attempt_last_working(settings: &Settings, ffmpeg: &Path) -> Result<ResolvedRecordInput, String> {
+fn attempt_last_working(settings: &Settings) -> Result<ResolvedRecordInput, String> {
     let raw = settings
         .record_last_working_dshow_spec
         .as_deref()
@@ -505,8 +366,6 @@ fn attempt_last_working(settings: &Settings, ffmpeg: &Path) -> Result<ResolvedRe
             "E_RECORD_INPUT_LAST_WORKING_MISSING: no last working dshow spec".to_string()
         })?;
     let spec = normalize_record_input_spec(raw);
-    probe_record_input_spec(ffmpeg, spec.as_str())
-        .map_err(|e| format!("E_RECORD_INPUT_LAST_WORKING_FAILED: {e}"))?;
     Ok(ResolvedRecordInput {
         spec,
         strategy_used: "last_working".to_string(),
@@ -575,6 +434,27 @@ fn build_resolve_failed(
     )
 }
 
+fn load_dshow_devices_for_auto(
+    ffmpeg: &Path,
+    decision_logs: &mut Vec<ResolveLogEntry>,
+) -> Result<Vec<DshowDevice>, String> {
+    match list_dshow_audio_devices(ffmpeg) {
+        Ok(v) => {
+            push_resolution_log(
+                decision_logs,
+                "dshow.list_devices",
+                "ok",
+                format!("count={}", v.len()),
+            );
+            Ok(v)
+        }
+        Err(e) => {
+            push_resolution_log(decision_logs, "dshow.list_devices", "fail", e.as_str());
+            Err(e)
+        }
+    }
+}
+
 pub fn resolve_record_input_for_recording(
     data_dir: &Path,
     ffmpeg_cmd: &str,
@@ -614,24 +494,6 @@ pub fn resolve_record_input_for_recording(
         ),
     );
 
-    let dshow_devices = match list_dshow_audio_devices(ffmpeg) {
-        Ok(v) => {
-            push_resolution_log(
-                &mut decision_logs,
-                "dshow.list_devices",
-                "ok",
-                format!("count={}", v.len()),
-            );
-            v
-        }
-        Err(e) => {
-            push_resolution_log(&mut decision_logs, "dshow.list_devices", "fail", e.as_str());
-            return Err(format!(
-                "{e}; resolution_log={}",
-                summarize_resolution_log(&decision_logs)
-            ));
-        }
-    };
     let mut errors = Vec::new();
 
     let mut resolved = match strategy {
@@ -653,9 +515,9 @@ pub fn resolve_record_input_for_recording(
                     &mut decision_logs,
                     "fixed.try",
                     "start",
-                    "attempt fixed endpoint mapping and probe",
+                    "attempt fixed endpoint mapping",
                 );
-                match attempt_fixed(ffmpeg, id, &dshow_devices, strategy) {
+                match attempt_fixed(id, strategy) {
                     Ok(v) => {
                         push_resolution_log(
                             &mut decision_logs,
@@ -699,7 +561,7 @@ pub fn resolve_record_input_for_recording(
                     "start",
                     format!("attempt role={}", role.as_str()),
                 );
-                match attempt_follow_default(ffmpeg, role, &dshow_devices, strategy) {
+                match attempt_follow_default(role, strategy) {
                     Ok(v) => {
                         push_resolution_log(
                             &mut decision_logs,
@@ -715,7 +577,7 @@ pub fn resolve_record_input_for_recording(
                             &mut decision_logs,
                             "default.fallback_to_auto",
                             "yes",
-                            "default endpoint mapping/probe failed",
+                            "default endpoint mapping failed",
                         );
                         errors.push(e);
                     }
@@ -728,7 +590,9 @@ pub fn resolve_record_input_for_recording(
                     "start",
                     "attempt auto_select candidates",
                 );
-                match attempt_auto_select(ffmpeg, &dshow_devices, strategy) {
+                match load_dshow_devices_for_auto(ffmpeg, &mut decision_logs)
+                    .and_then(|devices| attempt_auto_select(&devices, strategy))
+                {
                     Ok(v) => {
                         push_resolution_log(
                             &mut decision_logs,
@@ -754,7 +618,7 @@ pub fn resolve_record_input_for_recording(
                 "start",
                 format!("attempt role={}", role.as_str()),
             );
-            match attempt_follow_default(ffmpeg, role, &dshow_devices, strategy) {
+            match attempt_follow_default(role, strategy) {
                 Ok(v) => {
                     push_resolution_log(
                         &mut decision_logs,
@@ -770,7 +634,7 @@ pub fn resolve_record_input_for_recording(
                         &mut decision_logs,
                         "default.fallback_to_last_working",
                         "yes",
-                        "default endpoint mapping/probe failed",
+                        "default endpoint mapping failed",
                     );
                     errors.push(e);
                 }
@@ -782,7 +646,7 @@ pub fn resolve_record_input_for_recording(
                     "start",
                     "attempt cached last_working spec",
                 );
-                match attempt_last_working(&settings, ffmpeg) {
+                match attempt_last_working(&settings) {
                     Ok(v) => {
                         push_resolution_log(
                             &mut decision_logs,
@@ -803,7 +667,7 @@ pub fn resolve_record_input_for_recording(
                             &mut decision_logs,
                             "last_working.fallback_to_auto",
                             "yes",
-                            "last_working probe failed",
+                            "last_working spec failed",
                         );
                         errors.push(e);
                     }
@@ -816,7 +680,9 @@ pub fn resolve_record_input_for_recording(
                     "start",
                     "attempt auto_select candidates",
                 );
-                match attempt_auto_select(ffmpeg, &dshow_devices, strategy) {
+                match load_dshow_devices_for_auto(ffmpeg, &mut decision_logs)
+                    .and_then(|devices| attempt_auto_select(&devices, strategy))
+                {
                     Ok(v) => {
                         push_resolution_log(
                             &mut decision_logs,
@@ -841,7 +707,13 @@ pub fn resolve_record_input_for_recording(
                 "start",
                 "attempt auto_select candidates",
             );
-            attempt_auto_select(ffmpeg, &dshow_devices, strategy).map_err(|e| {
+            let dshow_devices =
+                load_dshow_devices_for_auto(ffmpeg, &mut decision_logs).map_err(|e| {
+                    push_resolution_log(&mut decision_logs, "auto.try", "fail", e.as_str());
+                    errors.push(e);
+                    build_resolve_failed(strategy, &errors, &decision_logs)
+                })?;
+            attempt_auto_select(&dshow_devices, strategy).map_err(|e| {
                 push_resolution_log(&mut decision_logs, "auto.try", "fail", e.as_str());
                 errors.push(e);
                 build_resolve_failed(strategy, &errors, &decision_logs)
@@ -921,8 +793,8 @@ pub fn default_role() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        collapse_ws_lower, endpoint_wave_guid_marker, match_priority,
-        normalize_default_role_for_settings, normalize_strategy_for_settings,
+        endpoint_wave_guid_marker, normalize_default_role_for_settings,
+        normalize_strategy_for_settings,
     };
 
     #[test]
@@ -952,22 +824,10 @@ mod tests {
     }
 
     #[test]
-    fn name_match_priority_behaves() {
-        assert_eq!(collapse_ws_lower("USB   MIC"), "usb mic");
-        assert_eq!(match_priority("USB Mic", "usb mic"), Some(0));
-        assert_eq!(match_priority("USB   Mic", "usb mic"), Some(1));
-        assert_eq!(
-            match_priority("USB Microphone Array", "microphone"),
-            Some(2)
-        );
-        assert_eq!(match_priority("USB Mic", "Speaker"), None);
-    }
-
-    #[test]
     fn endpoint_guid_marker_extracts_wave_guid() {
         assert_eq!(
             endpoint_wave_guid_marker("{0.0.1.00000000}.{52b28a7e-31c7-4bb2-afb4-1529b7f2c7cd}"),
-            Some("wave_{52b28a7e-31c7-4bb2-afb4-1529b7f2c7cd}".to_string())
+            Some("wave_{52B28A7E-31C7-4BB2-AFB4-1529B7F2C7CD}".to_string())
         );
         assert_eq!(endpoint_wave_guid_marker(""), None);
         assert_eq!(endpoint_wave_guid_marker("invalid"), None);
