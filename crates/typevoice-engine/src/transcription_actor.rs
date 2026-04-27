@@ -418,11 +418,12 @@ fn run_doubao_session(
     creds: doubao_asr::DoubaoCredentials,
     mut rx: tokio::sync::mpsc::UnboundedReceiver<DoubaoCommand>,
 ) -> Result<String> {
+    let task_id_for_trace = task_id.clone();
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .context("build doubao runtime failed")?;
-    rt.block_on(async move {
+    let result = rt.block_on(async move {
         let req = doubao_asr::build_websocket_request(&creds)?;
 
         let (ws, resp) = tokio_tungstenite::connect_async(req)
@@ -472,7 +473,38 @@ fn run_doubao_session(
                     }
                 }
                 msg = read.next() => {
-                    let Some(msg) = msg else { break; };
+                    let Some(msg) = msg else {
+                        if let Ok(dir) = data_dir::data_dir() {
+                            let ctx = Some(serde_json::json!({
+                                "finishing": finishing,
+                                "full_text_chars": full_text.chars().count(),
+                                "last_text_chars": last_text.chars().count(),
+                                "x_tt_logid": logid.as_deref(),
+                            }));
+                            if finishing {
+                                obs::event(
+                                    &dir,
+                                    Some(&task_id),
+                                    "Transcribe",
+                                    "ASR.doubao_ws_closed",
+                                    "ok",
+                                    ctx,
+                                );
+                            } else {
+                                obs::event_err(
+                                    &dir,
+                                    Some(&task_id),
+                                    "Transcribe",
+                                    "ASR.doubao_ws_closed",
+                                    "asr",
+                                    "E_DOUBAO_ASR_WS_CLOSED",
+                                    "doubao websocket closed before finish",
+                                    ctx,
+                                );
+                            }
+                        }
+                        break;
+                    };
                     let msg = msg.context("read doubao websocket message failed")?;
                     if !msg.is_binary() {
                         continue;
@@ -514,7 +546,22 @@ fn run_doubao_session(
             );
         }
         Ok(full_text)
-    })
+    });
+    if let Err(err) = &result {
+        if let Ok(dir) = data_dir::data_dir() {
+            obs::event_err_anyhow(
+                &dir,
+                Some(&task_id_for_trace),
+                "Transcribe",
+                "ASR.doubao_session_failed",
+                "asr",
+                "E_DOUBAO_ASR_SESSION_FAILED",
+                err,
+                Some(serde_json::json!({"provider": "doubao"})),
+            );
+        }
+    }
+    result
 }
 
 async fn recv_doubao_command(
