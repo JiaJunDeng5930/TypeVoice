@@ -361,6 +361,20 @@ struct DoubaoSessionHandle {
     join: Option<std::thread::JoinHandle<Result<String>>>,
 }
 
+#[derive(Default)]
+struct DoubaoSessionStats {
+    sent_frames: usize,
+    sent_empty_frames: usize,
+    sent_audio_bytes: usize,
+    non_silent_frames: usize,
+    first_sequence: Option<u64>,
+    last_sequence: Option<u64>,
+    last_frame_marked: bool,
+    binary_responses: usize,
+    text_responses: usize,
+    non_binary_responses: usize,
+}
+
 enum DoubaoCommand {
     Chunk {
         sequence: u64,
@@ -447,6 +461,7 @@ fn run_doubao_session(
         let mut last_text = String::new();
         let mut finishing = false;
         let mut finish_deadline: Option<tokio::time::Instant> = None;
+        let mut stats = DoubaoSessionStats::default();
         loop {
             tokio::select! {
                 _ = async {
@@ -470,8 +485,18 @@ fn run_doubao_session(
                                     ))
                                     .await
                                     .context("send doubao audio frame failed")?;
+                                stats.sent_frames += 1;
+                                stats.sent_audio_bytes += pcm.len();
+                                stats.non_silent_frames += usize::from(pcm_peak_abs(&pcm) > 0);
+                                stats.first_sequence.get_or_insert(sequence);
+                                stats.last_sequence = Some(sequence);
+                            } else {
+                                stats.sent_empty_frames += 1;
+                                stats.first_sequence.get_or_insert(sequence);
+                                stats.last_sequence = Some(sequence);
                             }
                             if is_last {
+                                stats.last_frame_marked = true;
                                 write.flush().await.ok();
                                 finishing = true;
                                 finish_deadline = Some(
@@ -504,6 +529,16 @@ fn run_doubao_session(
                                 "full_text_chars": full_text.chars().count(),
                                 "last_text_chars": last_text.chars().count(),
                                 "x_tt_logid": logid.as_deref(),
+                                "sent_frames": stats.sent_frames,
+                                "sent_empty_frames": stats.sent_empty_frames,
+                                "sent_audio_bytes": stats.sent_audio_bytes,
+                                "non_silent_frames": stats.non_silent_frames,
+                                "first_sequence": stats.first_sequence,
+                                "last_sequence": stats.last_sequence,
+                                "last_frame_marked": stats.last_frame_marked,
+                                "binary_responses": stats.binary_responses,
+                                "text_responses": stats.text_responses,
+                                "non_binary_responses": stats.non_binary_responses,
                             }));
                             if finishing {
                                 obs::event(
@@ -531,10 +566,34 @@ fn run_doubao_session(
                     };
                     let msg = msg.context("read doubao websocket message failed")?;
                     if !msg.is_binary() {
+                        stats.non_binary_responses += 1;
                         continue;
                     }
+                    stats.binary_responses += 1;
                     let payload = doubao_asr::parse_server_payload(&msg.into_data())?;
-                    if let Some(text) = doubao_asr::extract_text(&payload.value) {
+                    let text = doubao_asr::extract_text(&payload.value);
+                    let text_chars = text.as_ref().map(|v| v.chars().count()).unwrap_or(0);
+                    if text.is_some() {
+                        stats.text_responses += 1;
+                    }
+                    if let Ok(dir) = data_dir::data_dir() {
+                        obs::event(
+                            &dir,
+                            Some(&task_id),
+                            "Transcribe",
+                            "ASR.doubao_response",
+                            "ok",
+                            Some(serde_json::json!({
+                                "binary_response_index": stats.binary_responses,
+                                "has_text": text.is_some(),
+                                "text_chars": text_chars,
+                                "is_last": payload.is_last,
+                                "has_result": payload.value.get("result").is_some(),
+                                "has_audio_info": payload.value.get("audio_info").is_some(),
+                            })),
+                        );
+                    }
+                    if let Some(text) = text {
                         let delta = text_delta(&last_text, &text);
                         last_text = text.clone();
                         if !delta.trim().is_empty() {
@@ -557,7 +616,32 @@ fn run_doubao_session(
             }
         }
         if full_text.trim().is_empty() && !last_text.trim().is_empty() {
-            full_text = last_text;
+            full_text = last_text.clone();
+        }
+        if let Ok(dir) = data_dir::data_dir() {
+            obs::event(
+                &dir,
+                Some(&task_id),
+                "Transcribe",
+                "ASR.doubao_session_summary",
+                "ok",
+                Some(serde_json::json!({
+                    "finishing": finishing,
+                    "full_text_chars": full_text.chars().count(),
+                    "last_text_chars": last_text.chars().count(),
+                    "x_tt_logid": logid.as_deref(),
+                    "sent_frames": stats.sent_frames,
+                    "sent_empty_frames": stats.sent_empty_frames,
+                    "sent_audio_bytes": stats.sent_audio_bytes,
+                    "non_silent_frames": stats.non_silent_frames,
+                    "first_sequence": stats.first_sequence,
+                    "last_sequence": stats.last_sequence,
+                    "last_frame_marked": stats.last_frame_marked,
+                    "binary_responses": stats.binary_responses,
+                    "text_responses": stats.text_responses,
+                    "non_binary_responses": stats.non_binary_responses,
+                })),
+            );
         }
         if let Some(logid) = logid {
             obs::event(
@@ -626,6 +710,13 @@ fn send_failed(mailbox: &UiEventMailbox, task_id: &str, code: &str, message: imp
         Some(code.to_string()),
     ));
     mailbox.send(UiEvent::state_failed(task_id, "Transcribe", code, message));
+}
+
+fn pcm_peak_abs(pcm: &[u8]) -> i32 {
+    pcm.chunks_exact(2)
+        .map(|bytes| i32::from(i16::from_le_bytes([bytes[0], bytes[1]])).abs())
+        .max()
+        .unwrap_or(0)
 }
 
 pub fn pcm_bytes_for_ms(ms: u64) -> usize {

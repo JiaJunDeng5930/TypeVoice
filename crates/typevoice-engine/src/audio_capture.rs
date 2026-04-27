@@ -534,6 +534,14 @@ fn spawn_meter_thread(
         let mut max_abs = 0_i32;
         let mut sample_count = 0_usize;
         let task_id = task_id.unwrap_or_else(|| recording_id.clone());
+        let mut stdout_read_bytes = 0_usize;
+        let mut stdout_read_iterations = 0_usize;
+        let mut sent_frames = 0_usize;
+        let mut sent_bytes = 0_usize;
+        let mut non_silent_frames = 0_usize;
+        let mut first_sequence: Option<u64> = None;
+        let mut last_sequence: Option<u64> = None;
+        let mut send_errors = 0_usize;
 
         loop {
             let n = match stdout.read(&mut read_buf) {
@@ -541,12 +549,24 @@ fn spawn_meter_thread(
                 Ok(v) => v,
                 Err(_) => break,
             };
+            stdout_read_bytes += n;
+            stdout_read_iterations += 1;
             if let (Some(transcriber), Some(chunk_bytes)) = (transcriber.as_ref(), chunk_bytes) {
                 chunk.extend_from_slice(&read_buf[..n]);
                 while chunk.len() >= chunk_bytes && chunk_bytes > 0 {
                     let rest = chunk.split_off(chunk_bytes);
                     let pcm = std::mem::replace(&mut chunk, rest);
-                    let _ = transcriber.send_audio_chunk(&task_id, sequence, pcm, false);
+                    sent_frames += 1;
+                    sent_bytes += pcm.len();
+                    non_silent_frames += usize::from(pcm_peak_abs(&pcm) > 0);
+                    first_sequence.get_or_insert(sequence);
+                    last_sequence = Some(sequence);
+                    if transcriber
+                        .send_audio_chunk(&task_id, sequence, pcm, false)
+                        .is_err()
+                    {
+                        send_errors += 1;
+                    }
                     sequence += 1;
                 }
             }
@@ -594,11 +614,51 @@ fn spawn_meter_thread(
             };
             if !chunk.is_empty() {
                 let pcm = std::mem::take(&mut chunk);
-                let _ = transcriber.send_audio_chunk(&task_id, sequence, pcm, true);
+                sent_frames += 1;
+                sent_bytes += pcm.len();
+                non_silent_frames += usize::from(pcm_peak_abs(&pcm) > 0);
+                first_sequence.get_or_insert(sequence);
+                last_sequence = Some(sequence);
+                if transcriber
+                    .send_audio_chunk(&task_id, sequence, pcm, true)
+                    .is_err()
+                {
+                    send_errors += 1;
+                }
             } else {
-                let _ = transcriber.send_audio_chunk(&task_id, sequence, Vec::new(), true);
+                sent_frames += 1;
+                first_sequence.get_or_insert(sequence);
+                last_sequence = Some(sequence);
+                if transcriber
+                    .send_audio_chunk(&task_id, sequence, Vec::new(), true)
+                    .is_err()
+                {
+                    send_errors += 1;
+                }
             }
             let _ = transcriber.finish_session(&task_id);
+        }
+        if let Ok(dir) = data_dir::data_dir() {
+            obs::event(
+                &dir,
+                Some(&task_id),
+                "Transcribe",
+                "ASR.streaming_pcm_source_summary",
+                "ok",
+                Some(serde_json::json!({
+                    "recording_id": recording_id,
+                    "stdout_read_bytes": stdout_read_bytes,
+                    "stdout_read_iterations": stdout_read_iterations,
+                    "sent_frames": sent_frames,
+                    "sent_bytes": sent_bytes,
+                    "non_silent_frames": non_silent_frames,
+                    "first_sequence": first_sequence,
+                    "last_sequence": last_sequence,
+                    "pending_tail_bytes": chunk.len(),
+                    "send_errors": send_errors,
+                    "finish_on_eof": finish_on_eof.load(Ordering::SeqCst),
+                })),
+            );
         }
         mailbox.send(UiEvent::audio_level(recording_id, 0.0, 0.0));
     })
@@ -671,6 +731,13 @@ impl Default for RecordingRegistry {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn pcm_peak_abs(pcm: &[u8]) -> i32 {
+    pcm.chunks_exact(2)
+        .map(|bytes| i32::from(i16::from_le_bytes([bytes[0], bytes[1]])).abs())
+        .max()
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
