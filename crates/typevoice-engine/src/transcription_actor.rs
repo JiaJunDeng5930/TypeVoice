@@ -16,6 +16,7 @@ use crate::{
 
 const REMOTE_CHUNK_MS: u64 = 60_000;
 const DOUBAO_CHUNK_MS: u64 = 200;
+const DOUBAO_FINISH_TIMEOUT_SECS: u64 = 20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamingProviderKind {
@@ -445,8 +446,20 @@ fn run_doubao_session(
         let mut full_text = String::new();
         let mut last_text = String::new();
         let mut finishing = false;
+        let mut finish_deadline: Option<tokio::time::Instant> = None;
         loop {
             tokio::select! {
+                _ = async {
+                    if let Some(deadline) = finish_deadline {
+                        tokio::time::sleep_until(deadline).await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                }, if finish_deadline.is_some() => {
+                    return Err(anyhow!(
+                        "E_DOUBAO_ASR_FINISH_TIMEOUT: timed out waiting for final transcription"
+                    ));
+                }
                 cmd = recv_doubao_command(&mut rx) => {
                     match cmd? {
                         DoubaoCommand::Chunk { sequence, pcm, is_last } => {
@@ -460,11 +473,22 @@ fn run_doubao_session(
                             }
                             if is_last {
                                 write.flush().await.ok();
+                                finishing = true;
+                                finish_deadline = Some(
+                                    tokio::time::Instant::now()
+                                        + std::time::Duration::from_secs(DOUBAO_FINISH_TIMEOUT_SECS),
+                                );
                             }
                         }
                         DoubaoCommand::Finish => {
                             finishing = true;
-                            write.close().await.ok();
+                            if finish_deadline.is_none() {
+                                finish_deadline = Some(
+                                    tokio::time::Instant::now()
+                                        + std::time::Duration::from_secs(DOUBAO_FINISH_TIMEOUT_SECS),
+                                );
+                            }
+                            write.flush().await.ok();
                         }
                         DoubaoCommand::Cancel => {
                             write.close().await.ok();
