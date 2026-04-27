@@ -5,6 +5,12 @@ import {
 } from "../infra/runtimePorts";
 import { createBackendClient, type BackendClient } from "../infra/backendClient";
 import { buildDiagnostic, buildUiEventDiagnostic, userMessageFromDiagnostic } from "../domain/diagnostic";
+import {
+  EMPTY_WORKFLOW_VIEW,
+  primaryActionLabel,
+  workflowPhaseName,
+  workflowViewFromPayload,
+} from "../domain/workflowView";
 import type {
   RuntimeToolchainStatus,
   Settings,
@@ -20,23 +26,6 @@ type Props = {
   onHistoryChanged: () => void;
   gateway?: TauriGateway;
   backend?: BackendClient;
-};
-
-const EMPTY_WORKFLOW_VIEW: WorkflowView = {
-  phase: "idle",
-  taskId: null,
-  recordingSessionId: null,
-  lastTranscriptId: null,
-  lastAsrText: "",
-  lastText: "",
-  lastCreatedAtMs: null,
-  diagnosticCode: null,
-  diagnosticLine: "",
-  primaryLabel: "START",
-  primaryDisabled: false,
-  canRewrite: false,
-  canInsert: false,
-  canCopy: false,
 };
 
 export function MainScreen({
@@ -216,7 +205,7 @@ export function MainScreen({
     }
   }
 
-  const phase = String(workflow.phase || "idle").toLowerCase();
+  const phase = workflowPhaseName(workflow.phase);
   const hint = primaryActionLabel(workflow.primaryLabel || "START");
   const streamText = phase === "recording" || phase === "transcribing" ? liveTranscript : "";
   const statusLabel = phase === "idle" ? "Ready" : hint;
@@ -292,27 +281,6 @@ export function MainScreen({
   );
 }
 
-function workflowViewFromPayload(payload: unknown): WorkflowView | null {
-  if (!payload || typeof payload !== "object") return null;
-  const raw = payload as Record<string, unknown>;
-  return {
-    phase: String(raw.phase || "idle"),
-    taskId: optionalString(raw.taskId),
-    recordingSessionId: optionalString(raw.recordingSessionId),
-    lastTranscriptId: optionalString(raw.lastTranscriptId),
-    lastAsrText: String(raw.lastAsrText || ""),
-    lastText: String(raw.lastText || ""),
-    lastCreatedAtMs: optionalNumber(raw.lastCreatedAtMs),
-    diagnosticCode: optionalString(raw.diagnosticCode),
-    diagnosticLine: String(raw.diagnosticLine || ""),
-    primaryLabel: String(raw.primaryLabel || "START"),
-    primaryDisabled: raw.primaryDisabled === true,
-    canRewrite: raw.canRewrite === true,
-    canInsert: raw.canInsert === true,
-    canCopy: raw.canCopy === true,
-  };
-}
-
 function insertionPayload(payload: unknown): {
   autoPasteAttempted: boolean;
   autoPasteOk: boolean;
@@ -372,16 +340,4 @@ function commandErrorTitle(command: WorkflowCommand): string {
   if (command === "copyLast") return "Copy failed";
   if (command === "cancel") return "Cancel failed";
   return "Recording action failed";
-}
-
-function primaryActionLabel(raw: string): string {
-  const label = raw.trim().toUpperCase();
-  if (label === "START") return "Start";
-  if (label === "STOP") return "Stop";
-  if (label === "TRANSCRIBING") return "Creating text";
-  if (label === "TRANSCRIBED") return "Text ready";
-  if (label === "REWRITING") return "Improving text";
-  if (label === "REWRITTEN") return "Text improved";
-  if (label === "INSERTING") return "Pasting text";
-  return raw.trim() || "Start";
 }

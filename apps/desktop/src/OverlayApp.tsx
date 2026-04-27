@@ -8,15 +8,15 @@ import {
   textFromTranscriptionCompleted,
   textFromTranscriptionPartial,
 } from "./domain/overlaySession";
-import { userMessageFromDiagnosticLine, userMessageFromError } from "./domain/diagnostic";
+import {
+  canTogglePrimaryFromOverlay,
+  EMPTY_WORKFLOW_VIEW,
+  isActiveWorkflowPhase,
+  overlayViewFromWorkflow,
+  workflowPhaseName,
+  workflowViewFromPayload,
+} from "./domain/workflowView";
 import type { WorkflowView } from "./types";
-
-type OverlayState = {
-  visible: boolean;
-  status: string;
-  detail?: string | null;
-  ts_ms: number;
-};
 
 type GlobalHotkeyEvent = {
   action: "altTap" | "insertOverlay";
@@ -27,71 +27,11 @@ const OVERLAY_WIDTH = 420;
 const MIN_OVERLAY_HEIGHT = 112;
 const MAX_OVERLAY_HEIGHT = 520;
 
-function isActivePhase(phase: string): boolean {
-  return ["recording", "transcribing", "rewriting", "inserting"].includes(phase);
-}
-
-function canAltToggle(phase: string): boolean {
-  return ["idle", "recording", "cancelled", "failed"].includes(phase);
-}
-
-function statusFromPhase(phase: string): string {
-  if (phase === "recording") return "Listening";
-  if (phase === "transcribing") return "Creating text";
-  if (phase === "rewriting") return "Improving text";
-  if (phase === "rewritten") return "Text improved";
-  if (phase === "inserting") return "Pasting text";
-  if (phase === "transcribed") return "Text ready";
-  if (phase === "failed") return "Action needed";
-  return "Ready";
-}
-
-function statusFromRaw(raw: string): string {
-  const value = raw.trim().toLowerCase();
-  if (value === "rec" || value === "recording") return "Listening";
-  if (value === "transcribing") return "Creating text";
-  if (value === "rewriting") return "Improving text";
-  if (value === "rewritten") return "Text improved";
-  if (value === "inserting") return "Pasting text";
-  if (value === "transcribed") return "Text ready";
-  if (value === "error" || value === "failed") return "Action needed";
-  if (value === "idle" || value === "ready") return "Ready";
-  return raw.trim() || "Ready";
-}
-
-function workflowViewFromPayload(payload: unknown): WorkflowView | null {
-  if (!payload || typeof payload !== "object") return null;
-  const raw = payload as Record<string, unknown>;
-  return {
-    phase: String(raw.phase || "idle"),
-    taskId: optionalString(raw.taskId),
-    recordingSessionId: optionalString(raw.recordingSessionId),
-    lastTranscriptId: optionalString(raw.lastTranscriptId),
-    lastAsrText: String(raw.lastAsrText || ""),
-    lastText: String(raw.lastText || ""),
-    lastCreatedAtMs: typeof raw.lastCreatedAtMs === "number" ? raw.lastCreatedAtMs : null,
-    diagnosticCode: optionalString(raw.diagnosticCode),
-    diagnosticLine: String(raw.diagnosticLine || ""),
-    primaryLabel: String(raw.primaryLabel || "START"),
-    primaryDisabled: raw.primaryDisabled === true,
-    canRewrite: raw.canRewrite === true,
-    canInsert: raw.canInsert === true,
-    canCopy: raw.canCopy === true,
-  };
-}
-
-function optionalString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value : null;
-}
-
 export default function OverlayApp() {
   const client = useMemo(() => createBackendClient(defaultTauriGateway), []);
-  const [visible, setVisible] = useState(false);
-  const [status, setStatus] = useState("Ready");
+  const [workflow, setWorkflow] = useState<WorkflowView>(EMPTY_WORKFLOW_VIEW);
   const [draftText, setDraftText] = useState("");
   const [liveText, setLiveText] = useState("");
-  const [detail, setDetail] = useState<string | null>(null);
-  const [workflow, setWorkflow] = useState<WorkflowView | null>(null);
   const [busyAction, setBusyAction] = useState<"rewrite" | "insert" | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const phaseRef = useRef("idle");
@@ -117,90 +57,96 @@ export default function OverlayApp() {
   }, [busyAction]);
 
   useEffect(() => {
-    phaseRef.current = String(workflow?.phase || "idle").toLowerCase();
+    phaseRef.current = workflowPhaseName(workflow.phase);
   }, [workflow]);
+
+  const displayText = useMemo(
+    () => appendTranscript(draftText, liveText),
+    [draftText, liveText],
+  );
+
+  const overlayView = useMemo(
+    () => overlayViewFromWorkflow(workflow),
+    [workflow],
+  );
+
+  const acceptWorkflowView = useCallback((next: WorkflowView) => {
+    const phase = workflowPhaseName(next.phase);
+    const seedText = (next.lastText || next.lastAsrText).trim();
+    setWorkflow(next);
+    if (phase === "recording") {
+      setLiveText("");
+    }
+    if (
+      (phase === "transcribed" || phase === "rewritten")
+      && seedText
+      && !draftRef.current.trim()
+      && !liveRef.current.trim()
+    ) {
+      setDraftText(next.lastText || next.lastAsrText);
+      setLiveText("");
+    }
+  }, []);
+
+  const refreshWorkflowSnapshot = useCallback(async () => {
+    acceptWorkflowView(await client.workflowSnapshot());
+  }, [acceptWorkflowView, client]);
 
   const resizeOverlay = useCallback(() => {
     const root = rootRef.current;
-    if (!root || !visible) return;
+    if (!root || !overlayView.visible) return;
     const measured = Math.ceil(root.scrollHeight + 2);
     const height = Math.max(MIN_OVERLAY_HEIGHT, Math.min(MAX_OVERLAY_HEIGHT, measured));
     void client.overlayResize({ width: OVERLAY_WIDTH, height });
-  }, [client, visible]);
+  }, [client, overlayView.visible]);
 
   useEffect(() => {
     resizeOverlay();
-  }, [draftText, liveText, detail, status, resizeOverlay]);
+  }, [displayText, overlayView.detail, overlayView.status, resizeOverlay]);
 
   useEffect(() => {
-    if (!visible) return;
     void client.overlaySetState({
-      visible: true,
-      status,
-      detail,
+      visible: overlayView.visible,
+      status: overlayView.status,
+      detail: overlayView.detail,
       ts_ms: Date.now(),
     });
-  }, [client, detail, status, visible]);
-
-  const hideOverlay = useCallback(async () => {
-    setVisible(false);
-    setStatus("Ready");
-    setDetail(null);
-    await client.overlaySetState({
-      visible: false,
-      status: "Ready",
-      detail: null,
-      ts_ms: Date.now(),
-    });
-  }, [client]);
-
-  const showOverlay = useCallback((nextStatus: string) => {
-    setVisible(true);
-    setStatus(nextStatus);
-    setDetail(null);
-  }, []);
+  }, [client, overlayView.detail, overlayView.status, overlayView.visible]);
 
   const runPrimaryFromAlt = useCallback(async () => {
     const phase = phaseRef.current;
-    if (!canAltToggle(phase) || busyRef.current) return;
+    if (!canTogglePrimaryFromOverlay(phase) || busyRef.current) return;
 
-    showOverlay(phase === "recording" ? "Creating text" : "Listening");
     if (phase !== "recording") {
       setLiveText("");
     }
 
     try {
-      const next = await client.workflowCommand({ command: "primary" });
-      setWorkflow(next);
-      setStatus(statusFromPhase(String(next.phase || "idle").toLowerCase()));
-    } catch (err) {
-      setStatus("Action needed");
-      setDetail(userMessageFromError(err, "Recording action failed"));
+      acceptWorkflowView(await client.workflowCommand({ command: "primary" }));
+    } catch {
+      await refreshWorkflowSnapshot();
     }
-  }, [client, showOverlay]);
+  }, [acceptWorkflowView, client, refreshWorkflowSnapshot]);
 
   const runRewrite = useCallback(async () => {
     if (busyRef.current) return;
     const text = draftRef.current.trim();
-    if (!text || isActivePhase(phaseRef.current)) return;
+    if (!text || isActiveWorkflowPhase(phaseRef.current)) return;
 
     setBusyAction("rewrite");
-    setStatus("Improving text");
-    setDetail(null);
     try {
-      const result = await client.workflowRewrite({
-        text,
-      });
-      setDraftText(result.finalText);
+      const result = await client.workflowRewrite({ text });
+      if (result.finalText.trim()) {
+        setDraftText(result.finalText);
+      }
       setLiveText("");
-      setStatus("Text improved");
-    } catch (err) {
-      setStatus("Action needed");
-      setDetail(userMessageFromError(err, "Text improvement failed"));
+      await refreshWorkflowSnapshot();
+    } catch {
+      await refreshWorkflowSnapshot();
     } finally {
       setBusyAction(null);
     }
-  }, [client]);
+  }, [client, refreshWorkflowSnapshot]);
 
   const runInsert = useCallback(async () => {
     if (busyRef.current) return;
@@ -208,31 +154,21 @@ export default function OverlayApp() {
     if (!text) return;
 
     setBusyAction("insert");
-    setStatus("Pasting text");
-    setDetail(null);
-    setVisible(false);
-    await client.overlaySetState({
-      visible: false,
-      status: "Pasting text",
-      detail: null,
-      ts_ms: Date.now(),
-    });
-
     try {
-      await client.workflowInsert({
-        text,
-      });
+      await client.workflowInsert({ text });
       setDraftText("");
       setLiveText("");
-      await hideOverlay();
-    } catch (err) {
-      setVisible(true);
-      setStatus("Action needed");
-      setDetail(userMessageFromError(err, "Text could not be pasted"));
+      await refreshWorkflowSnapshot();
+    } catch {
+      await refreshWorkflowSnapshot();
     } finally {
       setBusyAction(null);
     }
-  }, [client, hideOverlay]);
+  }, [client, refreshWorkflowSnapshot]);
+
+  useEffect(() => {
+    void refreshWorkflowSnapshot();
+  }, [refreshWorkflowSnapshot]);
 
   useEffect(() => {
     let cancelled = false;
@@ -257,35 +193,17 @@ export default function OverlayApp() {
         }
       }));
 
-      track(await defaultTauriGateway.listen<OverlayState>("tv_overlay_state", (state) => {
-        if (!state) return;
-        if (!state.visible && !draftRef.current.trim() && !liveRef.current.trim()) {
-          setVisible(false);
-        }
-        if (state.status) setStatus(statusFromRaw(String(state.status)));
-        setDetail(state.detail ? userMessageFromDiagnosticLine(state.detail) : null);
-      }));
-
-      track(await client.listenUiEvent((event) => {
+      track(await client.listenUiEvent(async (event) => {
         if (!event || event.kind === "audio.level") return;
 
         if (event.kind === "workflow.state") {
           const next = workflowViewFromPayload(event.payload);
-          if (!next) return;
-          const phase = String(next.phase || "idle").toLowerCase();
-          setWorkflow(next);
-          setStatus(statusFromPhase(phase));
-          if (phase === "recording" || phase === "transcribing" || phase === "rewriting" || phase === "rewritten" || phase === "transcribed") {
-            setVisible(true);
-          }
+          if (next) acceptWorkflowView(next);
           return;
         }
 
         if (event.kind === "transcription.partial") {
-          const text = textFromTranscriptionPartial(event);
-          setLiveText(text);
-          setVisible(true);
-          setStatus("Listening");
+          setLiveText(textFromTranscriptionPartial(event));
           return;
         }
 
@@ -293,8 +211,6 @@ export default function OverlayApp() {
           const result = textFromTranscriptionCompleted(event);
           setDraftText((prev) => appendTranscript(prev, result.asrText));
           setLiveText("");
-          setVisible(true);
-          setStatus("Text ready");
           return;
         }
 
@@ -302,44 +218,30 @@ export default function OverlayApp() {
           const result = textFromRewriteCompleted(event);
           if (result.finalText.trim()) setDraftText(result.finalText);
           setLiveText("");
-          setVisible(true);
-          setStatus("Text improved");
           return;
         }
 
         if (event.status === "failed") {
-          setVisible(true);
-          setStatus("Action needed");
-          setDetail(userMessageFromError(event.errorCode || event.message));
+          await refreshWorkflowSnapshot();
         }
       }));
-    })().catch((err) => {
-      setVisible(true);
-      setStatus("Action needed");
-      setDetail(userMessageFromError(err));
-    });
+    })();
 
     return () => {
       cancelled = true;
       for (const fn of unlistenFns) fn();
     };
-  }, [client, runInsert, runPrimaryFromAlt]);
+  }, [acceptWorkflowView, client, refreshWorkflowSnapshot, runInsert, runPrimaryFromAlt]);
 
-  const displayText = useMemo(
-    () => appendTranscript(draftText, liveText),
-    [draftText, liveText],
-  );
-  const tone = status === "Action needed" ? "danger" : status === "Text improved" || status === "Text ready" ? "ok" : "default";
-
-  if (!visible) {
+  if (!overlayView.visible) {
     return <div ref={rootRef} className="transcriptOverlayRoot isHidden" />;
   }
 
   return (
-    <div ref={rootRef} className={`transcriptOverlayRoot tone-${tone}`}>
+    <div ref={rootRef} className={`transcriptOverlayRoot tone-${overlayView.tone}`}>
       <div className="transcriptOverlayTop">
-        <div className="transcriptOverlayBadge">{busyAction ? status : status}</div>
-        {detail ? <div className="transcriptOverlayDetail">{detail}</div> : null}
+        <div className="transcriptOverlayBadge">{overlayView.status}</div>
+        {overlayView.detail ? <div className="transcriptOverlayDetail">{overlayView.detail}</div> : null}
       </div>
       <textarea
         className="transcriptOverlayEditor"
