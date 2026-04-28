@@ -64,6 +64,12 @@ struct ApiCheckResult {
     message: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+struct EffectiveSettingsValues {
+    llm_base_url: Option<String>,
+    llm_model: Option<String>,
+}
+
 fn sanitize_ui_text(raw: Option<String>, max_chars: usize) -> Option<String> {
     let input = raw?;
     let compact = input.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -698,6 +704,37 @@ fn get_settings() -> Result<Settings, String> {
 }
 
 #[tauri::command]
+fn effective_settings_values() -> Result<EffectiveSettingsValues, String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(&dir, None, "CMD.effective_settings_values", None);
+    let settings = match settings::load_settings_strict(&dir) {
+        Ok(v) => v,
+        Err(e) => {
+            span.err_anyhow("settings", "E_CMD_EFFECTIVE_SETTINGS_LOAD", &e, None);
+            return Err(e.to_string());
+        }
+    };
+    let llm_base_url = settings
+        .llm_base_url
+        .or_else(|| std::env::var("TYPEVOICE_LLM_BASE_URL").ok())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let llm_model = settings
+        .llm_model
+        .or_else(|| std::env::var("TYPEVOICE_LLM_MODEL").ok())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    span.ok(Some(serde_json::json!({
+        "has_llm_base_url": llm_base_url.is_some(),
+        "has_llm_model": llm_model.is_some(),
+    })));
+    Ok(EffectiveSettingsValues {
+        llm_base_url,
+        llm_model,
+    })
+}
+
+#[tauri::command]
 fn list_audio_capture_devices() -> Result<Vec<record_input::AudioCaptureDeviceView>, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let span = cmd_span(&dir, None, "CMD.list_audio_capture_devices", None);
@@ -1009,6 +1046,7 @@ pub fn run() {
             history_list,
             history_clear,
             get_settings,
+            effective_settings_values,
             list_audio_capture_devices,
             set_settings,
             update_settings,

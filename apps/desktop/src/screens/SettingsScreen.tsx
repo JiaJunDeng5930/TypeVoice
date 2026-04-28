@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { defaultTauriGateway, type TauriGateway } from "../infra/runtimePorts";
 import type {
   ApiCheckResult,
+  ApiKeyStatus,
   AudioCaptureDevice,
   Settings,
 } from "../types";
@@ -60,6 +61,11 @@ type SettingsPanelId =
   | "hotkeys"
   | "history";
 
+type EffectiveSettingsValues = {
+  llm_base_url?: string | null;
+  llm_model?: string | null;
+};
+
 type SettingsLineProps = {
   title: string;
   detail?: string;
@@ -103,6 +109,12 @@ function SettingsLine({
   );
 }
 
+function sensitiveSettingDisplay(status: ApiKeyStatus | null): string {
+  if (!status?.configured) return "";
+  const source = status.source.trim();
+  return source ? `Configured via ${source}` : "Configured";
+}
+
 export function SettingsScreen({
   settings,
   savePatch,
@@ -144,6 +156,9 @@ export function SettingsScreen({
   const [rewriteIncludeGlossary, setRewriteIncludeGlossary] = useState(true);
 
   const [keyDraft, setKeyDraft] = useState("");
+  const [llmKeyStatus, setLlmKeyStatus] = useState<ApiKeyStatus | null>(null);
+  const [remoteAsrKeyStatus, setRemoteAsrKeyStatus] = useState<ApiKeyStatus | null>(null);
+  const [doubaoCredentialsStatus, setDoubaoCredentialsStatus] = useState<ApiKeyStatus | null>(null);
 
   const [confirmClear, setConfirmClear] = useState(false);
   const [llmCheckPending, setLlmCheckPending] = useState(false);
@@ -225,6 +240,26 @@ export function SettingsScreen({
   }, [settings, pushToast]);
 
   useEffect(() => {
+    if (!settings) return;
+    (async () => {
+      await refreshSensitiveSettingStatuses();
+      try {
+        const effective = (await gateway.invoke(
+          "effective_settings_values",
+        )) as EffectiveSettingsValues;
+        if (!settings.llm_base_url?.trim() && effective.llm_base_url?.trim()) {
+          setLlmBaseUrl(effective.llm_base_url.trim());
+        }
+        if (!settings.llm_model?.trim() && effective.llm_model?.trim()) {
+          setLlmModel(effective.llm_model.trim());
+        }
+      } catch {
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings]);
+
+  useEffect(() => {
     (async () => {
       await refreshAudioCaptureDevices();
     })();
@@ -262,6 +297,20 @@ export function SettingsScreen({
       setRecordFixedFriendlyName(found.friendly_name);
     } catch {
       setAudioCaptureDevices([]);
+    }
+  }
+
+  async function refreshSensitiveSettingStatuses() {
+    try {
+      const [llmStatus, remoteStatus, doubaoStatus] = await Promise.all([
+        gateway.invoke("llm_api_key_status") as Promise<ApiKeyStatus>,
+        gateway.invoke("remote_asr_api_key_status") as Promise<ApiKeyStatus>,
+        gateway.invoke("doubao_asr_credentials_status") as Promise<ApiKeyStatus>,
+      ]);
+      setLlmKeyStatus(llmStatus);
+      setRemoteAsrKeyStatus(remoteStatus);
+      setDoubaoCredentialsStatus(doubaoStatus);
+    } catch {
     }
   }
 
@@ -448,6 +497,7 @@ export function SettingsScreen({
     try {
       await gateway.invoke("set_llm_api_key", { apiKey: k });
       setKeyDraft("");
+      await refreshSensitiveSettingStatuses();
       pushToast("KEY SAVED", "ok");
     } catch {
       pushToast("KEY SAVE FAILED", "danger");
@@ -457,6 +507,8 @@ export function SettingsScreen({
   async function clearApiKey() {
     try {
       await gateway.invoke("clear_llm_api_key");
+      setLlmKeyStatus(null);
+      await refreshSensitiveSettingStatuses();
       pushToast("KEY CLEARED", "ok");
     } catch {
       pushToast("KEY CLEAR FAILED", "danger");
@@ -486,6 +538,7 @@ export function SettingsScreen({
     try {
       await gateway.invoke("set_remote_asr_api_key", { apiKey: k });
       setRemoteAsrKeyDraft("");
+      await refreshSensitiveSettingStatuses();
       pushToast("REMOTE KEY SAVED", "ok");
     } catch {
       pushToast("REMOTE KEY SAVE FAILED", "danger");
@@ -495,6 +548,8 @@ export function SettingsScreen({
   async function clearRemoteAsrApiKey() {
     try {
       await gateway.invoke("clear_remote_asr_api_key");
+      setRemoteAsrKeyStatus(null);
+      await refreshSensitiveSettingStatuses();
       pushToast("REMOTE KEY CLEARED", "ok");
     } catch {
       pushToast("REMOTE KEY CLEAR FAILED", "danger");
@@ -525,6 +580,7 @@ export function SettingsScreen({
       await gateway.invoke("set_doubao_asr_credentials", { appKey, accessKey });
       setDoubaoAppKeyDraft("");
       setDoubaoAccessKeyDraft("");
+      await refreshSensitiveSettingStatuses();
       pushToast("DOUBAO KEY SAVED", "ok");
     } catch {
       pushToast("DOUBAO KEY SAVE FAILED", "danger");
@@ -534,6 +590,8 @@ export function SettingsScreen({
   async function clearDoubaoAsrCredentials() {
     try {
       await gateway.invoke("clear_doubao_asr_credentials");
+      setDoubaoCredentialsStatus(null);
+      await refreshSensitiveSettingStatuses();
       pushToast("DOUBAO KEY CLEARED", "ok");
     } catch {
       pushToast("DOUBAO KEY CLEAR FAILED", "danger");
@@ -572,6 +630,10 @@ export function SettingsScreen({
     return `Remote ${remoteAsrUrl.trim() || "https://api.server/transcribe"}`;
   }, [asrProvider, remoteAsrUrl]);
 
+  const llmKeyDisplay = sensitiveSettingDisplay(llmKeyStatus);
+  const remoteAsrKeyDisplay = sensitiveSettingDisplay(remoteAsrKeyStatus);
+  const doubaoCredentialsDisplay = sensitiveSettingDisplay(doubaoCredentialsStatus);
+
   function toggleSettingsPanel(panel: SettingsPanelId) {
     setExpandedSettingsPanels((current) =>
       current.includes(panel)
@@ -601,14 +663,16 @@ export function SettingsScreen({
               {asrProvider === "doubao" ? (
                 <>
                   <PixelInput
-                    value={doubaoAppKeyDraft}
+                    value={doubaoAppKeyDraft || doubaoCredentialsDisplay}
                     onChange={setDoubaoAppKeyDraft}
-                    placeholder="App Key (or env TYPEVOICE_DOUBAO_ASR_APP_KEY)"
+                    placeholder="App Key not configured"
+                    readOnly={!doubaoAppKeyDraft && !!doubaoCredentialsDisplay}
                   />
                   <PixelInput
-                    value={doubaoAccessKeyDraft}
+                    value={doubaoAccessKeyDraft || doubaoCredentialsDisplay}
                     onChange={setDoubaoAccessKeyDraft}
-                    placeholder="Access Key (or env TYPEVOICE_DOUBAO_ASR_ACCESS_KEY)"
+                    placeholder="Access Key not configured"
+                    readOnly={!doubaoAccessKeyDraft && !!doubaoCredentialsDisplay}
                   />
                   <div className="row" style={{ justifyContent: "flex-end" }}>
                     <PixelButton
@@ -644,9 +708,10 @@ export function SettingsScreen({
                     placeholder="remote slicing concurrency (1-16)"
                   />
                   <PixelInput
-                    value={remoteAsrKeyDraft}
+                    value={remoteAsrKeyDraft || remoteAsrKeyDisplay}
                     onChange={setRemoteAsrKeyDraft}
-                    placeholder="save to keyring (or env TYPEVOICE_REMOTE_ASR_API_KEY)"
+                    placeholder="Remote ASR key not configured"
+                    readOnly={!remoteAsrKeyDraft && !!remoteAsrKeyDisplay}
                   />
                   <div className="row" style={{ justifyContent: "flex-end" }}>
                     <PixelButton
@@ -897,9 +962,10 @@ export function SettingsScreen({
             >
               <div className="stack">
                 <PixelInput
-                  value={keyDraft}
+                  value={keyDraft || llmKeyDisplay}
                   onChange={setKeyDraft}
-                  placeholder="save to keyring (or env TYPEVOICE_LLM_API_KEY)"
+                  placeholder="LLM API key not configured"
+                  readOnly={!keyDraft && !!llmKeyDisplay}
                 />
                 <div className="row" style={{ justifyContent: "flex-end" }}>
                   <PixelButton onClick={setApiKey} tone="accent" disabled={!keyDraft.trim()}>

@@ -169,6 +169,11 @@ const browserPreviewGateway: TauriGateway = {
         return { ok: true, message: "Doubao ASR API check passed." } as T;
       case "get_settings":
         return previewSettings as T;
+      case "effective_settings_values":
+        return {
+          llm_base_url: previewSettings.llm_base_url,
+          llm_model: previewSettings.llm_model,
+        } as T;
       case "update_settings": {
         const patch = (args?.patch || {}) as Record<string, unknown>;
         previewSettings = { ...previewSettings, ...patch };
