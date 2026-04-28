@@ -64,7 +64,7 @@ type SettingsLineProps = {
   title: string;
   detail?: string;
   panel: SettingsPanelId;
-  activePanel: SettingsPanelId | null;
+  expandedPanels: SettingsPanelId[];
   onTogglePanel: (panel: SettingsPanelId) => void;
   control?: ReactNode;
   children?: ReactNode;
@@ -74,12 +74,12 @@ function SettingsLine({
   title,
   detail,
   panel,
-  activePanel,
+  expandedPanels,
   onTogglePanel,
   control,
   children,
 }: SettingsLineProps) {
-  const expanded = activePanel === panel;
+  const expanded = expandedPanels.includes(panel);
   return (
     <div className={`settingsLineBlock ${expanded ? "isExpanded" : ""}`}>
       <div className="settingsLine">
@@ -149,7 +149,7 @@ export function SettingsScreen({
   const [llmCheckPending, setLlmCheckPending] = useState(false);
   const [remoteAsrCheckPending, setRemoteAsrCheckPending] = useState(false);
   const [doubaoCheckPending, setDoubaoCheckPending] = useState(false);
-  const [activeSettingsPanel, setActiveSettingsPanel] = useState<SettingsPanelId | null>(null);
+  const [expandedSettingsPanels, setExpandedSettingsPanels] = useState<SettingsPanelId[]>([]);
 
   useEffect(() => {
     if (!settings) return;
@@ -573,7 +573,11 @@ export function SettingsScreen({
   }, [asrProvider, remoteAsrUrl]);
 
   function toggleSettingsPanel(panel: SettingsPanelId) {
-    setActiveSettingsPanel((current) => current === panel ? null : panel);
+    setExpandedSettingsPanels((current) =>
+      current.includes(panel)
+        ? current.filter((value) => value !== panel)
+        : [...current, panel],
+    );
   }
 
   return (
@@ -588,7 +592,7 @@ export function SettingsScreen({
             title="Speech recognition"
             detail={asrStatusText}
             panel="asr"
-            activePanel={activeSettingsPanel}
+            expandedPanels={expandedSettingsPanels}
             onTogglePanel={toggleSettingsPanel}
             control={<PixelSelect value={asrProvider} onChange={setAsrProvider} options={ASR_PROVIDERS} />}
           >
@@ -672,7 +676,7 @@ export function SettingsScreen({
             title="Recording input"
             detail={recordFixedFriendlyName || "Capture source"}
             panel="recording"
-            activePanel={activeSettingsPanel}
+            expandedPanels={expandedSettingsPanels}
             onTogglePanel={toggleSettingsPanel}
             control={
               <PixelSelect
@@ -719,7 +723,7 @@ export function SettingsScreen({
             title="Silence trim"
             detail={asrPreprocessTrimEnabled ? "On" : "Off"}
             panel="preprocess"
-            activePanel={activeSettingsPanel}
+            expandedPanels={expandedSettingsPanels}
             onTogglePanel={toggleSettingsPanel}
             control={
               <PixelToggle
@@ -768,7 +772,7 @@ export function SettingsScreen({
             title="Language model"
             detail={llmModel.trim() || "Model settings"}
             panel="llm"
-            activePanel={activeSettingsPanel}
+            expandedPanels={expandedSettingsPanels}
             onTogglePanel={toggleSettingsPanel}
             control={<PixelSelect value={reasoning} onChange={setReasoning} options={REASONING} />}
           >
@@ -791,7 +795,7 @@ export function SettingsScreen({
             title="API key"
             detail="Stored in keyring or environment"
             panel="llmKey"
-            activePanel={activeSettingsPanel}
+            expandedPanels={expandedSettingsPanels}
             onTogglePanel={toggleSettingsPanel}
           >
             <div className="stack">
@@ -820,7 +824,7 @@ export function SettingsScreen({
             title="Rewrite"
             detail={rewriteEnabled ? "On" : "Off"}
             panel="rewrite"
-            activePanel={activeSettingsPanel}
+            expandedPanels={expandedSettingsPanels}
             onTogglePanel={toggleSettingsPanel}
             control={<PixelToggle value={rewriteEnabled} onChange={setRewriteEnabled} label="rewrite" />}
           >
@@ -845,7 +849,7 @@ export function SettingsScreen({
             title="Improvement context"
             detail="Inputs available to rewriting"
             panel="context"
-            activePanel={activeSettingsPanel}
+            expandedPanels={expandedSettingsPanels}
             onTogglePanel={toggleSettingsPanel}
           >
             <div className="stack">
@@ -895,7 +899,7 @@ export function SettingsScreen({
             title="Glossary"
             detail="One term per line"
             panel="glossary"
-            activePanel={activeSettingsPanel}
+            expandedPanels={expandedSettingsPanels}
             onTogglePanel={toggleSettingsPanel}
             control={
               <PixelToggle
@@ -929,7 +933,7 @@ export function SettingsScreen({
             title="Export"
             detail={autoPasteEnabled ? "Auto paste on" : "Auto paste off"}
             panel="export"
-            activePanel={activeSettingsPanel}
+            expandedPanels={expandedSettingsPanels}
             onTogglePanel={toggleSettingsPanel}
             control={
               <PixelToggle
@@ -955,7 +959,7 @@ export function SettingsScreen({
             title="Hotkeys"
             detail={hotkeysEnabled ? "On" : "Off"}
             panel="hotkeys"
-            activePanel={activeSettingsPanel}
+            expandedPanels={expandedSettingsPanels}
             onTogglePanel={toggleSettingsPanel}
             control={<PixelToggle value={hotkeysEnabled} onChange={setHotkeysEnabled} label="hotkeys" />}
           >
@@ -988,7 +992,7 @@ export function SettingsScreen({
             title="History"
             detail="Stored dictation records"
             panel="history"
-            activePanel={activeSettingsPanel}
+            expandedPanels={expandedSettingsPanels}
             onTogglePanel={toggleSettingsPanel}
           >
             <div className="row" style={{ justifyContent: "flex-end" }}>
