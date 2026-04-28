@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { defaultTauriGateway } from "./infra/runtimePorts";
 import type { Settings } from "./types";
 import { PixelTabs, type TabKey } from "./ui/PixelTabs";
@@ -79,6 +80,42 @@ export default function App() {
 
   return (
     <div className="appBg">
+      <header
+        className="windowTitlebar"
+        data-tauri-drag-region
+        onDoubleClick={() => void getCurrentWindow().toggleMaximize()}
+      >
+        <div className="windowTitle" data-tauri-drag-region>TypeVoice</div>
+        <div className="windowControls" onDoubleClick={(event) => event.stopPropagation()}>
+          <button
+            type="button"
+            className="windowControl windowControlMinimize"
+            aria-label="Minimize"
+            title="Minimize"
+            onClick={() => void getCurrentWindow().minimize()}
+          >
+            <span />
+          </button>
+          <button
+            type="button"
+            className="windowControl windowControlMaximize"
+            aria-label="Maximize"
+            title="Maximize"
+            onClick={() => void getCurrentWindow().toggleMaximize()}
+          >
+            <span />
+          </button>
+          <button
+            type="button"
+            className="windowControl windowControlClose"
+            aria-label="Close"
+            title="Close"
+            onClick={() => void getCurrentWindow().close()}
+          >
+            <span />
+          </button>
+        </div>
+      </header>
       <div className="layout appShell">
         <aside className="sideRail">
           <div className="brand">
