@@ -48,6 +48,24 @@ const RECORD_DEFAULT_ROLES: PixelSelectOption[] = [
   { value: "console", label: "console (eConsole)" },
 ];
 
+const PRIMARY_HOTKEYS: PixelSelectOption[] = [
+  { value: "Alt", label: "Alt" },
+  { value: "Ctrl", label: "Ctrl" },
+  { value: "Shift", label: "Shift" },
+  { value: "F1", label: "F1" },
+  { value: "F2", label: "F2" },
+  { value: "F3", label: "F3" },
+  { value: "F4", label: "F4" },
+  { value: "F5", label: "F5" },
+  { value: "F6", label: "F6" },
+  { value: "F7", label: "F7" },
+  { value: "F8", label: "F8" },
+  { value: "F9", label: "F9" },
+  { value: "F10", label: "F10" },
+  { value: "F11", label: "F11" },
+  { value: "F12", label: "F12" },
+];
+
 type SettingsPanelId =
   | "asr"
   | "recording"
@@ -147,6 +165,7 @@ export function SettingsScreen({
   const [audioCaptureDevices, setAudioCaptureDevices] = useState<AudioCaptureDevice[]>([]);
 
   const [hotkeysEnabled, setHotkeysEnabled] = useState(true);
+  const [hotkeyPrimary, setHotkeyPrimary] = useState("Alt");
   const [hotkeysShowOverlay, setHotkeysShowOverlay] = useState(true);
   const [contextIncludeHistory, setContextIncludeHistory] = useState(true);
   const [contextIncludeClipboard, setContextIncludeClipboard] = useState(true);
@@ -229,6 +248,7 @@ export function SettingsScreen({
       return;
     }
     setHotkeysEnabled(settings.hotkeys_enabled);
+    setHotkeyPrimary(normalizePrimaryHotkey(settings.hotkey_primary));
     setHotkeysShowOverlay(settings.hotkeys_show_overlay);
 
     setContextIncludeHistory(settings.context_include_history ?? true);
@@ -481,8 +501,7 @@ export function SettingsScreen({
     try {
       await savePatch({
         hotkeys_enabled: hotkeysEnabled,
-        hotkey_ptt: null,
-        hotkey_toggle: null,
+        hotkey_primary: normalizePrimaryHotkey(hotkeyPrimary),
         hotkeys_show_overlay: hotkeysShowOverlay,
       });
       pushToast("SAVED", "ok");
@@ -903,10 +922,15 @@ export function SettingsScreen({
             >
               <div className="stack">
                 <div className="hotkeyGuide">
-                  <div><span>Alt</span><span>short press starts or stops recording</span></div>
-                  <div><span>Enter</span><span>rewrites the transcript window text</span></div>
-                  <div><span>Shift+Enter</span><span>adds a line break</span></div>
-                  <div><span>Ctrl+Enter</span><span>inserts the transcript window text</span></div>
+                  <div><span>{hotkeyPrimary}</span><span>short press starts or stops recording</span></div>
+                </div>
+                <div className="stack">
+                  <div className="muted">Primary Key</div>
+                  <PixelSelect
+                    value={hotkeyPrimary}
+                    onChange={setHotkeyPrimary}
+                    options={PRIMARY_HOTKEYS}
+                  />
                 </div>
                 <div className="settingsInlineToggle">
                   <span>Overlay</span>
@@ -1096,4 +1120,10 @@ export function SettingsScreen({
       </PixelDialog>
     </div>
   );
+}
+
+function normalizePrimaryHotkey(value: string | null | undefined): string {
+  const raw = (value || "").trim();
+  const found = PRIMARY_HOTKEYS.find((item) => item.value.toLowerCase() === raw.toLowerCase());
+  return found?.value || "Alt";
 }

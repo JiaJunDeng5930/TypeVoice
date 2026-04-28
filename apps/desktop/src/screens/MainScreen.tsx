@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   defaultTauriGateway,
   type TauriGateway,
@@ -39,16 +39,82 @@ export function MainScreen({
   const [workflow, setWorkflow] = useState<WorkflowView>(EMPTY_WORKFLOW_VIEW);
   const [hover, setHover] = useState(false);
   const [liveTranscript, setLiveTranscript] = useState("");
+  const autoRewriteStartedRef = useRef<Set<string>>(new Set());
+  const autoInsertStartedRef = useRef<Set<string>>(new Set());
+
+  const runAutoInsert = useCallback(async (view: WorkflowView) => {
+    const phase = workflowPhaseName(view.phase);
+    const transcriptId = optionalString(view.lastTranscriptId);
+    const text = (view.lastText || view.lastAsrText || "").trim();
+    if (phase !== "rewritten" || !transcriptId || !text) return;
+    if (autoInsertStartedRef.current.has(transcriptId)) return;
+    autoInsertStartedRef.current.add(transcriptId);
+    try {
+      await client.workflowInsert({ text });
+      const refreshed = await client.workflowSnapshot();
+      setWorkflow(refreshed);
+      onHistoryChanged();
+    } catch (err) {
+      const diag = buildDiagnostic(err, "Text could not be pasted");
+      pushToast(diag.title, "danger");
+      try {
+        const refreshed = await client.workflowSnapshot();
+        setWorkflow(refreshed);
+      } catch (refreshErr) {
+        const refreshDiag = buildDiagnostic(refreshErr, "WORKFLOW STATE FAILED");
+        pushToast(refreshDiag.title, "danger");
+      }
+    }
+  }, [client, onHistoryChanged, pushToast]);
+
+  const runAutoRewrite = useCallback(async (view: WorkflowView) => {
+    const phase = workflowPhaseName(view.phase);
+    const transcriptId = optionalString(view.lastTranscriptId);
+    const text = (view.lastText || view.lastAsrText || "").trim();
+    if (phase !== "transcribed" || !transcriptId || !text) return;
+    if (autoRewriteStartedRef.current.has(transcriptId)) return;
+    autoRewriteStartedRef.current.add(transcriptId);
+    try {
+      await client.workflowRewrite({ text });
+      const refreshed = await client.workflowSnapshot();
+      setWorkflow(refreshed);
+      await runAutoInsert(refreshed);
+    } catch (err) {
+      const diag = buildDiagnostic(err, "Text improvement failed");
+      pushToast(diag.title, "danger");
+      try {
+        const refreshed = await client.workflowSnapshot();
+        setWorkflow(refreshed);
+      } catch (refreshErr) {
+        const refreshDiag = buildDiagnostic(refreshErr, "WORKFLOW STATE FAILED");
+        pushToast(refreshDiag.title, "danger");
+      }
+    }
+  }, [client, pushToast, runAutoInsert]);
+
+  const acceptWorkflowView = useCallback(async (next: WorkflowView, autoContinue: boolean) => {
+    setWorkflow(next);
+    const phase = workflowPhaseName(next.phase);
+    if (phase === "recording") setLiveTranscript("");
+    if (!autoContinue) return;
+    if (phase === "transcribed") {
+      await runAutoRewrite(next);
+      return;
+    }
+    if (phase === "rewritten") {
+      await runAutoInsert(next);
+    }
+  }, [runAutoInsert, runAutoRewrite]);
 
   useEffect(() => {
     (async () => {
       const view = await client.workflowSnapshot();
-      setWorkflow(view);
+      await acceptWorkflowView(view, false);
     })().catch((err) => {
       const diag = buildDiagnostic(err, "WORKFLOW STATE FAILED");
       pushToast(diag.title, "danger");
     });
-  }, [client, pushToast]);
+  }, [acceptWorkflowView, client, pushToast]);
 
   useEffect(() => {
     (async () => {
@@ -85,9 +151,7 @@ export function MainScreen({
         if (ev.kind === "workflow.state") {
           const next = workflowViewFromPayload(ev.payload);
           if (next) {
-            setWorkflow(next);
-            const phase = String(next.phase || "").toLowerCase();
-            if (phase === "recording") setLiveTranscript("");
+            await acceptWorkflowView(next, true);
           }
           return;
         }
@@ -102,7 +166,7 @@ export function MainScreen({
                   code: optionalString(ev.errorCode) || "E_TRANSCRIBE_FAILED",
                   message: ev.message,
                 });
-                setWorkflow(next);
+                await acceptWorkflowView(next, false);
               } catch (err) {
                 const diag = buildDiagnostic(err, "WORKFLOW EVENT FAILED");
                 pushToast(diag.title, "danger");
@@ -121,7 +185,7 @@ export function MainScreen({
           if (transcriptId) {
             try {
               const next = await client.workflowReportAsrEmpty({ transcriptId });
-              setWorkflow(next);
+              await acceptWorkflowView(next, false);
             } catch (err) {
               const diag = buildDiagnostic(err, "WORKFLOW EVENT FAILED");
               pushToast(diag.title, "danger");
@@ -144,7 +208,7 @@ export function MainScreen({
               text: completed.asrText,
               metrics: completed.metrics,
             });
-            setWorkflow(next);
+            await acceptWorkflowView(next, true);
             setLiveTranscript("");
             pushToast("Text ready", "ok");
             onHistoryChanged();
@@ -183,12 +247,12 @@ export function MainScreen({
         }
       }
     };
-  }, [client, onHistoryChanged, pushToast]);
+  }, [acceptWorkflowView, client, onHistoryChanged, pushToast]);
 
   async function sendWorkflowCommand(command: WorkflowCommand) {
     try {
       const next = await client.workflowCommand({ command });
-      setWorkflow(next);
+      await acceptWorkflowView(next, false);
       if (command === "copyLast") {
         pushToast("Text copied", "ok");
       }
@@ -197,7 +261,7 @@ export function MainScreen({
       pushToast(diag.title, "danger");
       try {
         const refreshed = await client.workflowSnapshot();
-        setWorkflow(refreshed);
+        await acceptWorkflowView(refreshed, false);
       } catch (refreshErr) {
         const refreshDiag = buildDiagnostic(refreshErr, "WORKFLOW STATE FAILED");
         pushToast(refreshDiag.title, "danger");

@@ -3,7 +3,6 @@ import { createBackendClient } from "./infra/backendClient";
 import { defaultTauriGateway } from "./infra/runtimePorts";
 import {
   appendTranscript,
-  overlayKeyAction,
   textFromRewriteCompleted,
   textFromTranscriptionCompleted,
   textFromTranscriptionPartial,
@@ -11,7 +10,6 @@ import {
 import {
   canTogglePrimaryFromOverlay,
   EMPTY_WORKFLOW_VIEW,
-  isActiveWorkflowPhase,
   overlayViewFromWorkflow,
   workflowPhaseName,
   workflowViewFromPayload,
@@ -19,7 +17,7 @@ import {
 import type { WorkflowView } from "./types";
 
 type GlobalHotkeyEvent = {
-  action: "altTap" | "insertOverlay";
+  action: "primary";
   tsMs?: number;
 };
 
@@ -32,12 +30,10 @@ export default function OverlayApp() {
   const [workflow, setWorkflow] = useState<WorkflowView>(EMPTY_WORKFLOW_VIEW);
   const [draftText, setDraftText] = useState("");
   const [liveText, setLiveText] = useState("");
-  const [busyAction, setBusyAction] = useState<"rewrite" | "insert" | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const phaseRef = useRef("idle");
   const draftRef = useRef("");
   const liveRef = useRef("");
-  const busyRef = useRef<"rewrite" | "insert" | null>(null);
 
   useEffect(() => {
     document.body.classList.add("isOverlay");
@@ -51,10 +47,6 @@ export default function OverlayApp() {
   useEffect(() => {
     liveRef.current = liveText;
   }, [liveText]);
-
-  useEffect(() => {
-    busyRef.current = busyAction;
-  }, [busyAction]);
 
   useEffect(() => {
     phaseRef.current = workflowPhaseName(workflow.phase);
@@ -115,7 +107,7 @@ export default function OverlayApp() {
 
   const runPrimaryFromAlt = useCallback(async () => {
     const phase = phaseRef.current;
-    if (!canTogglePrimaryFromOverlay(phase) || busyRef.current) return;
+    if (!canTogglePrimaryFromOverlay(phase)) return;
 
     if (phase !== "recording") {
       setLiveText("");
@@ -127,44 +119,6 @@ export default function OverlayApp() {
       await refreshWorkflowSnapshot();
     }
   }, [acceptWorkflowView, client, refreshWorkflowSnapshot]);
-
-  const runRewrite = useCallback(async () => {
-    if (busyRef.current) return;
-    const text = draftRef.current.trim();
-    if (!text || isActiveWorkflowPhase(phaseRef.current)) return;
-
-    setBusyAction("rewrite");
-    try {
-      const result = await client.workflowRewrite({ text });
-      if (result.finalText.trim()) {
-        setDraftText(result.finalText);
-      }
-      setLiveText("");
-      await refreshWorkflowSnapshot();
-    } catch {
-      await refreshWorkflowSnapshot();
-    } finally {
-      setBusyAction(null);
-    }
-  }, [client, refreshWorkflowSnapshot]);
-
-  const runInsert = useCallback(async () => {
-    if (busyRef.current) return;
-    const text = appendTranscript(draftRef.current, liveRef.current).trim();
-    if (!text) return;
-
-    setBusyAction("insert");
-    try {
-      await client.workflowInsert({ text });
-      setDraftText("");
-      setLiveText("");
-      await refreshWorkflowSnapshot();
-    } catch {
-      await refreshWorkflowSnapshot();
-    } finally {
-      setBusyAction(null);
-    }
-  }, [client, refreshWorkflowSnapshot]);
 
   useEffect(() => {
     void refreshWorkflowSnapshot();
@@ -184,12 +138,8 @@ export default function OverlayApp() {
     (async () => {
       track(await defaultTauriGateway.listen<GlobalHotkeyEvent>("tv_global_hotkey", async (event) => {
         if (!event) return;
-        if (event.action === "altTap") {
+        if (event.action === "primary") {
           await runPrimaryFromAlt();
-          return;
-        }
-        if (event.action === "insertOverlay") {
-          await runInsert();
         }
       }));
 
@@ -231,7 +181,7 @@ export default function OverlayApp() {
       cancelled = true;
       for (const fn of unlistenFns) fn();
     };
-  }, [acceptWorkflowView, client, refreshWorkflowSnapshot, runInsert, runPrimaryFromAlt]);
+  }, [acceptWorkflowView, client, refreshWorkflowSnapshot, runPrimaryFromAlt]);
 
   if (!overlayView.visible) {
     return <div ref={rootRef} className="transcriptOverlayRoot isHidden" />;
@@ -250,16 +200,6 @@ export default function OverlayApp() {
         onChange={(event) => {
           setDraftText(event.currentTarget.value);
           setLiveText("");
-        }}
-        onKeyDown={(event) => {
-          const action = overlayKeyAction(event);
-          if (action === "none" || action === "newline") return;
-          event.preventDefault();
-          if (action === "rewrite") {
-            void runRewrite();
-            return;
-          }
-          void runInsert();
         }}
       />
     </div>

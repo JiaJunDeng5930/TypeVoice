@@ -1,7 +1,5 @@
 import type { TranscriptionMetrics, UiEvent } from "../types";
 
-export type OverlayKeyAction = "rewrite" | "insert" | "newline" | "none";
-
 export function appendTranscript(base: string, next: string): string {
   const cleanNext = next.trim();
   if (!cleanNext) return base;
@@ -44,13 +42,6 @@ export function textFromRewriteCompleted(event: UiEvent): {
     transcriptId: optionalString(payload.transcriptId),
     finalText: String(payload.finalText || ""),
   };
-}
-
-export function overlayKeyAction(event: Pick<KeyboardEvent, "key" | "shiftKey" | "ctrlKey" | "metaKey">): OverlayKeyAction {
-  if (event.key !== "Enter") return "none";
-  if (event.shiftKey) return "newline";
-  if (event.ctrlKey || event.metaKey) return "insert";
-  return "rewrite";
 }
 
 function optionalString(value: unknown): string | null {

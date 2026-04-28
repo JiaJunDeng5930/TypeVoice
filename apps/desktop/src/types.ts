@@ -162,8 +162,7 @@ export type Settings = {
   llm_supports_vision?: boolean | null;
 
   hotkeys_enabled?: boolean | null;
-  hotkey_ptt?: string | null;
-  hotkey_toggle?: string | null;
+  hotkey_primary?: string | null;
   hotkeys_show_overlay?: boolean | null;
 };
 

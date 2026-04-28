@@ -56,8 +56,7 @@ pub struct Settings {
 
     // Hotkeys / overlay (post-MVP)
     pub hotkeys_enabled: Option<bool>,
-    pub hotkey_ptt: Option<String>,
-    pub hotkey_toggle: Option<String>,
+    pub hotkey_primary: Option<String>,
     pub hotkeys_show_overlay: Option<bool>,
 }
 
@@ -98,8 +97,7 @@ pub struct SettingsPatch {
     pub llm_supports_vision: Option<Option<bool>>,
 
     pub hotkeys_enabled: Option<Option<bool>>,
-    pub hotkey_ptt: Option<Option<String>>,
-    pub hotkey_toggle: Option<Option<String>>,
+    pub hotkey_primary: Option<Option<String>>,
     pub hotkeys_show_overlay: Option<Option<bool>>,
 }
 
@@ -191,11 +189,8 @@ pub fn apply_patch(mut s: Settings, p: SettingsPatch) -> Settings {
     if let Some(v) = p.hotkeys_enabled {
         s.hotkeys_enabled = v;
     }
-    if let Some(v) = p.hotkey_ptt {
-        s.hotkey_ptt = v;
-    }
-    if let Some(v) = p.hotkey_toggle {
-        s.hotkey_toggle = v;
+    if let Some(v) = p.hotkey_primary {
+        s.hotkey_primary = v;
     }
     if let Some(v) = p.hotkeys_show_overlay {
         s.hotkeys_show_overlay = v;
@@ -237,8 +232,7 @@ pub fn resolve_auto_paste_enabled(s: &Settings) -> bool {
 #[derive(Debug, Clone, Serialize)]
 pub struct HotkeyConfigResolved {
     pub enabled: bool,
-    pub ptt: Option<String>,
-    pub toggle: Option<String>,
+    pub primary: String,
 }
 
 pub fn resolve_hotkey_config(s: &Settings) -> Result<HotkeyConfigResolved> {
@@ -248,26 +242,33 @@ pub fn resolve_hotkey_config(s: &Settings) -> Result<HotkeyConfigResolved> {
     if !enabled {
         return Ok(HotkeyConfigResolved {
             enabled: false,
-            ptt: None,
-            toggle: None,
+            primary: "Alt".to_string(),
         });
     }
 
     Ok(HotkeyConfigResolved {
         enabled: true,
-        ptt: s
-            .hotkey_ptt
-            .as_deref()
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .map(ToOwned::to_owned),
-        toggle: s
-            .hotkey_toggle
-            .as_deref()
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .map(ToOwned::to_owned),
+        primary: normalize_hotkey_primary(s.hotkey_primary.as_deref())?,
     })
+}
+
+pub fn normalize_hotkey_primary(raw: Option<&str>) -> Result<String> {
+    let value = raw
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or("Alt");
+    let upper = value.to_ascii_uppercase();
+    match upper.as_str() {
+        "ALT" => Ok("Alt".to_string()),
+        "CTRL" | "CONTROL" => Ok("Ctrl".to_string()),
+        "SHIFT" => Ok("Shift".to_string()),
+        "F1" | "F2" | "F3" | "F4" | "F5" | "F6" | "F7" | "F8" | "F9" | "F10" | "F11" | "F12" => {
+            Ok(upper)
+        }
+        _ => Err(anyhow!(
+            "E_SETTINGS_HOTKEY_PRIMARY_INVALID: unsupported primary hotkey '{value}'"
+        )),
+    }
 }
 
 pub fn resolve_record_input_spec(s: &Settings) -> String {
@@ -337,9 +338,9 @@ pub fn resolve_remote_asr_concurrency(s: &Settings) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_patch, resolve_asr_provider, resolve_remote_asr_concurrency,
-        resolve_remote_asr_model, resolve_remote_asr_url, Settings, SettingsPatch,
-        DEFAULT_REMOTE_ASR_URL,
+        apply_patch, normalize_hotkey_primary, resolve_asr_provider, resolve_hotkey_config,
+        resolve_remote_asr_concurrency, resolve_remote_asr_model, resolve_remote_asr_url, Settings,
+        SettingsPatch, DEFAULT_REMOTE_ASR_URL,
     };
 
     #[test]
@@ -366,8 +367,7 @@ mod tests {
             rewrite_include_glossary: None,
             llm_supports_vision: None,
             hotkeys_enabled: None,
-            hotkey_ptt: None,
-            hotkey_toggle: None,
+            hotkey_primary: None,
             hotkeys_show_overlay: None,
             ..Default::default()
         };
@@ -385,6 +385,7 @@ mod tests {
             context_include_prev_window_meta: Some(Some(true)),
             rewrite_include_glossary: Some(Some(false)),
             auto_paste_enabled: Some(Some(false)),
+            hotkey_primary: Some(Some("F9".to_string())),
             ..Default::default()
         };
 
@@ -403,6 +404,7 @@ mod tests {
         assert_eq!(next.rewrite_enabled, Some(true));
         assert_eq!(next.rewrite_glossary.as_deref(), None);
         assert_eq!(next.auto_paste_enabled, Some(false));
+        assert_eq!(next.hotkey_primary.as_deref(), Some("F9"));
         assert_eq!(next.context_history_n, Some(5));
         assert_eq!(next.context_include_prev_window_meta, Some(true));
         assert_eq!(next.rewrite_include_glossary, Some(false));
@@ -427,5 +429,23 @@ mod tests {
         assert_eq!(resolve_remote_asr_url(&s), "http://localhost/transcribe");
         assert_eq!(resolve_remote_asr_model(&s).as_deref(), Some("whisper-1"));
         assert_eq!(resolve_remote_asr_concurrency(&s), 16);
+    }
+
+    #[test]
+    fn hotkey_primary_defaults_and_validates_single_keys() {
+        let mut s = Settings::default();
+        s.hotkeys_enabled = Some(true);
+        let cfg = resolve_hotkey_config(&s).expect("hotkey config");
+        assert_eq!(cfg.primary, "Alt");
+
+        s.hotkey_primary = Some(" f9 ".to_string());
+        let cfg = resolve_hotkey_config(&s).expect("hotkey config");
+        assert_eq!(cfg.primary, "F9");
+
+        assert_eq!(
+            normalize_hotkey_primary(Some("control")).expect("control alias"),
+            "Ctrl"
+        );
+        assert!(normalize_hotkey_primary(Some("Ctrl+Alt")).is_err());
     }
 }

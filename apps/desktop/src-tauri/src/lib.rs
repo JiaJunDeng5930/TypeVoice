@@ -807,8 +807,7 @@ fn update_settings(
         "context_include_prev_window_screenshot": patch.context_include_prev_window_screenshot.is_some(),
         "llm_supports_vision": patch.llm_supports_vision.is_some(),
         "hotkeys_enabled": patch.hotkeys_enabled.is_some(),
-        "hotkey_ptt": patch.hotkey_ptt.is_some(),
-        "hotkey_toggle": patch.hotkey_toggle.is_some(),
+        "hotkey_primary": patch.hotkey_primary.is_some(),
         "hotkeys_show_overlay": patch.hotkeys_show_overlay.is_some(),
         "asr_preprocess_silence_trim_enabled": patch.asr_preprocess_silence_trim_enabled.is_some(),
         "asr_preprocess_silence_threshold_db": patch
@@ -868,6 +867,15 @@ fn update_settings(
             .map(str::trim)
             .filter(|v| !v.is_empty())
             .map(ToOwned::to_owned);
+    }
+    match settings::normalize_hotkey_primary(next.hotkey_primary.as_deref()) {
+        Ok(primary) => {
+            next.hotkey_primary = Some(primary);
+        }
+        Err(e) => {
+            span.err_anyhow("config", "E_SETTINGS_HOTKEY_PRIMARY_INVALID", &e, None);
+            return Err(e.to_string());
+        }
     }
     if let Err(e) = settings::save_settings(&dir, &next) {
         span.err_anyhow("settings", "E_CMD_UPDATE_SETTINGS", &e, None);
