@@ -741,13 +741,11 @@ impl VoiceWorkflow {
                 },
             );
         }
-        if self.has_current_transcription(&transcript_id) {
-            return Ok(self.view());
-        }
-        self.ensure_transcribing_task(&transcript_id)?;
         let result = TranscriptionResult::new(transcript_id, req.text, req.metrics);
-        self.complete_transcription(result.clone())?;
-        self.persist_transcription_result(&result)?;
+        let should_persist = self.report_completed_transcription_state(result.clone())?;
+        if should_persist {
+            self.persist_transcription_result(&result)?;
+        }
         let view = self.view();
         self.emit_state(mailbox);
         Ok(view)
@@ -1449,14 +1447,6 @@ impl VoiceWorkflow {
         self.ensure_active_task(task_id)
     }
 
-    fn has_current_transcription(&self, transcript_id: &str) -> bool {
-        let snapshot = self.snapshot();
-        last_result_from_snapshot(&snapshot)
-            .as_ref()
-            .map(|result| result.transcript_id == transcript_id)
-            .unwrap_or(false)
-    }
-
     fn has_failed_task(&self, transcript_id: &str) -> bool {
         let snapshot = self.snapshot();
         snapshot.phase == WorkflowPhase::Failed
@@ -1652,6 +1642,49 @@ impl VoiceWorkflow {
         state.insert_previous_phase = None;
         state.last_error = None;
         Ok(())
+    }
+
+    fn report_completed_transcription_state(
+        &self,
+        result: TranscriptionResult,
+    ) -> WorkflowResult<bool> {
+        let mut state = self.state.lock().unwrap();
+        let current_transcript_id = state
+            .rewrite
+            .as_ref()
+            .map(|item| item.transcript_id.as_str())
+            .or_else(|| {
+                state
+                    .transcription
+                    .as_ref()
+                    .map(|item| item.transcript_id.as_str())
+            });
+        if current_transcript_id == Some(result.transcript_id.as_str()) {
+            return Ok(false);
+        }
+        if state.phase != WorkflowPhase::Transcribing {
+            return Err(WorkflowError::new(
+                "E_WORKFLOW_ASR_REPORT_INVALID_PHASE",
+                format!("workflow phase is {}", state.phase.as_str()),
+            ));
+        }
+        let session_id = state
+            .session
+            .as_ref()
+            .map(|session| session.session_id.as_str())
+            .ok_or_else(|| WorkflowError::new("E_WORKFLOW_SESSION_MISSING", "session missing"))?;
+        if session_id != result.transcript_id {
+            return Err(WorkflowError::new(
+                "E_WORKFLOW_TRANSCRIPT_MISMATCH",
+                "transcription result does not match active session",
+            ));
+        }
+        state.phase = WorkflowPhase::Transcribed;
+        state.transcription = Some(result);
+        state.last_created_at_ms = Some(now_ms());
+        state.insert_previous_phase = None;
+        state.last_error = None;
+        Ok(true)
     }
 
     fn complete_empty_transcription(&self, transcript_id: &str) -> WorkflowResult<()> {
