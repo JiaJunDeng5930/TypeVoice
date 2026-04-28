@@ -741,6 +741,9 @@ impl VoiceWorkflow {
                 },
             );
         }
+        if self.has_current_transcription(&transcript_id) {
+            return Ok(self.view());
+        }
         self.ensure_transcribing_task(&transcript_id)?;
         let result = TranscriptionResult::new(transcript_id, req.text, req.metrics);
         self.complete_transcription(result.clone())?;
@@ -780,6 +783,9 @@ impl VoiceWorkflow {
         mailbox: &UiEventMailbox,
         req: WorkflowTaskFailedRequest,
     ) -> WorkflowResult<WorkflowView> {
+        if self.has_failed_task(&req.transcript_id) {
+            return Ok(self.view());
+        }
         self.ensure_asr_report_task(&req.transcript_id)?;
         let code = req.code.trim();
         if code.is_empty() {
@@ -1441,6 +1447,24 @@ impl VoiceWorkflow {
             ));
         }
         self.ensure_active_task(task_id)
+    }
+
+    fn has_current_transcription(&self, transcript_id: &str) -> bool {
+        let snapshot = self.snapshot();
+        last_result_from_snapshot(&snapshot)
+            .as_ref()
+            .map(|result| result.transcript_id == transcript_id)
+            .unwrap_or(false)
+    }
+
+    fn has_failed_task(&self, transcript_id: &str) -> bool {
+        let snapshot = self.snapshot();
+        snapshot.phase == WorkflowPhase::Failed
+            && snapshot
+                .session
+                .as_ref()
+                .map(|session| session.session_id == transcript_id)
+                .unwrap_or(false)
     }
 
     fn ensure_rewriting_task(&self, task_id: &str) -> WorkflowResult<()> {
@@ -2331,6 +2355,48 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_completed_asr_report_returns_current_view() {
+        let (mailbox, _rx) = UiEventMailbox::for_test();
+        let workflow = VoiceWorkflow::new();
+        workflow
+            .open_recording_for_test("task-1", "recording-1")
+            .expect("recording starts");
+        workflow
+            .begin_transcribing_for_test("recording-1")
+            .expect("transcribing starts");
+        let metrics = crate::transcription::TranscriptionMetrics {
+            rtf: 0.4,
+            device_used: "cuda".to_string(),
+            preprocess_ms: 10,
+            asr_ms: 20,
+        };
+
+        workflow
+            .report_asr_completed(
+                &mailbox,
+                WorkflowAsrCompletedRequest {
+                    transcript_id: "task-1".to_string(),
+                    text: "asr text".to_string(),
+                    metrics: metrics.clone(),
+                },
+            )
+            .expect("first report completes");
+        let view = workflow
+            .report_asr_completed(
+                &mailbox,
+                WorkflowAsrCompletedRequest {
+                    transcript_id: "task-1".to_string(),
+                    text: "asr text".to_string(),
+                    metrics,
+                },
+            )
+            .expect("duplicate report is accepted");
+
+        assert_eq!(view.phase, "transcribed");
+        assert_eq!(view.last_transcript_id.as_deref(), Some("task-1"));
+    }
+
+    #[test]
     fn completed_rewrite_is_saved_in_state() {
         let workflow = VoiceWorkflow::new();
         workflow
@@ -2635,6 +2701,45 @@ mod tests {
             view.diagnostic_code.as_deref(),
             Some("E_DOUBAO_ASR_CREDENTIALS_MISSING")
         );
+        assert_eq!(workflow.phase(), WorkflowPhase::Failed);
+    }
+
+    #[test]
+    fn duplicate_failed_asr_report_returns_current_view() {
+        let (mailbox, _rx) = UiEventMailbox::for_test();
+        let audio = RecordingRegistry::new();
+        let actor = TranscriptionActor::new(mailbox.clone());
+        let workflow = VoiceWorkflow::new();
+        workflow
+            .open_recording_for_test("task-1", "recording-1")
+            .expect("recording starts");
+
+        workflow
+            .report_asr_failed(
+                &audio,
+                &actor,
+                &mailbox,
+                WorkflowTaskFailedRequest {
+                    transcript_id: "task-1".to_string(),
+                    code: "E_ASR_FAILED".to_string(),
+                    message: "failed".to_string(),
+                },
+            )
+            .expect("first report fails workflow");
+        let view = workflow
+            .report_asr_failed(
+                &audio,
+                &actor,
+                &mailbox,
+                WorkflowTaskFailedRequest {
+                    transcript_id: "task-1".to_string(),
+                    code: "E_ASR_FAILED".to_string(),
+                    message: "failed".to_string(),
+                },
+            )
+            .expect("duplicate report is accepted");
+
+        assert_eq!(view.phase, "failed");
         assert_eq!(workflow.phase(), WorkflowPhase::Failed);
     }
 

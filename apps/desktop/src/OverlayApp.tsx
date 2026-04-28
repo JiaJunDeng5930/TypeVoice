@@ -167,7 +167,28 @@ export default function OverlayApp() {
 
         if (event.kind === "transcription.completed") {
           const result = textFromTranscriptionCompleted(event);
+          if (result.transcriptId && result.asrText.trim() && result.metrics) {
+            const next = await client.workflowReportAsrCompleted({
+              transcriptId: result.transcriptId,
+              text: result.asrText,
+              metrics: result.metrics,
+            });
+            acceptWorkflowView(next);
+          } else {
+            await refreshWorkflowSnapshot();
+          }
           setDraftText((prev) => appendTranscript(prev, result.asrText));
+          setLiveText("");
+          return;
+        }
+
+        if (event.kind === "transcription.empty") {
+          const transcriptId = optionalString(event.taskId);
+          if (transcriptId) {
+            acceptWorkflowView(await client.workflowReportAsrEmpty({ transcriptId }));
+          } else {
+            await refreshWorkflowSnapshot();
+          }
           setLiveText("");
           return;
         }
@@ -176,6 +197,21 @@ export default function OverlayApp() {
           const result = textFromRewriteCompleted(event);
           if (result.finalText.trim()) setDraftText(result.finalText);
           setLiveText("");
+          return;
+        }
+
+        if (isDisplayFailureEvent(event.kind, event.status)) return;
+        if (event.kind === "workflow.task.failed" && isAsrFailureStage(event.stage)) {
+          const transcriptId = optionalString(event.taskId);
+          if (transcriptId) {
+            acceptWorkflowView(await client.workflowReportAsrFailed({
+              transcriptId,
+              code: optionalString(event.errorCode) || "E_TRANSCRIBE_FAILED",
+              message: event.message,
+            }));
+          } else {
+            await refreshWorkflowSnapshot();
+          }
           return;
         }
 
@@ -212,4 +248,16 @@ export default function OverlayApp() {
       />
     </div>
   );
+}
+
+function optionalString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function isDisplayFailureEvent(kind: string, status: string | null | undefined): boolean {
+  return kind === "transcription.stage" && status === "failed";
+}
+
+function isAsrFailureStage(stage: string | null | undefined): boolean {
+  return stage === "Record" || stage === "Transcribe";
 }
