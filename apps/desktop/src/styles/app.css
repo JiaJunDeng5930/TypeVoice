@@ -527,6 +527,7 @@ button {
 .settingsGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
   gap: 0 34px;
   padding-top: 18px;
   border-top: 1px solid var(--border);
@@ -534,14 +535,14 @@ button {
 
 .card {
   min-width: 0;
+  align-self: start;
   border: 0;
-  border-bottom: 1px solid var(--border);
   background: transparent;
   padding: 0;
 }
 
 .settingsLineBlock {
-  border-top: 1px solid transparent;
+  border-bottom: 1px solid var(--border);
 }
 
 .settingsLine {

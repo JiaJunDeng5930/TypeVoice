@@ -149,7 +149,7 @@ export function SettingsScreen({
   const [llmCheckPending, setLlmCheckPending] = useState(false);
   const [remoteAsrCheckPending, setRemoteAsrCheckPending] = useState(false);
   const [doubaoCheckPending, setDoubaoCheckPending] = useState(false);
-  const [activeSettingsPanel, setActiveSettingsPanel] = useState<SettingsPanelId | null>("asr");
+  const [activeSettingsPanel, setActiveSettingsPanel] = useState<SettingsPanelId | null>(null);
 
   useEffect(() => {
     if (!settings) return;
