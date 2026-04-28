@@ -717,7 +717,11 @@ button {
 }
 
 .pxSelectArrow {
-  color: var(--muted);
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
+  background: url("../assets/dropdown-triangle.png") center / contain no-repeat;
+  opacity: 0.78;
 }
 
 .pxSelectList {
