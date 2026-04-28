@@ -970,6 +970,7 @@ impl VoiceWorkflow {
             }
         };
         self.complete_rewrite(result.clone())?;
+        self.persist_rewrite_result(&result)?;
         self.emit_state(mailbox);
         mailbox.send(UiEvent::stage_with_elapsed(
             &transcript_id,
