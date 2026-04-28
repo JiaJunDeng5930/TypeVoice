@@ -11,6 +11,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use reqwest::blocking::Client;
+use reqwest::header::USER_AGENT;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -324,6 +325,7 @@ fn ensure_fixtures_ready(required_files: &[&str]) -> Result<()> {
     fs::create_dir_all(&dir).with_context(|| format!("create fixtures dir: {}", dir.display()))?;
     let client = Client::builder()
         .timeout(Duration::from_secs(120))
+        .user_agent("TypeVoice xtask/0.1 (https://github.com/JiaJunDeng5930/TypeVoice)")
         .build()
         .context("create http client")?;
 
@@ -375,7 +377,14 @@ fn ensure_fixtures_ready(required_files: &[&str]) -> Result<()> {
 }
 
 fn download_file(client: &Client, url: &str, target: &Path) -> Result<()> {
-    let mut response = client.get(url).send()?.error_for_status()?;
+    let mut response = client
+        .get(url)
+        .header(
+            USER_AGENT,
+            "TypeVoice xtask/0.1 (https://github.com/JiaJunDeng5930/TypeVoice)",
+        )
+        .send()?
+        .error_for_status()?;
     let mut out = File::create(target).with_context(|| format!("create {}", target.display()))?;
     io::copy(&mut response, &mut out).with_context(|| format!("write {}", target.display()))?;
     Ok(())
