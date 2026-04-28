@@ -478,7 +478,7 @@ fn run_doubao_session(
                 cmd = recv_doubao_command(&mut rx) => {
                     match cmd? {
                         DoubaoCommand::Chunk { sequence, pcm, is_last } => {
-                            if !pcm.is_empty() {
+                            if should_send_doubao_audio_frame(&pcm, is_last) {
                                 write
                                     .send(tokio_tungstenite::tungstenite::Message::Binary(
                                         doubao_asr::build_audio_frame(sequence, &pcm, is_last)?,
@@ -487,7 +487,11 @@ fn run_doubao_session(
                                     .context("send doubao audio frame failed")?;
                                 stats.sent_frames += 1;
                                 stats.sent_audio_bytes += pcm.len();
-                                stats.non_silent_frames += usize::from(pcm_peak_abs(&pcm) > 0);
+                                if pcm.is_empty() {
+                                    stats.sent_empty_frames += 1;
+                                } else {
+                                    stats.non_silent_frames += usize::from(pcm_peak_abs(&pcm) > 0);
+                                }
                                 stats.first_sequence.get_or_insert(sequence);
                                 stats.last_sequence = Some(sequence);
                             } else {
@@ -594,16 +598,10 @@ fn run_doubao_session(
                         );
                     }
                     if let Some(text) = text {
-                        let delta = text_delta(&last_text, &text);
-                        last_text = text.clone();
-                        if !delta.trim().is_empty() {
-                            full_text.push_str(delta.trim());
-                            mailbox.send(UiEvent::partial(
-                                &task_id,
-                                delta.trim(),
-                                full_text.as_str(),
-                                0,
-                            ));
+                        if let Some(delta) =
+                            append_doubao_text_delta(&mut full_text, &mut last_text, text)
+                        {
+                            mailbox.send(UiEvent::partial(&task_id, &delta, full_text.as_str(), 0));
                         }
                     }
                     if payload.is_last {
@@ -687,6 +685,24 @@ fn text_delta(previous: &str, current: &str) -> String {
     current.to_string()
 }
 
+fn should_send_doubao_audio_frame(pcm: &[u8], is_last: bool) -> bool {
+    !pcm.is_empty() || is_last
+}
+
+fn append_doubao_text_delta(
+    full_text: &mut String,
+    last_text: &mut String,
+    text: String,
+) -> Option<String> {
+    let delta = text_delta(last_text, &text);
+    *last_text = text;
+    if delta.trim().is_empty() {
+        return None;
+    }
+    full_text.push_str(&delta);
+    Some(delta)
+}
+
 fn send_failed(mailbox: &UiEventMailbox, task_id: &str, code: &str, message: impl Into<String>) {
     let message = message.into();
     if let Ok(dir) = data_dir::data_dir() {
@@ -744,6 +760,27 @@ mod tests {
     fn text_delta_returns_append_only_suffix() {
         assert_eq!(text_delta("你好", "你好世界"), "世界");
         assert_eq!(text_delta("旧", "新文本"), "新文本");
+    }
+
+    #[test]
+    fn final_empty_doubao_chunk_is_sent() {
+        assert!(should_send_doubao_audio_frame(&[], true));
+        assert!(should_send_doubao_audio_frame(&[1, 2], false));
+        assert!(!should_send_doubao_audio_frame(&[], false));
+    }
+
+    #[test]
+    fn append_doubao_delta_preserves_leading_whitespace() {
+        let mut full_text = "hello".to_string();
+        let mut last_text = "hello".to_string();
+
+        let delta =
+            append_doubao_text_delta(&mut full_text, &mut last_text, "hello world".to_string())
+                .expect("delta contains text");
+
+        assert_eq!(delta, " world");
+        assert_eq!(full_text, "hello world");
+        assert_eq!(last_text, "hello world");
     }
 
     #[test]
