@@ -8,6 +8,7 @@ import { buildDiagnostic, buildUiEventDiagnostic, userMessageFromDiagnostic } fr
 import {
   EMPTY_WORKFLOW_VIEW,
   primaryActionLabel,
+  statusLabelFromPhase,
   workflowPhaseName,
   workflowViewFromPayload,
 } from "../domain/workflowView";
@@ -273,6 +274,7 @@ export function MainScreen({
   const hint = primaryActionLabel(workflow.primaryLabel || "START");
   const streamText = phase === "recording" || phase === "transcribing" ? liveTranscript : "";
   const statusLabel = phase === "idle" ? "" : hint;
+  const resultStatusLabel = statusLabelFromPhase(phase);
   const diagnosticMessage = userMessageFromDiagnostic(workflow.diagnosticCode, workflow.diagnosticLine);
 
   return (
@@ -306,7 +308,11 @@ export function MainScreen({
       <div className="resultSheet">
         <div className="resultHeader">
           <div className="sectionTitle">current transcript</div>
-          <span className="resultStatus">Ready</span>
+          <span
+            className={`resultStatusIcon status-${phase}`}
+            aria-label={resultStatusLabel}
+            title={resultStatusLabel}
+          />
         </div>
 
         <div className="streamCanvas" aria-live="polite">
@@ -320,25 +326,6 @@ export function MainScreen({
           aria-hidden={!workflow.diagnosticLine}
         >
           {diagnosticMessage || ""}
-        </div>
-
-        <div className="mainActions">
-          <button
-            type="button"
-            className="mainActionButton"
-            onClick={() => void sendWorkflowCommand("rewriteLast")}
-            disabled={true}
-          >
-            Improve
-          </button>
-          <button
-            type="button"
-            className="mainActionButton"
-            onClick={() => void sendWorkflowCommand("insertLast")}
-            disabled={true}
-          >
-            Paste
-          </button>
         </div>
       </div>
     </div>

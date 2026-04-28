@@ -363,7 +363,7 @@ button {
 .resultSheet {
   min-height: 0;
   display: grid;
-  grid-template-rows: auto 1fr auto auto;
+  grid-template-rows: auto 1fr auto;
   border-left: 1px solid var(--border);
   padding: 38px 54px 34px 82px;
   overflow: hidden;
@@ -375,10 +375,51 @@ button {
   justify-content: space-between;
 }
 
-.resultStatus {
-  color: var(--ok);
-  font-size: 13px;
-  letter-spacing: 0;
+.resultStatusIcon {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  background-image: url("../assets/workflow-status-icons.png");
+  background-repeat: no-repeat;
+  background-size: 300% 300%;
+  opacity: 0.82;
+  cursor: help;
+}
+
+.resultStatusIcon.status-idle {
+  background-position: 0 0;
+}
+
+.resultStatusIcon.status-recording {
+  background-position: 50% 0;
+}
+
+.resultStatusIcon.status-transcribing {
+  background-position: 100% 0;
+}
+
+.resultStatusIcon.status-transcribed {
+  background-position: 0 50%;
+}
+
+.resultStatusIcon.status-rewriting {
+  background-position: 50% 50%;
+}
+
+.resultStatusIcon.status-rewritten {
+  background-position: 100% 50%;
+}
+
+.resultStatusIcon.status-inserting {
+  background-position: 0 100%;
+}
+
+.resultStatusIcon.status-cancelled {
+  background-position: 50% 100%;
+}
+
+.resultStatusIcon.status-failed {
+  background-position: 100% 100%;
 }
 
 .streamCanvas {
@@ -416,14 +457,6 @@ button {
   color: var(--danger);
 }
 
-.mainActions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  padding-top: 26px;
-}
-
-.mainActionButton,
 .pxBtn {
   appearance: none;
   min-height: 34px;
@@ -438,8 +471,6 @@ button {
   letter-spacing: 0;
 }
 
-.mainActionButton:hover:not(:disabled),
-.mainActionButton:focus-visible:not(:disabled),
 .pxBtn:hover:not(:disabled),
 .pxBtn:focus-visible:not(:disabled) {
   color: var(--accent);
@@ -447,7 +478,6 @@ button {
   outline: none;
 }
 
-.mainActionButton:disabled,
 .pxBtn:disabled {
   opacity: 0.42;
   cursor: not-allowed;
