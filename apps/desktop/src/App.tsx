@@ -78,12 +78,26 @@ export default function App() {
     setEpoch((x) => x + 1);
   }, []);
 
+  const runWindowCommand = useCallback(
+    (command: () => Promise<void>, failureMessage: string) => {
+      void command().catch(() => {
+        pushToast(failureMessage, "danger");
+      });
+    },
+    [pushToast],
+  );
+
   return (
     <div className="appBg">
       <header
         className="windowTitlebar"
         data-tauri-drag-region
-        onDoubleClick={() => void getCurrentWindow().toggleMaximize()}
+        onDoubleClick={() => {
+          runWindowCommand(
+            () => getCurrentWindow().toggleMaximize(),
+            "Window resize failed",
+          );
+        }}
       >
         <div className="windowTitle" data-tauri-drag-region>TypeVoice</div>
         <div className="windowControls" onDoubleClick={(event) => event.stopPropagation()}>
@@ -92,7 +106,12 @@ export default function App() {
             className="windowControl windowControlMinimize"
             aria-label="Minimize"
             title="Minimize"
-            onClick={() => void getCurrentWindow().minimize()}
+            onClick={() => {
+              runWindowCommand(
+                () => getCurrentWindow().minimize(),
+                "Window minimize failed",
+              );
+            }}
           >
             <span />
           </button>
@@ -101,7 +120,12 @@ export default function App() {
             className="windowControl windowControlMaximize"
             aria-label="Maximize"
             title="Maximize"
-            onClick={() => void getCurrentWindow().toggleMaximize()}
+            onClick={() => {
+              runWindowCommand(
+                () => getCurrentWindow().toggleMaximize(),
+                "Window resize failed",
+              );
+            }}
           >
             <span />
           </button>
@@ -110,7 +134,12 @@ export default function App() {
             className="windowControl windowControlClose"
             aria-label="Close"
             title="Close"
-            onClick={() => void getCurrentWindow().close()}
+            onClick={() => {
+              runWindowCommand(
+                () => getCurrentWindow().close(),
+                "Window close failed",
+              );
+            }}
           >
             <span />
           </button>
