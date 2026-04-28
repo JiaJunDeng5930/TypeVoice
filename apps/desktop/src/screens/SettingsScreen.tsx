@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { defaultTauriGateway, type TauriGateway } from "../infra/runtimePorts";
 import type {
@@ -10,6 +11,7 @@ import { PixelDialog } from "../ui/PixelDialog";
 import { PixelInput, PixelTextarea } from "../ui/PixelInput";
 import { PixelSelect, type PixelSelectOption } from "../ui/PixelSelect";
 import { PixelToggle } from "../ui/PixelToggle";
+import { IconGear } from "../ui/icons";
 
 type Props = {
   settings: Settings | null;
@@ -44,6 +46,62 @@ const RECORD_DEFAULT_ROLES: PixelSelectOption[] = [
   { value: "communications", label: "communications (eCommunications)" },
   { value: "console", label: "console (eConsole)" },
 ];
+
+type SettingsPanelId =
+  | "asr"
+  | "recording"
+  | "preprocess"
+  | "llm"
+  | "llmKey"
+  | "rewrite"
+  | "context"
+  | "glossary"
+  | "export"
+  | "hotkeys"
+  | "history";
+
+type SettingsLineProps = {
+  title: string;
+  detail?: string;
+  panel: SettingsPanelId;
+  activePanel: SettingsPanelId | null;
+  onTogglePanel: (panel: SettingsPanelId) => void;
+  control?: ReactNode;
+  children?: ReactNode;
+};
+
+function SettingsLine({
+  title,
+  detail,
+  panel,
+  activePanel,
+  onTogglePanel,
+  control,
+  children,
+}: SettingsLineProps) {
+  const expanded = activePanel === panel;
+  return (
+    <div className={`settingsLineBlock ${expanded ? "isExpanded" : ""}`}>
+      <div className="settingsLine">
+        <div className="settingsLineText">
+          <div className="settingsLineTitle">{title}</div>
+          {detail ? <div className="settingsLineDetail">{detail}</div> : null}
+        </div>
+        <button
+          type="button"
+          className="settingsGear"
+          aria-label={`${title} settings`}
+          aria-expanded={expanded}
+          onClick={() => onTogglePanel(panel)}
+        >
+          <IconGear size={22} tone={expanded ? "accent" : "muted"} filled={expanded} />
+        </button>
+        {control ? <div className="settingsLineControl">{control}</div> : null}
+      </div>
+      {expanded && children ? <div className="settingsLinePanel">{children}</div> : null}
+    </div>
+  );
+}
 
 export function SettingsScreen({
   settings,
@@ -91,6 +149,7 @@ export function SettingsScreen({
   const [llmCheckPending, setLlmCheckPending] = useState(false);
   const [remoteAsrCheckPending, setRemoteAsrCheckPending] = useState(false);
   const [doubaoCheckPending, setDoubaoCheckPending] = useState(false);
+  const [activeSettingsPanel, setActiveSettingsPanel] = useState<SettingsPanelId | null>("asr");
 
   useEffect(() => {
     if (!settings) return;
@@ -508,403 +567,455 @@ export function SettingsScreen({
 
   const asrStatusText = useMemo(() => {
     if (asrProvider === "doubao") {
-      return "DOUBAO STREAMING  wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async";
+      return "Doubao streaming  wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async";
     }
-    return `REMOTE ${remoteAsrUrl.trim() || "https://api.server/transcribe"}`;
+    return `Remote ${remoteAsrUrl.trim() || "https://api.server/transcribe"}`;
   }, [asrProvider, remoteAsrUrl]);
+
+  function toggleSettingsPanel(panel: SettingsPanelId) {
+    setActiveSettingsPanel((current) => current === panel ? null : panel);
+  }
 
   return (
     <div className="pageSurface settingsSurface">
       <div className="pageHeader settingsHeader">
-        <div className="sectionTitle">SETTINGS</div>
-        <div className="ok">SAVED</div>
+        <div className="sectionTitle">settings</div>
+        <div className="ok">Saved</div>
       </div>
       <div className="settingsGrid">
-      <div className="card">
-        <div className="sectionTitle">ASR</div>
-        <div className="row">
-          <div className="muted">{asrStatusText}</div>
-        </div>
-        <div style={{ marginTop: 12 }} className="stack">
-          <PixelSelect value={asrProvider} onChange={setAsrProvider} options={ASR_PROVIDERS} />
-          {asrProvider === "doubao" ? (
-            <>
-              <div className="sectionTitle" style={{ marginTop: 8 }}>
-                DOUBAO ASR KEY
-              </div>
-              <PixelInput
-                value={doubaoAppKeyDraft}
-                onChange={setDoubaoAppKeyDraft}
-                placeholder="App Key (or env TYPEVOICE_DOUBAO_ASR_APP_KEY)"
-              />
-              <PixelInput
-                value={doubaoAccessKeyDraft}
-                onChange={setDoubaoAccessKeyDraft}
-                placeholder="Access Key (or env TYPEVOICE_DOUBAO_ASR_ACCESS_KEY)"
-              />
+        <div className="card">
+          <SettingsLine
+            title="Speech recognition"
+            detail={asrStatusText}
+            panel="asr"
+            activePanel={activeSettingsPanel}
+            onTogglePanel={toggleSettingsPanel}
+            control={<PixelSelect value={asrProvider} onChange={setAsrProvider} options={ASR_PROVIDERS} />}
+          >
+            <div className="stack">
+              {asrProvider === "doubao" ? (
+                <>
+                  <PixelInput
+                    value={doubaoAppKeyDraft}
+                    onChange={setDoubaoAppKeyDraft}
+                    placeholder="App Key (or env TYPEVOICE_DOUBAO_ASR_APP_KEY)"
+                  />
+                  <PixelInput
+                    value={doubaoAccessKeyDraft}
+                    onChange={setDoubaoAccessKeyDraft}
+                    placeholder="Access Key (or env TYPEVOICE_DOUBAO_ASR_ACCESS_KEY)"
+                  />
+                  <div className="row" style={{ justifyContent: "flex-end" }}>
+                    <PixelButton
+                      onClick={setDoubaoAsrCredentials}
+                      tone="accent"
+                      disabled={!doubaoAppKeyDraft.trim() || !doubaoAccessKeyDraft.trim()}
+                    >
+                      Save key
+                    </PixelButton>
+                    <PixelButton onClick={clearDoubaoAsrCredentials} tone="danger">
+                      Clear key
+                    </PixelButton>
+                    <PixelButton onClick={checkDoubaoAsrCredentials} disabled={doubaoCheckPending}>
+                      {doubaoCheckPending ? "Checking" : "Check key"}
+                    </PixelButton>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <PixelInput
+                    value={remoteAsrUrl}
+                    onChange={setRemoteAsrUrl}
+                    placeholder="remote ASR URL (e.g. https://api.server/transcribe)"
+                  />
+                  <PixelInput
+                    value={remoteAsrModel}
+                    onChange={setRemoteAsrModel}
+                    placeholder="remote model name (optional)"
+                  />
+                  <PixelInput
+                    value={remoteAsrConcurrency}
+                    onChange={setRemoteAsrConcurrency}
+                    placeholder="remote slicing concurrency (1-16)"
+                  />
+                  <PixelInput
+                    value={remoteAsrKeyDraft}
+                    onChange={setRemoteAsrKeyDraft}
+                    placeholder="save to keyring (or env TYPEVOICE_REMOTE_ASR_API_KEY)"
+                  />
+                  <div className="row" style={{ justifyContent: "flex-end" }}>
+                    <PixelButton
+                      onClick={setRemoteAsrApiKey}
+                      tone="accent"
+                      disabled={!remoteAsrKeyDraft.trim()}
+                    >
+                      Save key
+                    </PixelButton>
+                    <PixelButton onClick={clearRemoteAsrApiKey} tone="danger">
+                      Clear key
+                    </PixelButton>
+                    <PixelButton onClick={checkRemoteAsrApiKey} disabled={remoteAsrCheckPending}>
+                      {remoteAsrCheckPending ? "Checking" : "Check key"}
+                    </PixelButton>
+                  </div>
+                </>
+              )}
               <div className="row" style={{ justifyContent: "flex-end" }}>
-                <PixelButton
-                  onClick={setDoubaoAsrCredentials}
-                  tone="accent"
-                  disabled={!doubaoAppKeyDraft.trim() || !doubaoAccessKeyDraft.trim()}
-                >
-                  SAVE KEY
-                </PixelButton>
-                <PixelButton onClick={clearDoubaoAsrCredentials} tone="danger">
-                  CLEAR KEY
-                </PixelButton>
-                <PixelButton onClick={checkDoubaoAsrCredentials} disabled={doubaoCheckPending}>
-                  {doubaoCheckPending ? "CHECKING" : "CHECK KEY"}
+                <PixelButton onClick={saveAsr} tone="accent">
+                  Save
                 </PixelButton>
               </div>
-            </>
-          ) : (
-            <>
-              <PixelInput
-                value={remoteAsrUrl}
-                onChange={setRemoteAsrUrl}
-                placeholder="remote ASR URL (e.g. https://api.server/transcribe)"
-              />
-              <PixelInput
-                value={remoteAsrModel}
-                onChange={setRemoteAsrModel}
-                placeholder="remote model name (optional)"
-              />
-              <PixelInput
-                value={remoteAsrConcurrency}
-                onChange={setRemoteAsrConcurrency}
-                placeholder="remote slicing concurrency (1-16)"
-              />
-              <div className="sectionTitle" style={{ marginTop: 8 }}>
-                REMOTE API KEY
-              </div>
-              <PixelInput
-                value={remoteAsrKeyDraft}
-                onChange={setRemoteAsrKeyDraft}
-                placeholder="save to keyring (or env TYPEVOICE_REMOTE_ASR_API_KEY)"
-              />
-              <div className="row" style={{ justifyContent: "flex-end" }}>
-                <PixelButton
-                  onClick={setRemoteAsrApiKey}
-                  tone="accent"
-                  disabled={!remoteAsrKeyDraft.trim()}
-                >
-                  SAVE KEY
-                </PixelButton>
-                <PixelButton onClick={clearRemoteAsrApiKey} tone="danger">
-                  CLEAR KEY
-                </PixelButton>
-                <PixelButton onClick={checkRemoteAsrApiKey} disabled={remoteAsrCheckPending}>
-                  {remoteAsrCheckPending ? "CHECKING" : "CHECK KEY"}
-                </PixelButton>
-              </div>
-            </>
-          )}
-          <div className="row" style={{ justifyContent: "flex-end" }}>
-            <PixelButton onClick={saveAsr} tone="accent">
-              SAVE
-            </PixelButton>
-          </div>
-        </div>
-        <div className="sectionTitle" style={{ marginTop: 18 }}>
-          RECORDING INPUT
-        </div>
-        <div className="stack">
-          <PixelSelect
-            value={recordInputStrategy}
-            onChange={setRecordInputStrategy}
-            options={RECORD_INPUT_STRATEGIES}
-          />
-          {recordInputStrategy === "follow_default" ? (
-            <PixelSelect
-              value={recordFollowDefaultRole}
-              onChange={setRecordFollowDefaultRole}
-              options={RECORD_DEFAULT_ROLES}
-            />
-          ) : null}
-          {recordInputStrategy === "fixed_device" ? (
-            <>
-              <PixelSelect
-                value={recordFixedEndpointId}
-                onChange={setRecordFixedEndpointId}
-                options={captureDeviceOptions}
-                placeholder="select fixed capture endpoint"
-              />
-              {recordFixedFriendlyName ? (
-                <div className="muted">fixed: {recordFixedFriendlyName}</div>
-              ) : null}
-            </>
-          ) : null}
-          {audioCaptureDevices.length === 0 ? (
-            <div className="muted">no active capture endpoints detected</div>
-          ) : null}
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <div className="muted">
-              default role applies on next recording start; ongoing recording will not switch.
             </div>
+          </SettingsLine>
+
+          <SettingsLine
+            title="Recording input"
+            detail={recordFixedFriendlyName || "Capture source"}
+            panel="recording"
+            activePanel={activeSettingsPanel}
+            onTogglePanel={toggleSettingsPanel}
+            control={
+              <PixelSelect
+                value={recordInputStrategy}
+                onChange={setRecordInputStrategy}
+                options={RECORD_INPUT_STRATEGIES}
+              />
+            }
+          >
+            <div className="stack">
+              {recordInputStrategy === "follow_default" ? (
+                <PixelSelect
+                  value={recordFollowDefaultRole}
+                  onChange={setRecordFollowDefaultRole}
+                  options={RECORD_DEFAULT_ROLES}
+                />
+              ) : null}
+              {recordInputStrategy === "fixed_device" ? (
+                <>
+                  <PixelSelect
+                    value={recordFixedEndpointId}
+                    onChange={setRecordFixedEndpointId}
+                    options={captureDeviceOptions}
+                    placeholder="select fixed capture endpoint"
+                  />
+                  {recordFixedFriendlyName ? (
+                    <div className="muted">fixed: {recordFixedFriendlyName}</div>
+                  ) : null}
+                </>
+              ) : null}
+              {audioCaptureDevices.length === 0 ? (
+                <div className="muted">No active capture endpoints detected.</div>
+              ) : null}
+              <div className="row" style={{ justifyContent: "flex-end" }}>
+                <PixelButton onClick={refreshAudioCaptureDevices}>Refresh</PixelButton>
+                <PixelButton onClick={saveRecordingInput} tone="accent">
+                  Save
+                </PixelButton>
+              </div>
+            </div>
+          </SettingsLine>
+
+          <SettingsLine
+            title="Silence trim"
+            detail={asrPreprocessTrimEnabled ? "On" : "Off"}
+            panel="preprocess"
+            activePanel={activeSettingsPanel}
+            onTogglePanel={toggleSettingsPanel}
+            control={
+              <PixelToggle
+                value={asrPreprocessTrimEnabled}
+                onChange={setAsrPreprocessTrimEnabled}
+                label="silence trim"
+              />
+            }
+          >
+            <div className="stack">
+              <div className="settingsField">
+                <div className="muted">阈值（dB）</div>
+                <PixelInput
+                  value={asrPreprocessThresholdDb}
+                  onChange={setAsrPreprocessThresholdDb}
+                  placeholder="-50"
+                />
+              </div>
+              <div className="settingsField">
+                <div className="muted">前段静音 (ms)</div>
+                <PixelInput
+                  value={asrPreprocessStartMs}
+                  onChange={setAsrPreprocessStartMs}
+                  placeholder="300"
+                />
+              </div>
+              <div className="settingsField">
+                <div className="muted">末段静音 (ms)</div>
+                <PixelInput
+                  value={asrPreprocessEndMs}
+                  onChange={setAsrPreprocessEndMs}
+                  placeholder="300"
+                />
+              </div>
+              <div className="row" style={{ justifyContent: "flex-end" }}>
+                <PixelButton onClick={savePreprocessConfig} tone="accent">
+                  Save
+                </PixelButton>
+              </div>
+            </div>
+          </SettingsLine>
+        </div>
+
+        <div className="card">
+          <SettingsLine
+            title="Language model"
+            detail={llmModel.trim() || "Model settings"}
+            panel="llm"
+            activePanel={activeSettingsPanel}
+            onTogglePanel={toggleSettingsPanel}
+            control={<PixelSelect value={reasoning} onChange={setReasoning} options={REASONING} />}
+          >
+            <div className="stack">
+              <PixelInput
+                value={llmBaseUrl}
+                onChange={setLlmBaseUrl}
+                placeholder="API Base URL (e.g. https://api.openai.com/v1)"
+              />
+              <PixelInput value={llmModel} onChange={setLlmModel} placeholder="Model" />
+              <div className="row" style={{ justifyContent: "flex-end" }}>
+                <PixelButton onClick={saveLlm} tone="accent">
+                  Save
+                </PixelButton>
+              </div>
+            </div>
+          </SettingsLine>
+
+          <SettingsLine
+            title="API key"
+            detail="Stored in keyring or environment"
+            panel="llmKey"
+            activePanel={activeSettingsPanel}
+            onTogglePanel={toggleSettingsPanel}
+          >
+            <div className="stack">
+              <PixelInput
+                value={keyDraft}
+                onChange={setKeyDraft}
+                placeholder="save to keyring (or env TYPEVOICE_LLM_API_KEY)"
+              />
+              <div className="row" style={{ justifyContent: "flex-end" }}>
+                <PixelButton onClick={setApiKey} tone="accent" disabled={!keyDraft.trim()}>
+                  Save
+                </PixelButton>
+                <PixelButton onClick={clearApiKey} tone="danger">
+                  Clear
+                </PixelButton>
+                <PixelButton onClick={checkApiKey} disabled={llmCheckPending}>
+                  {llmCheckPending ? "Checking" : "Check"}
+                </PixelButton>
+              </div>
+            </div>
+          </SettingsLine>
+        </div>
+
+        <div className="card">
+          <SettingsLine
+            title="Rewrite"
+            detail={rewriteEnabled ? "On" : "Off"}
+            panel="rewrite"
+            activePanel={activeSettingsPanel}
+            onTogglePanel={toggleSettingsPanel}
+            control={<PixelToggle value={rewriteEnabled} onChange={setRewriteEnabled} label="rewrite" />}
+          >
+            <div className="stack">
+              <PixelTextarea
+                value={llmPrompt}
+                onChange={setLlmPrompt}
+                placeholder="LLM prompt..."
+                rows={10}
+              />
+              <div className="row" style={{ justifyContent: "flex-end" }}>
+                <PixelButton onClick={saveRewrite} tone="accent">
+                  Save
+                </PixelButton>
+              </div>
+            </div>
+          </SettingsLine>
+        </div>
+
+        <div className="card">
+          <SettingsLine
+            title="Improvement context"
+            detail="Inputs available to rewriting"
+            panel="context"
+            activePanel={activeSettingsPanel}
+            onTogglePanel={toggleSettingsPanel}
+          >
+            <div className="stack">
+              <div className="settingsInlineToggle">
+                <span>Recent dictated text</span>
+                <PixelToggle
+                  value={contextIncludeHistory}
+                  onChange={setContextIncludeHistory}
+                  label="recent dictated text"
+                />
+              </div>
+              <div className="settingsInlineToggle">
+                <span>Clipboard text</span>
+                <PixelToggle
+                  value={contextIncludeClipboard}
+                  onChange={setContextIncludeClipboard}
+                  label="clipboard text"
+                />
+              </div>
+              <div className="settingsInlineToggle">
+                <span>Current app name and title</span>
+                <PixelToggle
+                  value={contextIncludePrevWindowMeta}
+                  onChange={setContextIncludePrevWindowMeta}
+                  label="current app name and title"
+                />
+              </div>
+              <div className="settingsInlineToggle">
+                <span>Current screen image</span>
+                <PixelToggle
+                  value={contextIncludePrevWindowScreenshot}
+                  onChange={setContextIncludePrevWindowScreenshot}
+                  label="current screen image"
+                />
+              </div>
+              <div className="row" style={{ justifyContent: "flex-end" }}>
+                <PixelButton onClick={saveContextConfig} tone="accent">
+                  Save
+                </PixelButton>
+              </div>
+            </div>
+          </SettingsLine>
+        </div>
+
+        <div className="card">
+          <SettingsLine
+            title="Glossary"
+            detail="One term per line"
+            panel="glossary"
+            activePanel={activeSettingsPanel}
+            onTogglePanel={toggleSettingsPanel}
+            control={
+              <PixelToggle
+                value={rewriteIncludeGlossary}
+                onChange={setRewriteIncludeGlossary}
+                label="rewrite glossary"
+              />
+            }
+          >
+            <div className="stack">
+              <div className="muted">
+                每行一个词；空行会自动忽略。用于 rewrite 阶段作为上下文词汇或术语约束模型遵循。
+              </div>
+              <PixelTextarea
+                value={rewriteGlossaryDraft}
+                onChange={setRewriteGlossaryDraft}
+                placeholder={"比如：QPSK\nTypeScript\nOAuth"}
+                rows={8}
+              />
+              <div className="row" style={{ justifyContent: "flex-end" }}>
+                <PixelButton onClick={saveGlossary} tone="accent">
+                  Save
+                </PixelButton>
+              </div>
+            </div>
+          </SettingsLine>
+        </div>
+
+        <div className="card">
+          <SettingsLine
+            title="Export"
+            detail={autoPasteEnabled ? "Auto paste on" : "Auto paste off"}
+            panel="export"
+            activePanel={activeSettingsPanel}
+            onTogglePanel={toggleSettingsPanel}
+            control={
+              <PixelToggle
+                value={autoPasteEnabled}
+                onChange={setAutoPasteEnabled}
+                label="auto paste"
+              />
+            }
+          >
+            <div className="stack">
+              <div className="muted">Use platform APIs to paste automatically.</div>
+              <div className="row" style={{ justifyContent: "flex-end" }}>
+                <PixelButton onClick={saveExportConfig} tone="accent">
+                  Save
+                </PixelButton>
+              </div>
+            </div>
+          </SettingsLine>
+        </div>
+
+        <div className="card">
+          <SettingsLine
+            title="Hotkeys"
+            detail={hotkeysEnabled ? "On" : "Off"}
+            panel="hotkeys"
+            activePanel={activeSettingsPanel}
+            onTogglePanel={toggleSettingsPanel}
+            control={<PixelToggle value={hotkeysEnabled} onChange={setHotkeysEnabled} label="hotkeys" />}
+          >
+            <div className="stack">
+              <div className="hotkeyGuide">
+                <div><span>Alt</span><span>short press starts or stops recording</span></div>
+                <div><span>Enter</span><span>rewrites the transcript window text</span></div>
+                <div><span>Shift+Enter</span><span>adds a line break</span></div>
+                <div><span>Ctrl+Enter</span><span>inserts the transcript window text</span></div>
+              </div>
+              <div className="settingsInlineToggle">
+                <span>Overlay</span>
+                <PixelToggle
+                  value={hotkeysShowOverlay}
+                  onChange={setHotkeysShowOverlay}
+                  label="overlay"
+                />
+              </div>
+              <div className="row" style={{ justifyContent: "flex-end" }}>
+                <PixelButton onClick={saveHotkeys} tone="accent">
+                  Save
+                </PixelButton>
+              </div>
+            </div>
+          </SettingsLine>
+        </div>
+
+        <div className="card">
+          <SettingsLine
+            title="History"
+            detail="Stored dictation records"
+            panel="history"
+            activePanel={activeSettingsPanel}
+            onTogglePanel={toggleSettingsPanel}
+          >
             <div className="row" style={{ justifyContent: "flex-end" }}>
-              <PixelButton onClick={refreshAudioCaptureDevices}>REFRESH</PixelButton>
-              <PixelButton onClick={saveRecordingInput} tone="accent">
-                SAVE
+              <PixelButton onClick={() => setConfirmClear(true)} tone="danger">
+                Clear all
               </PixelButton>
             </div>
-          </div>
+          </SettingsLine>
         </div>
-        <div className="sectionTitle" style={{ marginTop: 18 }}>
-          PREPROCESS
-        </div>
-        <div className="stack">
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <div className="muted">{asrPreprocessTrimEnabled ? "SILENCE TRIM ON" : "SILENCE TRIM OFF"}</div>
-            <PixelToggle
-              value={asrPreprocessTrimEnabled}
-              onChange={setAsrPreprocessTrimEnabled}
-              label="silence trim"
-            />
-          </div>
-          <div className="row">
-            <div className="muted">阈值（dB）</div>
-            <PixelInput
-              value={asrPreprocessThresholdDb}
-              onChange={setAsrPreprocessThresholdDb}
-              placeholder="-50"
-            />
-          </div>
-          <div className="row">
-            <div className="muted">前段静音 (ms)</div>
-            <PixelInput
-              value={asrPreprocessStartMs}
-              onChange={setAsrPreprocessStartMs}
-              placeholder="300"
-            />
-          </div>
-          <div className="row">
-            <div className="muted">末段静音 (ms)</div>
-            <PixelInput
-              value={asrPreprocessEndMs}
-              onChange={setAsrPreprocessEndMs}
-              placeholder="300"
-            />
-          </div>
-          <div className="row" style={{ justifyContent: "flex-end" }}>
-            <PixelButton onClick={savePreprocessConfig} tone="accent">
-              SAVE
-            </PixelButton>
-          </div>
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="sectionTitle">LLM</div>
-        <div className="stack">
-          <PixelInput
-            value={llmBaseUrl}
-            onChange={setLlmBaseUrl}
-            placeholder="API Base URL (e.g. https://api.openai.com/v1)"
-          />
-          <PixelInput value={llmModel} onChange={setLlmModel} placeholder="Model" />
-          <PixelSelect value={reasoning} onChange={setReasoning} options={REASONING} />
-          <div className="row" style={{ justifyContent: "flex-end" }}>
-            <PixelButton onClick={saveLlm} tone="accent">
-              SAVE
-            </PixelButton>
-          </div>
-        </div>
-
-        <div className="sectionTitle" style={{ marginTop: 18 }}>
-          API KEY
-        </div>
-        <div className="stack">
-          <PixelInput
-            value={keyDraft}
-            onChange={setKeyDraft}
-            placeholder="save to keyring (or env TYPEVOICE_LLM_API_KEY)"
-          />
-          <div className="row" style={{ justifyContent: "flex-end" }}>
-            <PixelButton onClick={setApiKey} tone="accent" disabled={!keyDraft.trim()}>
-              SAVE
-            </PixelButton>
-            <PixelButton onClick={clearApiKey} tone="danger">
-              CLEAR
-            </PixelButton>
-            <PixelButton onClick={checkApiKey} disabled={llmCheckPending}>
-              {llmCheckPending ? "CHECKING" : "CHECK"}
-            </PixelButton>
-          </div>
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="sectionTitle">REWRITE</div>
-        <div className="row" style={{ justifyContent: "space-between" }}>
-          <div className="muted">{rewriteEnabled ? "ON" : "OFF"}</div>
-          <PixelToggle value={rewriteEnabled} onChange={setRewriteEnabled} label="rewrite" />
-        </div>
-        <div style={{ marginTop: 12 }} className="stack">
-          <PixelTextarea
-            value={llmPrompt}
-            onChange={setLlmPrompt}
-            placeholder="LLM prompt..."
-            rows={10}
-          />
-          <div className="row" style={{ justifyContent: "flex-end" }}>
-            <PixelButton onClick={saveRewrite} tone="accent">
-              SAVE
-            </PixelButton>
-          </div>
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="sectionTitle">WHAT IMPROVEMENT CAN USE</div>
-        <div className="stack">
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <div className="muted">Recent dictated text</div>
-            <PixelToggle
-              value={contextIncludeHistory}
-              onChange={setContextIncludeHistory}
-              label="recent dictated text"
-            />
-          </div>
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <div className="muted">Clipboard text</div>
-            <PixelToggle
-              value={contextIncludeClipboard}
-              onChange={setContextIncludeClipboard}
-              label="clipboard text"
-            />
-          </div>
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <div className="muted">Current app name and title</div>
-            <PixelToggle
-              value={contextIncludePrevWindowMeta}
-              onChange={setContextIncludePrevWindowMeta}
-              label="current app name and title"
-            />
-          </div>
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <div className="muted">Current screen image</div>
-            <PixelToggle
-              value={contextIncludePrevWindowScreenshot}
-              onChange={setContextIncludePrevWindowScreenshot}
-              label="current screen image"
-            />
-          </div>
-          <div className="row" style={{ justifyContent: "flex-end" }}>
-            <PixelButton onClick={saveContextConfig} tone="accent">
-              SAVE
-            </PixelButton>
-          </div>
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="sectionTitle">GLOSSARY</div>
-        <div className="muted">
-          每行一个词；空行会自动忽略。用于 rewrite 阶段作为“上下文词汇/术语”约束模型遵循。
-        </div>
-        <div style={{ marginTop: 12 }} className="stack">
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <div className="muted">REWRITE 词库启用</div>
-            <PixelToggle
-              value={rewriteIncludeGlossary}
-              onChange={setRewriteIncludeGlossary}
-              label="rewrite glossary"
-            />
-          </div>
-          <PixelTextarea
-            value={rewriteGlossaryDraft}
-            onChange={setRewriteGlossaryDraft}
-            placeholder={"比如：QPSK\nTypeScript\nOAuth"}
-            rows={8}
-          />
-          <div className="row" style={{ justifyContent: "flex-end" }}>
-            <PixelButton onClick={saveGlossary} tone="accent">
-              SAVE
-            </PixelButton>
-          </div>
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="sectionTitle">EXPORT</div>
-        <div className="stack">
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <div className="muted">{autoPasteEnabled ? "AUTO PASTE ON" : "AUTO PASTE OFF"}</div>
-            <PixelToggle
-              value={autoPasteEnabled}
-              onChange={setAutoPasteEnabled}
-              label="auto paste"
-            />
-          </div>
-          <div className="muted">Use platform APIs to paste automatically (no shortcut simulation).</div>
-          <div className="row" style={{ justifyContent: "flex-end" }}>
-            <PixelButton onClick={saveExportConfig} tone="accent">
-              SAVE
-            </PixelButton>
-          </div>
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="sectionTitle">HOTKEYS</div>
-        <div className="row" style={{ justifyContent: "space-between" }}>
-          <div className="muted">
-            {hotkeysEnabled ? "ON" : "OFF"}
-            {hotkeysEnabled ? "  /  ALT TAP RECORD  /  ENTER REWRITE  /  CTRL+ENTER INSERT" : ""}
-          </div>
-          <PixelToggle value={hotkeysEnabled} onChange={setHotkeysEnabled} label="hotkeys" />
-        </div>
-        <div style={{ marginTop: 12 }} className="stack">
-          <div className="hotkeyGuide">
-            <div><span>ALT</span><span>short press starts or stops recording</span></div>
-            <div><span>ENTER</span><span>rewrites the transcript window text</span></div>
-            <div><span>SHIFT+ENTER</span><span>adds a line break</span></div>
-            <div><span>CTRL+ENTER</span><span>inserts the transcript window text</span></div>
-          </div>
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <div className="muted">{hotkeysShowOverlay ? "OVERLAY ON" : "OVERLAY OFF"}</div>
-            <PixelToggle
-              value={hotkeysShowOverlay}
-              onChange={setHotkeysShowOverlay}
-              label="overlay"
-            />
-          </div>
-          <div className="row" style={{ justifyContent: "flex-end" }}>
-            <PixelButton onClick={saveHotkeys} tone="accent">
-              SAVE
-            </PixelButton>
-          </div>
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="sectionTitle">HISTORY</div>
-        <div className="row" style={{ justifyContent: "flex-end" }}>
-          <PixelButton onClick={() => setConfirmClear(true)} tone="danger">
-            CLEAR ALL
-          </PixelButton>
-        </div>
-      </div>
-
       </div>
 
       <PixelDialog
         open={confirmClear}
-        title="CLEAR HISTORY"
+        title="Clear history"
         onClose={() => setConfirmClear(false)}
         actions={
           <>
-            <PixelButton onClick={() => setConfirmClear(false)}>CANCEL</PixelButton>
+            <PixelButton onClick={() => setConfirmClear(false)}>Cancel</PixelButton>
             <PixelButton onClick={clearHistory} tone="danger">
-              CLEAR
+              Clear
             </PixelButton>
           </>
         }
       >
         <div className="stack">
-          <div>THIS WILL DELETE ALL HISTORY ITEMS.</div>
-          <div className="muted">THIS ACTION CANNOT BE UNDONE.</div>
+          <div>This will delete all history items.</div>
+          <div className="muted">This action cannot be undone.</div>
         </div>
       </PixelDialog>
     </div>

@@ -78,27 +78,54 @@ export function HistoryScreen({
     if (remaining < 140) loadMore();
   }
 
+  async function copyHistoryText(text: string) {
+    const value = text.trim();
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      pushToast("Copied", "ok");
+    } catch {
+      pushToast("Copy failed", "danger");
+    }
+  }
+
   return (
     <div className="pageSurface historySurface">
       <div className="pageHeader">
-        <div className="sectionTitle">HISTORY</div>
-        <div className="muted">{items.length} ITEMS</div>
+        <div className="sectionTitle">history</div>
+        <div className="muted">{items.length} items</div>
       </div>
 
       <div className="historyScroller" ref={scrollerRef} onScroll={onScroll}>
-        {items.map((h) => (
-          <div key={h.task_id} className="historyRow" tabIndex={0}>
-            <div className="historyTime">
-              {new Date(h.created_at_ms).toLocaleString()}
+        {items.map((h) => {
+          const text = (h.final_text || h.asr_text || "").trim();
+          return (
+            <div
+              key={h.task_id}
+              className="historyRow"
+              role="button"
+              tabIndex={0}
+              title="Copy"
+              onClick={() => void copyHistoryText(text)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  void copyHistoryText(text);
+                }
+              }}
+            >
+              <div className="historyTime">
+                {new Date(h.created_at_ms).toLocaleString()}
+              </div>
+              <div className="historyPreview">
+                {text || "-"}
+              </div>
             </div>
-            <div className="historyPreview">
-              {(h.final_text || h.asr_text || "").trim() || "-"}
-            </div>
-          </div>
-        ))}
+          );
+        })}
 
         <div className="historyFooter">
-          {loading ? "LOADING..." : hasMore ? "SCROLL" : "END"}
+          {loading ? "Loading..." : hasMore ? "Scroll" : "End"}
         </div>
       </div>
     </div>

@@ -208,7 +208,7 @@ export function MainScreen({
   const phase = workflowPhaseName(workflow.phase);
   const hint = primaryActionLabel(workflow.primaryLabel || "START");
   const streamText = phase === "recording" || phase === "transcribing" ? liveTranscript : "";
-  const statusLabel = phase === "idle" ? "Ready" : hint;
+  const statusLabel = phase === "idle" ? "" : hint;
   const diagnosticMessage = userMessageFromDiagnostic(workflow.diagnosticCode, workflow.diagnosticLine);
 
   return (
@@ -241,7 +241,7 @@ export function MainScreen({
 
       <div className="resultSheet">
         <div className="resultHeader">
-          <div className="sectionTitle">CURRENT TRANSCRIPT</div>
+          <div className="sectionTitle">current transcript</div>
           <span className="resultStatus">Ready</span>
         </div>
 
@@ -255,7 +255,7 @@ export function MainScreen({
           className={`mainDiag ${workflow.diagnosticLine ? "isVisible" : ""}`}
           aria-hidden={!workflow.diagnosticLine}
         >
-          {diagnosticMessage || "Ready"}
+          {diagnosticMessage || ""}
         </div>
 
         <div className="mainActions">

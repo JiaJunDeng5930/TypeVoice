@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { defaultTauriGateway } from "./infra/runtimePorts";
 import type { Settings } from "./types";
 import { PixelTabs, type TabKey } from "./ui/PixelTabs";
@@ -77,10 +77,6 @@ export default function App() {
     setEpoch((x) => x + 1);
   }, []);
 
-  const subtitle = useMemo(() => {
-    return tab === "main" ? "READY" : tab === "history" ? "ALL RUNS" : "SAVED";
-  }, [tab]);
-
   return (
     <div className="appBg">
       <div className="layout appShell">
@@ -89,7 +85,7 @@ export default function App() {
             <div className="brandTitle">TYPEVOICE</div>
           </div>
           <PixelTabs active={tab} onChange={setTab} />
-          <div className="brandSub">{subtitle}</div>
+          <div />
         </aside>
 
         <main className="contentStage">
