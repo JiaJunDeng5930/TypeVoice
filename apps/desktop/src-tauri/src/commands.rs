@@ -187,11 +187,9 @@ pub async fn workflow_insert(
     task_state: State<'_, crate::task_manager::TaskManager>,
     req: WorkflowTextCommandRequest,
 ) -> Result<InsertResult, String> {
-    let target_hwnd = task_state.last_external_hwnd_best_effort().ok_or_else(|| {
-        "E_OVERLAY_TARGET_UNAVAILABLE: no external target window captured".to_string()
-    })?;
+    let target_hwnd = task_state.last_external_hwnd_best_effort();
     workflow
-        .insert_current_text_after_focus(&mailbox, req, Some(target_hwnd))
+        .insert_current_text_after_focus(&mailbox, req, target_hwnd)
         .await
         .map_err(render_workflow_error)
 }
