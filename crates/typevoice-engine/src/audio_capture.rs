@@ -179,8 +179,7 @@ impl RecordingRegistry {
             discard_active_recording(&mut active);
         }
 
-        let root = repo_root()?;
-        let tmp = root.join("tmp").join("desktop");
+        let tmp = recording_tmp_dir(&dir);
         std::fs::create_dir_all(&tmp)
             .map_err(|e| CaptureError::new("E_RECORD_TMP_CREATE", e.to_string()))?;
         let session_id = uuid::Uuid::new_v4().to_string();
@@ -743,12 +742,8 @@ fn read_last_stderr_line(stderr: &mut ChildStderr) -> Option<String> {
         .map(|line| line.to_string())
 }
 
-fn repo_root() -> Result<PathBuf, CaptureError> {
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .map(|p| p.to_path_buf())
-        .ok_or_else(|| CaptureError::new("E_REPO_ROOT", "repo root not found"))
+fn recording_tmp_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("recordings")
 }
 
 impl Default for RecordingRegistry {
@@ -784,15 +779,11 @@ mod tests {
     }
 
     #[test]
-    fn repo_root_resolves_workspace_root() {
-        let root = repo_root().expect("repo root resolves");
+    fn recording_tmp_dir_uses_runtime_data_dir() {
+        let data_dir = PathBuf::from("runtime-data");
+        let tmp = recording_tmp_dir(&data_dir);
 
-        assert!(root.join("Cargo.toml").exists());
-        assert!(root.join("apps").join("desktop").exists());
-        assert_eq!(
-            root.file_name().and_then(|name| name.to_str()),
-            Some("TypeVoice")
-        );
+        assert_eq!(tmp, data_dir.join("recordings"));
     }
 
     #[test]
