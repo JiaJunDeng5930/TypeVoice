@@ -161,9 +161,10 @@ export function MainScreen({
           }
           return;
         }
-        if (ev.status === "failed") {
-          const diag = buildUiEventDiagnostic(ev, "Speech recognition failed");
-          if (ev.stage === "Transcribe") {
+        if (isDisplayFailureEvent(ev.kind, ev.status)) return;
+        if (ev.kind === "workflow.task.failed") {
+          const diag = buildUiEventDiagnostic(ev, failureTitleFromStage(ev.stage));
+          if (isAsrFailureStage(ev.stage)) {
             const transcriptId = optionalString(ev.taskId);
             if (transcriptId) {
               try {
@@ -179,6 +180,11 @@ export function MainScreen({
               }
             }
           }
+          pushToast(diag.title, "danger");
+          return;
+        }
+        if (ev.status === "failed") {
+          const diag = buildUiEventDiagnostic(ev, failureTitleFromStage(ev.stage));
           pushToast(diag.title, "danger");
           return;
         }
@@ -388,6 +394,20 @@ function optionalString(value: unknown): string | null {
 
 function optionalNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function isDisplayFailureEvent(kind: string, status: string | null | undefined): boolean {
+  return kind === "transcription.stage" && status === "failed";
+}
+
+function isAsrFailureStage(stage: string | null | undefined): boolean {
+  return stage === "Record" || stage === "Transcribe";
+}
+
+function failureTitleFromStage(stage: string | null | undefined): string {
+  if (stage === "Rewrite") return "Text improvement failed";
+  if (stage === "Insert") return "Text could not be pasted";
+  return "Speech recognition failed";
 }
 
 function commandErrorTitle(command: WorkflowCommand): string {
