@@ -587,7 +587,8 @@ export function SettingsScreen({
         <div className="ok">Saved</div>
       </div>
       <div className="settingsGrid">
-        <div className="card">
+        <div className="settingsColumn">
+          <div className="card">
           <SettingsLine
             title="Speech recognition"
             detail={asrStatusText}
@@ -765,242 +766,247 @@ export function SettingsScreen({
               </div>
             </div>
           </SettingsLine>
-        </div>
+          </div>
 
-        <div className="card">
-          <SettingsLine
-            title="Language model"
-            detail={llmModel.trim() || "Model settings"}
-            panel="llm"
-            expandedPanels={expandedSettingsPanels}
-            onTogglePanel={toggleSettingsPanel}
-            control={<PixelSelect value={reasoning} onChange={setReasoning} options={REASONING} />}
-          >
-            <div className="stack">
-              <PixelInput
-                value={llmBaseUrl}
-                onChange={setLlmBaseUrl}
-                placeholder="API Base URL (e.g. https://api.openai.com/v1)"
-              />
-              <PixelInput value={llmModel} onChange={setLlmModel} placeholder="Model" />
-              <div className="row" style={{ justifyContent: "flex-end" }}>
-                <PixelButton onClick={saveLlm} tone="accent">
-                  Save
-                </PixelButton>
-              </div>
-            </div>
-          </SettingsLine>
-
-          <SettingsLine
-            title="API key"
-            detail="Stored in keyring or environment"
-            panel="llmKey"
-            expandedPanels={expandedSettingsPanels}
-            onTogglePanel={toggleSettingsPanel}
-          >
-            <div className="stack">
-              <PixelInput
-                value={keyDraft}
-                onChange={setKeyDraft}
-                placeholder="save to keyring (or env TYPEVOICE_LLM_API_KEY)"
-              />
-              <div className="row" style={{ justifyContent: "flex-end" }}>
-                <PixelButton onClick={setApiKey} tone="accent" disabled={!keyDraft.trim()}>
-                  Save
-                </PixelButton>
-                <PixelButton onClick={clearApiKey} tone="danger">
-                  Clear
-                </PixelButton>
-                <PixelButton onClick={checkApiKey} disabled={llmCheckPending}>
-                  {llmCheckPending ? "Checking" : "Check"}
-                </PixelButton>
-              </div>
-            </div>
-          </SettingsLine>
-        </div>
-
-        <div className="card">
-          <SettingsLine
-            title="Rewrite"
-            detail={rewriteEnabled ? "On" : "Off"}
-            panel="rewrite"
-            expandedPanels={expandedSettingsPanels}
-            onTogglePanel={toggleSettingsPanel}
-            control={<PixelToggle value={rewriteEnabled} onChange={setRewriteEnabled} label="rewrite" />}
-          >
-            <div className="stack">
-              <PixelTextarea
-                value={llmPrompt}
-                onChange={setLlmPrompt}
-                placeholder="LLM prompt..."
-                rows={10}
-              />
-              <div className="row" style={{ justifyContent: "flex-end" }}>
-                <PixelButton onClick={saveRewrite} tone="accent">
-                  Save
-                </PixelButton>
-              </div>
-            </div>
-          </SettingsLine>
-        </div>
-
-        <div className="card">
-          <SettingsLine
-            title="Improvement context"
-            detail="Inputs available to rewriting"
-            panel="context"
-            expandedPanels={expandedSettingsPanels}
-            onTogglePanel={toggleSettingsPanel}
-          >
-            <div className="stack">
-              <div className="settingsInlineToggle">
-                <span>Recent dictated text</span>
-                <PixelToggle
-                  value={contextIncludeHistory}
-                  onChange={setContextIncludeHistory}
-                  label="recent dictated text"
+          <div className="card">
+            <SettingsLine
+              title="Rewrite"
+              detail={rewriteEnabled ? "On" : "Off"}
+              panel="rewrite"
+              expandedPanels={expandedSettingsPanels}
+              onTogglePanel={toggleSettingsPanel}
+              control={<PixelToggle value={rewriteEnabled} onChange={setRewriteEnabled} label="rewrite" />}
+            >
+              <div className="stack">
+                <PixelTextarea
+                  value={llmPrompt}
+                  onChange={setLlmPrompt}
+                  placeholder="LLM prompt..."
+                  rows={10}
                 />
+                <div className="row" style={{ justifyContent: "flex-end" }}>
+                  <PixelButton onClick={saveRewrite} tone="accent">
+                    Save
+                  </PixelButton>
+                </div>
               </div>
-              <div className="settingsInlineToggle">
-                <span>Clipboard text</span>
+            </SettingsLine>
+          </div>
+
+          <div className="card">
+            <SettingsLine
+              title="Glossary"
+              detail="One term per line"
+              panel="glossary"
+              expandedPanels={expandedSettingsPanels}
+              onTogglePanel={toggleSettingsPanel}
+              control={
                 <PixelToggle
-                  value={contextIncludeClipboard}
-                  onChange={setContextIncludeClipboard}
-                  label="clipboard text"
+                  value={rewriteIncludeGlossary}
+                  onChange={setRewriteIncludeGlossary}
+                  label="rewrite glossary"
                 />
-              </div>
-              <div className="settingsInlineToggle">
-                <span>Current app name and title</span>
-                <PixelToggle
-                  value={contextIncludePrevWindowMeta}
-                  onChange={setContextIncludePrevWindowMeta}
-                  label="current app name and title"
+              }
+            >
+              <div className="stack">
+                <div className="muted">
+                  每行一个词；空行会自动忽略。用于 rewrite 阶段作为上下文词汇或术语约束模型遵循。
+                </div>
+                <PixelTextarea
+                  value={rewriteGlossaryDraft}
+                  onChange={setRewriteGlossaryDraft}
+                  placeholder={"比如：QPSK\nTypeScript\nOAuth"}
+                  rows={8}
                 />
+                <div className="row" style={{ justifyContent: "flex-end" }}>
+                  <PixelButton onClick={saveGlossary} tone="accent">
+                    Save
+                  </PixelButton>
+                </div>
               </div>
-              <div className="settingsInlineToggle">
-                <span>Current screen image</span>
-                <PixelToggle
-                  value={contextIncludePrevWindowScreenshot}
-                  onChange={setContextIncludePrevWindowScreenshot}
-                  label="current screen image"
-                />
+            </SettingsLine>
+          </div>
+
+          <div className="card">
+            <SettingsLine
+              title="Hotkeys"
+              detail={hotkeysEnabled ? "On" : "Off"}
+              panel="hotkeys"
+              expandedPanels={expandedSettingsPanels}
+              onTogglePanel={toggleSettingsPanel}
+              control={<PixelToggle value={hotkeysEnabled} onChange={setHotkeysEnabled} label="hotkeys" />}
+            >
+              <div className="stack">
+                <div className="hotkeyGuide">
+                  <div><span>Alt</span><span>short press starts or stops recording</span></div>
+                  <div><span>Enter</span><span>rewrites the transcript window text</span></div>
+                  <div><span>Shift+Enter</span><span>adds a line break</span></div>
+                  <div><span>Ctrl+Enter</span><span>inserts the transcript window text</span></div>
+                </div>
+                <div className="settingsInlineToggle">
+                  <span>Overlay</span>
+                  <PixelToggle
+                    value={hotkeysShowOverlay}
+                    onChange={setHotkeysShowOverlay}
+                    label="overlay"
+                  />
+                </div>
+                <div className="row" style={{ justifyContent: "flex-end" }}>
+                  <PixelButton onClick={saveHotkeys} tone="accent">
+                    Save
+                  </PixelButton>
+                </div>
               </div>
-              <div className="row" style={{ justifyContent: "flex-end" }}>
-                <PixelButton onClick={saveContextConfig} tone="accent">
-                  Save
-                </PixelButton>
-              </div>
-            </div>
-          </SettingsLine>
+            </SettingsLine>
+          </div>
         </div>
 
-        <div className="card">
-          <SettingsLine
-            title="Glossary"
-            detail="One term per line"
-            panel="glossary"
-            expandedPanels={expandedSettingsPanels}
-            onTogglePanel={toggleSettingsPanel}
-            control={
-              <PixelToggle
-                value={rewriteIncludeGlossary}
-                onChange={setRewriteIncludeGlossary}
-                label="rewrite glossary"
-              />
-            }
-          >
-            <div className="stack">
-              <div className="muted">
-                每行一个词；空行会自动忽略。用于 rewrite 阶段作为上下文词汇或术语约束模型遵循。
-              </div>
-              <PixelTextarea
-                value={rewriteGlossaryDraft}
-                onChange={setRewriteGlossaryDraft}
-                placeholder={"比如：QPSK\nTypeScript\nOAuth"}
-                rows={8}
-              />
-              <div className="row" style={{ justifyContent: "flex-end" }}>
-                <PixelButton onClick={saveGlossary} tone="accent">
-                  Save
-                </PixelButton>
-              </div>
-            </div>
-          </SettingsLine>
-        </div>
-
-        <div className="card">
-          <SettingsLine
-            title="Export"
-            detail={autoPasteEnabled ? "Auto paste on" : "Auto paste off"}
-            panel="export"
-            expandedPanels={expandedSettingsPanels}
-            onTogglePanel={toggleSettingsPanel}
-            control={
-              <PixelToggle
-                value={autoPasteEnabled}
-                onChange={setAutoPasteEnabled}
-                label="auto paste"
-              />
-            }
-          >
-            <div className="stack">
-              <div className="muted">Use platform APIs to paste automatically.</div>
-              <div className="row" style={{ justifyContent: "flex-end" }}>
-                <PixelButton onClick={saveExportConfig} tone="accent">
-                  Save
-                </PixelButton>
-              </div>
-            </div>
-          </SettingsLine>
-        </div>
-
-        <div className="card">
-          <SettingsLine
-            title="Hotkeys"
-            detail={hotkeysEnabled ? "On" : "Off"}
-            panel="hotkeys"
-            expandedPanels={expandedSettingsPanels}
-            onTogglePanel={toggleSettingsPanel}
-            control={<PixelToggle value={hotkeysEnabled} onChange={setHotkeysEnabled} label="hotkeys" />}
-          >
-            <div className="stack">
-              <div className="hotkeyGuide">
-                <div><span>Alt</span><span>short press starts or stops recording</span></div>
-                <div><span>Enter</span><span>rewrites the transcript window text</span></div>
-                <div><span>Shift+Enter</span><span>adds a line break</span></div>
-                <div><span>Ctrl+Enter</span><span>inserts the transcript window text</span></div>
-              </div>
-              <div className="settingsInlineToggle">
-                <span>Overlay</span>
-                <PixelToggle
-                  value={hotkeysShowOverlay}
-                  onChange={setHotkeysShowOverlay}
-                  label="overlay"
+        <div className="settingsColumn">
+          <div className="card">
+            <SettingsLine
+              title="Language model"
+              detail={llmModel.trim() || "Model settings"}
+              panel="llm"
+              expandedPanels={expandedSettingsPanels}
+              onTogglePanel={toggleSettingsPanel}
+              control={<PixelSelect value={reasoning} onChange={setReasoning} options={REASONING} />}
+            >
+              <div className="stack">
+                <PixelInput
+                  value={llmBaseUrl}
+                  onChange={setLlmBaseUrl}
+                  placeholder="API Base URL (e.g. https://api.openai.com/v1)"
                 />
+                <PixelInput value={llmModel} onChange={setLlmModel} placeholder="Model" />
+                <div className="row" style={{ justifyContent: "flex-end" }}>
+                  <PixelButton onClick={saveLlm} tone="accent">
+                    Save
+                  </PixelButton>
+                </div>
               </div>
+            </SettingsLine>
+          </div>
+
+          <div className="card">
+            <SettingsLine
+              title="API key"
+              detail="Stored in keyring or environment"
+              panel="llmKey"
+              expandedPanels={expandedSettingsPanels}
+              onTogglePanel={toggleSettingsPanel}
+            >
+              <div className="stack">
+                <PixelInput
+                  value={keyDraft}
+                  onChange={setKeyDraft}
+                  placeholder="save to keyring (or env TYPEVOICE_LLM_API_KEY)"
+                />
+                <div className="row" style={{ justifyContent: "flex-end" }}>
+                  <PixelButton onClick={setApiKey} tone="accent" disabled={!keyDraft.trim()}>
+                    Save
+                  </PixelButton>
+                  <PixelButton onClick={clearApiKey} tone="danger">
+                    Clear
+                  </PixelButton>
+                  <PixelButton onClick={checkApiKey} disabled={llmCheckPending}>
+                    {llmCheckPending ? "Checking" : "Check"}
+                  </PixelButton>
+                </div>
+              </div>
+            </SettingsLine>
+          </div>
+
+          <div className="card">
+            <SettingsLine
+              title="Improvement context"
+              detail="Inputs available to rewriting"
+              panel="context"
+              expandedPanels={expandedSettingsPanels}
+              onTogglePanel={toggleSettingsPanel}
+            >
+              <div className="stack">
+                <div className="settingsInlineToggle">
+                  <span>Recent dictated text</span>
+                  <PixelToggle
+                    value={contextIncludeHistory}
+                    onChange={setContextIncludeHistory}
+                    label="recent dictated text"
+                  />
+                </div>
+                <div className="settingsInlineToggle">
+                  <span>Clipboard text</span>
+                  <PixelToggle
+                    value={contextIncludeClipboard}
+                    onChange={setContextIncludeClipboard}
+                    label="clipboard text"
+                  />
+                </div>
+                <div className="settingsInlineToggle">
+                  <span>Current app name and title</span>
+                  <PixelToggle
+                    value={contextIncludePrevWindowMeta}
+                    onChange={setContextIncludePrevWindowMeta}
+                    label="current app name and title"
+                  />
+                </div>
+                <div className="settingsInlineToggle">
+                  <span>Current screen image</span>
+                  <PixelToggle
+                    value={contextIncludePrevWindowScreenshot}
+                    onChange={setContextIncludePrevWindowScreenshot}
+                    label="current screen image"
+                  />
+                </div>
+                <div className="row" style={{ justifyContent: "flex-end" }}>
+                  <PixelButton onClick={saveContextConfig} tone="accent">
+                    Save
+                  </PixelButton>
+                </div>
+              </div>
+            </SettingsLine>
+          </div>
+
+          <div className="card">
+            <SettingsLine
+              title="Export"
+              detail={autoPasteEnabled ? "Auto paste on" : "Auto paste off"}
+              panel="export"
+              expandedPanels={expandedSettingsPanels}
+              onTogglePanel={toggleSettingsPanel}
+              control={
+                <PixelToggle
+                  value={autoPasteEnabled}
+                  onChange={setAutoPasteEnabled}
+                  label="auto paste"
+                />
+              }
+            >
+              <div className="stack">
+                <div className="muted">Use platform APIs to paste automatically.</div>
+                <div className="row" style={{ justifyContent: "flex-end" }}>
+                  <PixelButton onClick={saveExportConfig} tone="accent">
+                    Save
+                  </PixelButton>
+                </div>
+              </div>
+            </SettingsLine>
+          </div>
+
+          <div className="card">
+            <SettingsLine
+              title="History"
+              detail="Stored dictation records"
+              panel="history"
+              expandedPanels={expandedSettingsPanels}
+              onTogglePanel={toggleSettingsPanel}
+            >
               <div className="row" style={{ justifyContent: "flex-end" }}>
-                <PixelButton onClick={saveHotkeys} tone="accent">
-                  Save
+                <PixelButton onClick={() => setConfirmClear(true)} tone="danger">
+                  Clear all
                 </PixelButton>
               </div>
-            </div>
-          </SettingsLine>
-        </div>
-
-        <div className="card">
-          <SettingsLine
-            title="History"
-            detail="Stored dictation records"
-            panel="history"
-            expandedPanels={expandedSettingsPanels}
-            onTogglePanel={toggleSettingsPanel}
-          >
-            <div className="row" style={{ justifyContent: "flex-end" }}>
-              <PixelButton onClick={() => setConfirmClear(true)} tone="danger">
-                Clear all
-              </PixelButton>
-            </div>
-          </SettingsLine>
+            </SettingsLine>
+          </div>
         </div>
       </div>
 

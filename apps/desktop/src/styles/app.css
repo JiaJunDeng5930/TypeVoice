@@ -533,6 +533,12 @@ button {
   border-top: 1px solid var(--border);
 }
 
+.settingsColumn {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+}
+
 .card {
   min-width: 0;
   align-self: start;
