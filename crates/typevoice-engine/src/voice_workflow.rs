@@ -435,14 +435,34 @@ impl VoiceWorkflow {
         _mailbox: &UiEventMailbox,
         _task_state: &TaskManager,
     ) -> WorkflowResult<Option<WorkflowTaskRequest>> {
-        Err(rewrite_phase_error(self.phase()))
+        let current = self.current_action_text()?;
+        let req = RewriteTextRequest {
+            transcript_id: current.transcript_id.clone(),
+            text: current.final_text,
+        };
+        self.begin_rewrite(&current.transcript_id)?;
+        let pending_context = self.take_pending_context(&current.transcript_id);
+        Ok(Some(WorkflowTaskRequest::Rewrite {
+            task_id: current.transcript_id,
+            pending_context,
+            req,
+        }))
     }
 
     async fn run_insert_last(
         &self,
         _mailbox: &UiEventMailbox,
     ) -> WorkflowResult<Option<WorkflowTaskRequest>> {
-        Err(insert_phase_error(self.phase()))
+        let current = self.current_action_text()?;
+        let req = InsertTextRequest {
+            transcript_id: Some(current.transcript_id.clone()),
+            text: current.final_text,
+        };
+        self.begin_insert(&current.transcript_id)?;
+        Ok(Some(WorkflowTaskRequest::Insert {
+            task_id: current.transcript_id,
+            req,
+        }))
     }
 
     fn run_copy_last(&self) -> WorkflowResult<()> {
@@ -2464,6 +2484,62 @@ mod tests {
 
         assert_eq!(req.transcript_id.as_deref(), Some("task-1"));
         assert_eq!(req.text, "edited text");
+    }
+
+    #[tokio::test]
+    async fn rewrite_last_command_starts_rewrite_task() {
+        let (mailbox, _rx) = UiEventMailbox::for_test();
+        let task_state = TaskManager::new();
+        let workflow = VoiceWorkflow::new();
+        workflow
+            .open_transcribed_session_for_test("task-1", "asr text")
+            .expect("transcribed");
+
+        let task = workflow
+            .run_rewrite_last(&mailbox, &task_state)
+            .await
+            .expect("rewrite command is accepted")
+            .expect("rewrite task is returned");
+
+        assert_eq!(workflow.phase(), WorkflowPhase::Rewriting);
+        match task {
+            WorkflowTaskRequest::Rewrite {
+                task_id,
+                pending_context,
+                req,
+            } => {
+                assert_eq!(task_id, "task-1");
+                assert!(pending_context.is_none());
+                assert_eq!(req.transcript_id, "task-1");
+                assert_eq!(req.text, "asr text");
+            }
+            _ => panic!("unexpected task"),
+        }
+    }
+
+    #[tokio::test]
+    async fn insert_last_command_starts_insert_task() {
+        let (mailbox, _rx) = UiEventMailbox::for_test();
+        let workflow = VoiceWorkflow::new();
+        workflow
+            .open_transcribed_session_for_test("task-1", "asr text")
+            .expect("transcribed");
+
+        let task = workflow
+            .run_insert_last(&mailbox)
+            .await
+            .expect("insert command is accepted")
+            .expect("insert task is returned");
+
+        assert_eq!(workflow.phase(), WorkflowPhase::Inserting);
+        match task {
+            WorkflowTaskRequest::Insert { task_id, req } => {
+                assert_eq!(task_id, "task-1");
+                assert_eq!(req.transcript_id.as_deref(), Some("task-1"));
+                assert_eq!(req.text, "asr text");
+            }
+            _ => panic!("unexpected task"),
+        }
     }
 
     #[test]

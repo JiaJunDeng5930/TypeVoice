@@ -14,7 +14,7 @@ import {
   workflowPhaseName,
   workflowViewFromPayload,
 } from "./domain/workflowView";
-import type { WorkflowView } from "./types";
+import type { Settings, WorkflowView } from "./types";
 
 type GlobalHotkeyEvent = {
   action: "primary";
@@ -97,12 +97,20 @@ export default function OverlayApp() {
   }, [displayText, overlayView.detail, overlayView.status, resizeOverlay]);
 
   useEffect(() => {
-    void client.overlaySetState({
-      visible: overlayView.visible,
-      status: overlayView.status,
-      detail: overlayView.detail,
-      ts_ms: Date.now(),
-    });
+    let cancelled = false;
+    void (async () => {
+      const settings = (await defaultTauriGateway.invoke("get_settings")) as Settings;
+      if (cancelled) return;
+      await client.overlaySetState({
+        visible: settings.hotkeys_show_overlay === true && overlayView.visible,
+        status: overlayView.status,
+        detail: overlayView.detail,
+        ts_ms: Date.now(),
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [client, overlayView.detail, overlayView.status, overlayView.visible]);
 
   const runPrimaryFromAlt = useCallback(async () => {

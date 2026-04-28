@@ -746,7 +746,7 @@ fn read_last_stderr_line(stderr: &mut ChildStderr) -> Option<String> {
 fn repo_root() -> Result<PathBuf, CaptureError> {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
-        .nth(3)
+        .nth(2)
         .map(|p| p.to_path_buf())
         .ok_or_else(|| CaptureError::new("E_REPO_ROOT", "repo root not found"))
 }
@@ -780,6 +780,18 @@ mod tests {
         assert_eq!(
             registry.active_session_id_for_test().as_deref(),
             Some("session-2")
+        );
+    }
+
+    #[test]
+    fn repo_root_resolves_workspace_root() {
+        let root = repo_root().expect("repo root resolves");
+
+        assert!(root.join("Cargo.toml").exists());
+        assert!(root.join("apps").join("desktop").exists());
+        assert_eq!(
+            root.file_name().and_then(|name| name.to_str()),
+            Some("TypeVoice")
         );
     }
 
