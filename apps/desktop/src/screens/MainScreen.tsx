@@ -74,10 +74,7 @@ export function MainScreen({
     const text = (view.lastText || view.lastAsrText || "").trim();
     if (phase !== "transcribed" || !transcriptId || !text) return;
     if (autoRewriteStartedRef.current.has(transcriptId)) return;
-    if (settings?.rewrite_enabled === false) {
-      await runAutoInsert(view);
-      return;
-    }
+    if (settings?.rewrite_enabled !== true) return;
     autoRewriteStartedRef.current.add(transcriptId);
     try {
       await client.workflowRewrite({ text });
@@ -103,13 +100,17 @@ export function MainScreen({
     if (phase === "recording") setLiveTranscript("");
     if (!autoContinue) return;
     if (phase === "transcribed") {
-      await runAutoRewrite(next);
+      if (settings?.rewrite_enabled === true) {
+        await runAutoRewrite(next);
+      } else {
+        await runAutoInsert(next);
+      }
       return;
     }
     if (phase === "rewritten") {
       await runAutoInsert(next);
     }
-  }, [runAutoInsert, runAutoRewrite]);
+  }, [runAutoInsert, runAutoRewrite, settings?.rewrite_enabled]);
 
   useEffect(() => {
     (async () => {
