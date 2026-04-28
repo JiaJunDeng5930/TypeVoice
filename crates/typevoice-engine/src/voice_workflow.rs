@@ -1239,7 +1239,14 @@ impl VoiceWorkflow {
             diagnostic_code,
             diagnostic_line,
             primary_label: primary_label(phase).to_string(),
-            primary_disabled: matches!(phase, WorkflowPhase::Rewriting | WorkflowPhase::Inserting),
+            primary_disabled: matches!(
+                phase,
+                WorkflowPhase::Transcribing
+                    | WorkflowPhase::Transcribed
+                    | WorkflowPhase::Rewriting
+                    | WorkflowPhase::Rewritten
+                    | WorkflowPhase::Inserting
+            ),
             can_rewrite: has_asr && !active,
             can_insert: has_text && !active,
             can_copy: has_text,
@@ -2209,8 +2216,26 @@ mod tests {
         assert_eq!(workflow.phase(), WorkflowPhase::Recording);
         let view = workflow.view();
         assert_eq!(view.primary_label, "STOP");
+        assert!(!view.primary_disabled);
         assert_eq!(view.task_id.as_deref(), Some("task-1"));
         assert_eq!(view.recording_session_id.as_deref(), Some("recording-1"));
+    }
+
+    #[test]
+    fn transcribing_workflow_view_disables_primary_action() {
+        let workflow = VoiceWorkflow::new();
+        workflow
+            .open_recording_for_test("task-1", "recording-1")
+            .expect("recording starts");
+        workflow
+            .begin_transcribing_for_test("recording-1")
+            .expect("transcribing starts");
+
+        let view = workflow.view();
+
+        assert_eq!(view.phase, "transcribing");
+        assert_eq!(view.primary_label, "TRANSCRIBING");
+        assert!(view.primary_disabled);
     }
 
     #[test]

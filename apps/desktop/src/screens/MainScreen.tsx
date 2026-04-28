@@ -30,7 +30,7 @@ type Props = {
 };
 
 export function MainScreen({
-  settings: _settings,
+  settings,
   pushToast,
   onHistoryChanged,
   gateway = defaultTauriGateway,
@@ -47,7 +47,7 @@ export function MainScreen({
     const phase = workflowPhaseName(view.phase);
     const transcriptId = optionalString(view.lastTranscriptId);
     const text = (view.lastText || view.lastAsrText || "").trim();
-    if (phase !== "rewritten" || !transcriptId || !text) return;
+    if ((phase !== "transcribed" && phase !== "rewritten") || !transcriptId || !text) return;
     if (autoInsertStartedRef.current.has(transcriptId)) return;
     autoInsertStartedRef.current.add(transcriptId);
     try {
@@ -74,6 +74,10 @@ export function MainScreen({
     const text = (view.lastText || view.lastAsrText || "").trim();
     if (phase !== "transcribed" || !transcriptId || !text) return;
     if (autoRewriteStartedRef.current.has(transcriptId)) return;
+    if (settings?.rewrite_enabled === false) {
+      await runAutoInsert(view);
+      return;
+    }
     autoRewriteStartedRef.current.add(transcriptId);
     try {
       await client.workflowRewrite({ text });
@@ -91,7 +95,7 @@ export function MainScreen({
         pushToast(refreshDiag.title, "danger");
       }
     }
-  }, [client, pushToast, runAutoInsert]);
+  }, [client, pushToast, runAutoInsert, settings?.rewrite_enabled]);
 
   const acceptWorkflowView = useCallback(async (next: WorkflowView, autoContinue: boolean) => {
     setWorkflow(next);
