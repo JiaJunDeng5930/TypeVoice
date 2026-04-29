@@ -78,6 +78,7 @@ export default function OverlayApp() {
     const seedText = (next.lastText || next.lastAsrText).trim();
     setWorkflow(next);
     if (phase === "recording") {
+      setDraftText("");
       setLiveText("");
     }
     if (
