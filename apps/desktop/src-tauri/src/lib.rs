@@ -23,7 +23,7 @@ use settings::SettingsPatch;
 use task_manager::TaskManager;
 use tauri::Emitter;
 use tauri::Manager;
-use tauri::{LogicalPosition, LogicalSize};
+use tauri::{LogicalSize, PhysicalPosition};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct OverlayState {
@@ -267,11 +267,10 @@ fn overlay_save_position(app: tauri::AppHandle) -> Result<(), String> {
         return Ok(());
     };
     let pos = w.outer_position().map_err(|e| e.to_string())?;
-    let scale = overlay_scale_factor(&w);
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let mut s = settings::load_settings_strict(&dir).map_err(|e| e.to_string())?;
-    s.overlay_position_x = Some((pos.x as f64 / scale).round() as i64);
-    s.overlay_position_y = Some((pos.y as f64 / scale).round() as i64);
+    s.overlay_position_x = Some(pos.x as i64);
+    s.overlay_position_y = Some(pos.y as i64);
     settings::save_settings(&dir, &s).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -299,9 +298,9 @@ fn apply_overlay_layout_with_config(
 fn resolved_overlay_position(
     w: &tauri::WebviewWindow,
     config: &settings::OverlayConfigResolved,
-) -> LogicalPosition<f64> {
+) -> PhysicalPosition<i32> {
     let pos = settings::resolve_overlay_position(config, &overlay_work_areas(w));
-    LogicalPosition::new(pos.x, pos.y)
+    PhysicalPosition::new(pos.x.round() as i32, pos.y.round() as i32)
 }
 
 fn overlay_work_areas(w: &tauri::WebviewWindow) -> Vec<settings::OverlayWorkArea> {
@@ -326,10 +325,11 @@ fn push_overlay_work_area(areas: &mut Vec<settings::OverlayWorkArea>, monitor: &
     let scale = monitor.scale_factor();
     let area = monitor.work_area();
     let next = settings::OverlayWorkArea {
-        x: area.position.x as f64 / scale,
-        y: area.position.y as f64 / scale,
-        width: area.size.width as f64 / scale,
-        height: area.size.height as f64 / scale,
+        x: area.position.x as f64,
+        y: area.position.y as f64,
+        width: area.size.width as f64,
+        height: area.size.height as f64,
+        scale_factor: scale,
     };
     let exists = areas.iter().any(|area| {
         area.x == next.x
@@ -340,16 +340,6 @@ fn push_overlay_work_area(areas: &mut Vec<settings::OverlayWorkArea>, monitor: &
     if !exists {
         areas.push(next);
     }
-}
-
-fn overlay_scale_factor(w: &tauri::WebviewWindow) -> f64 {
-    w.current_monitor()
-        .ok()
-        .flatten()
-        .or_else(|| w.primary_monitor().ok().flatten())
-        .map(|m| m.scale_factor())
-        .filter(|v| *v > 0.0)
-        .unwrap_or(1.0)
 }
 
 fn cmd_span(

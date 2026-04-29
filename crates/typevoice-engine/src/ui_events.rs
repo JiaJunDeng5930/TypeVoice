@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager};
+use tauri::{AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition};
 
 pub const UI_EVENT_CHANNEL: &str = "ui_event";
 
@@ -372,9 +372,9 @@ fn apply_overlay_layout(w: &tauri::WebviewWindow) -> anyhow::Result<()> {
 fn resolved_overlay_position(
     w: &tauri::WebviewWindow,
     config: &crate::settings::OverlayConfigResolved,
-) -> LogicalPosition<f64> {
+) -> PhysicalPosition<i32> {
     let pos = crate::settings::resolve_overlay_position(config, &overlay_work_areas(w));
-    LogicalPosition::new(pos.x, pos.y)
+    PhysicalPosition::new(pos.x.round() as i32, pos.y.round() as i32)
 }
 
 fn overlay_work_areas(w: &tauri::WebviewWindow) -> Vec<crate::settings::OverlayWorkArea> {
@@ -402,10 +402,11 @@ fn push_overlay_work_area(
     let scale = monitor.scale_factor();
     let area = monitor.work_area();
     let next = crate::settings::OverlayWorkArea {
-        x: area.position.x as f64 / scale,
-        y: area.position.y as f64 / scale,
-        width: area.size.width as f64 / scale,
-        height: area.size.height as f64 / scale,
+        x: area.position.x as f64,
+        y: area.position.y as f64,
+        width: area.size.width as f64,
+        height: area.size.height as f64,
+        scale_factor: scale,
     };
     let exists = areas.iter().any(|area| {
         area.x == next.x

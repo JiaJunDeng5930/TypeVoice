@@ -408,6 +408,7 @@ pub struct OverlayWorkArea {
     pub y: f64,
     pub width: f64,
     pub height: f64,
+    pub scale_factor: f64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -420,20 +421,23 @@ pub fn resolve_overlay_position(
     config: &OverlayConfigResolved,
     work_areas: &[OverlayWorkArea],
 ) -> OverlayPositionResolved {
-    let width = config.width_px as f64;
-    let height = config.height_px as f64;
     let fallback = OverlayWorkArea {
         x: 0.0,
         y: 0.0,
-        width,
-        height,
+        width: config.width_px as f64,
+        height: config.height_px as f64,
+        scale_factor: 1.0,
     };
     let area = select_overlay_work_area(config, work_areas).unwrap_or(fallback);
+    let scale = area.scale_factor.max(0.1);
+    let width = config.width_px as f64 * scale;
+    let height = config.height_px as f64 * scale;
+    let bottom_padding = 96.0 * scale;
     let (raw_x, raw_y) = match (config.position_x, config.position_y) {
         (Some(x), Some(y)) => (x as f64, y as f64),
         _ => (
             area.x + (area.width - width) / 2.0,
-            area.y + area.height - height - 96.0,
+            area.y + area.height - height - bottom_padding,
         ),
     };
     OverlayPositionResolved {
@@ -623,19 +627,21 @@ mod tests {
                 y: 0.0,
                 width: 1920.0,
                 height: 1040.0,
+                scale_factor: 1.0,
             },
             OverlayWorkArea {
                 x: 1920.0,
                 y: 0.0,
-                width: 1920.0,
-                height: 1040.0,
+                width: 2400.0,
+                height: 1300.0,
+                scale_factor: 1.25,
             },
         ];
 
         let pos = resolve_overlay_position(&config, &areas);
 
         assert_eq!(pos.x, 1920.0);
-        assert_eq!(pos.y, 920.0);
+        assert_eq!(pos.y, 980.0);
     }
 
     #[test]
