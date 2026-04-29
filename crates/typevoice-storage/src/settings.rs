@@ -402,12 +402,71 @@ pub fn resolve_overlay_config(s: &Settings) -> OverlayConfigResolved {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct OverlayWorkArea {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct OverlayPositionResolved {
+    pub x: f64,
+    pub y: f64,
+}
+
+pub fn resolve_overlay_position(
+    config: &OverlayConfigResolved,
+    work_areas: &[OverlayWorkArea],
+) -> OverlayPositionResolved {
+    let width = config.width_px as f64;
+    let height = config.height_px as f64;
+    let fallback = OverlayWorkArea {
+        x: 0.0,
+        y: 0.0,
+        width,
+        height,
+    };
+    let area = select_overlay_work_area(config, work_areas).unwrap_or(fallback);
+    let (raw_x, raw_y) = match (config.position_x, config.position_y) {
+        (Some(x), Some(y)) => (x as f64, y as f64),
+        _ => (
+            area.x + (area.width - width) / 2.0,
+            area.y + area.height - height - 96.0,
+        ),
+    };
+    OverlayPositionResolved {
+        x: raw_x.clamp(area.x, area.x + (area.width - width).max(0.0)),
+        y: raw_y.clamp(area.y, area.y + (area.height - height).max(0.0)),
+    }
+}
+
+fn select_overlay_work_area(
+    config: &OverlayConfigResolved,
+    work_areas: &[OverlayWorkArea],
+) -> Option<OverlayWorkArea> {
+    let saved = match (config.position_x, config.position_y) {
+        (Some(x), Some(y)) => Some((x as f64, y as f64)),
+        _ => None,
+    };
+    if let Some((x, y)) = saved {
+        if let Some(area) = work_areas.iter().copied().find(|area| {
+            x >= area.x && x <= area.x + area.width && y >= area.y && y <= area.y + area.height
+        }) {
+            return Some(area);
+        }
+    }
+    work_areas.first().copied()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         apply_patch, normalize_hotkey_primary, resolve_asr_provider, resolve_hotkey_config,
-        resolve_overlay_config, resolve_remote_asr_concurrency, resolve_remote_asr_model,
-        resolve_remote_asr_url, Settings, SettingsPatch, DEFAULT_REMOTE_ASR_URL,
+        resolve_overlay_config, resolve_overlay_position, resolve_remote_asr_concurrency,
+        resolve_remote_asr_model, resolve_remote_asr_url, OverlayWorkArea, Settings, SettingsPatch,
+        DEFAULT_REMOTE_ASR_URL,
     };
 
     #[test]
@@ -547,6 +606,36 @@ mod tests {
         assert_eq!(clamped.font_size_px, 18);
         assert_eq!(clamped.width_px, 360);
         assert_eq!(clamped.height_px, 72);
+    }
+
+    #[test]
+    fn resolve_overlay_position_uses_work_area_containing_saved_point() {
+        let config = resolve_overlay_config(&Settings {
+            overlay_width_px: Some(400),
+            overlay_height_px: Some(120),
+            overlay_position_x: Some(2100),
+            overlay_position_y: Some(980),
+            ..Default::default()
+        });
+        let areas = [
+            OverlayWorkArea {
+                x: 0.0,
+                y: 0.0,
+                width: 1920.0,
+                height: 1040.0,
+            },
+            OverlayWorkArea {
+                x: 1920.0,
+                y: 0.0,
+                width: 1920.0,
+                height: 1040.0,
+            },
+        ];
+
+        let pos = resolve_overlay_position(&config, &areas);
+
+        assert_eq!(pos.x, 2100.0);
+        assert_eq!(pos.y, 920.0);
     }
 
     #[test]

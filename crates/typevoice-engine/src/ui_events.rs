@@ -373,38 +373,49 @@ fn resolved_overlay_position(
     w: &tauri::WebviewWindow,
     config: &crate::settings::OverlayConfigResolved,
 ) -> LogicalPosition<f64> {
-    let width = config.width_px as f64;
-    let height = config.height_px as f64;
-    let Some((area_x, area_y, area_width, area_height)) = overlay_work_area(w) else {
-        return LogicalPosition::new(0.0, 0.0);
-    };
-    let (raw_x, raw_y) = match (config.position_x, config.position_y) {
-        (Some(x), Some(y)) => (x as f64, y as f64),
-        _ => (
-            area_x + (area_width - width) / 2.0,
-            area_y + area_height - height - 96.0,
-        ),
-    };
-    LogicalPosition::new(
-        raw_x.clamp(area_x, area_x + (area_width - width).max(0.0)),
-        raw_y.clamp(area_y, area_y + (area_height - height).max(0.0)),
-    )
+    let pos = crate::settings::resolve_overlay_position(config, &overlay_work_areas(w));
+    LogicalPosition::new(pos.x, pos.y)
 }
 
-fn overlay_work_area(w: &tauri::WebviewWindow) -> Option<(f64, f64, f64, f64)> {
-    let monitor = w
+fn overlay_work_areas(w: &tauri::WebviewWindow) -> Vec<crate::settings::OverlayWorkArea> {
+    let mut areas = Vec::new();
+    if let Some(monitor) = w
         .current_monitor()
         .ok()
         .flatten()
-        .or_else(|| w.primary_monitor().ok().flatten())?;
+        .or_else(|| w.primary_monitor().ok().flatten())
+    {
+        push_overlay_work_area(&mut areas, &monitor);
+    }
+    if let Ok(monitors) = w.available_monitors() {
+        for monitor in monitors {
+            push_overlay_work_area(&mut areas, &monitor);
+        }
+    }
+    areas
+}
+
+fn push_overlay_work_area(
+    areas: &mut Vec<crate::settings::OverlayWorkArea>,
+    monitor: &tauri::Monitor,
+) {
     let scale = monitor.scale_factor();
     let area = monitor.work_area();
-    Some((
-        area.position.x as f64 / scale,
-        area.position.y as f64 / scale,
-        area.size.width as f64 / scale,
-        area.size.height as f64 / scale,
-    ))
+    let next = crate::settings::OverlayWorkArea {
+        x: area.position.x as f64 / scale,
+        y: area.position.y as f64 / scale,
+        width: area.size.width as f64 / scale,
+        height: area.size.height as f64 / scale,
+    };
+    let exists = areas.iter().any(|area| {
+        area.x == next.x
+            && area.y == next.y
+            && area.width == next.width
+            && area.height == next.height
+    });
+    if !exists {
+        areas.push(next);
+    }
 }
 
 fn now_ms() -> i64 {

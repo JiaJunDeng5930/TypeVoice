@@ -40,14 +40,6 @@ struct OverlayResizeRequest {
     height: f64,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct OverlayWorkArea {
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-}
-
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UiLogEventRequest {
@@ -288,6 +280,13 @@ fn apply_overlay_layout(w: &tauri::WebviewWindow) -> Result<(), String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let s = settings::load_settings_strict(&dir).map_err(|e| e.to_string())?;
     let config = settings::resolve_overlay_config(&s);
+    apply_overlay_layout_with_config(w, &config)
+}
+
+fn apply_overlay_layout_with_config(
+    w: &tauri::WebviewWindow,
+    config: &settings::OverlayConfigResolved,
+) -> Result<(), String> {
     let width = config.width_px as f64;
     let height = config.height_px as f64;
     w.set_size(LogicalSize::new(width, height))
@@ -301,41 +300,46 @@ fn resolved_overlay_position(
     w: &tauri::WebviewWindow,
     config: &settings::OverlayConfigResolved,
 ) -> LogicalPosition<f64> {
-    let width = config.width_px as f64;
-    let height = config.height_px as f64;
-    let area = overlay_work_area(w).unwrap_or(OverlayWorkArea {
-        x: 0.0,
-        y: 0.0,
-        width,
-        height,
-    });
-    let (raw_x, raw_y) = match (config.position_x, config.position_y) {
-        (Some(x), Some(y)) => (x as f64, y as f64),
-        _ => (
-            area.x + (area.width - width) / 2.0,
-            area.y + area.height - height - 96.0,
-        ),
-    };
-    LogicalPosition::new(
-        raw_x.clamp(area.x, area.x + (area.width - width).max(0.0)),
-        raw_y.clamp(area.y, area.y + (area.height - height).max(0.0)),
-    )
+    let pos = settings::resolve_overlay_position(config, &overlay_work_areas(w));
+    LogicalPosition::new(pos.x, pos.y)
 }
 
-fn overlay_work_area(w: &tauri::WebviewWindow) -> Option<OverlayWorkArea> {
-    let monitor = w
+fn overlay_work_areas(w: &tauri::WebviewWindow) -> Vec<settings::OverlayWorkArea> {
+    let mut areas = Vec::new();
+    if let Some(monitor) = w
         .current_monitor()
         .ok()
         .flatten()
-        .or_else(|| w.primary_monitor().ok().flatten())?;
+        .or_else(|| w.primary_monitor().ok().flatten())
+    {
+        push_overlay_work_area(&mut areas, &monitor);
+    }
+    if let Ok(monitors) = w.available_monitors() {
+        for monitor in monitors {
+            push_overlay_work_area(&mut areas, &monitor);
+        }
+    }
+    areas
+}
+
+fn push_overlay_work_area(areas: &mut Vec<settings::OverlayWorkArea>, monitor: &tauri::Monitor) {
     let scale = monitor.scale_factor();
     let area = monitor.work_area();
-    Some(OverlayWorkArea {
+    let next = settings::OverlayWorkArea {
         x: area.position.x as f64 / scale,
         y: area.position.y as f64 / scale,
         width: area.size.width as f64 / scale,
         height: area.size.height as f64 / scale,
-    })
+    };
+    let exists = areas.iter().any(|area| {
+        area.x == next.x
+            && area.y == next.y
+            && area.width == next.width
+            && area.height == next.height
+    });
+    if !exists {
+        areas.push(next);
+    }
 }
 
 fn overlay_scale_factor(w: &tauri::WebviewWindow) -> f64 {
@@ -983,6 +987,11 @@ fn update_settings(
         span.err_anyhow("settings", "E_CMD_UPDATE_SETTINGS", &e, None);
         return Err(e.to_string());
     }
+    let overlay_config = settings::resolve_overlay_config(&next);
+    if let Some(w) = app.get_webview_window("overlay") {
+        let _ = apply_overlay_layout_with_config(&w, &overlay_config);
+    }
+    let _ = app.emit("tv_overlay_config_changed", overlay_config);
     // Hotkeys are also best-effort; failures are traced and should not break settings.
     hotkeys.apply_from_settings_best_effort(&app, &dir, &next);
     if cfg!(windows) && record_input_changed {

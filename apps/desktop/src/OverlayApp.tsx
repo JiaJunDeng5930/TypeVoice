@@ -97,12 +97,25 @@ export default function OverlayApp() {
 
   useEffect(() => {
     let cancelled = false;
+    let unlisten: (() => void) | null = null;
     void (async () => {
       const next = await client.overlayConfig();
       if (!cancelled) setConfig(next);
+      const stop = await defaultTauriGateway.listen<OverlayConfig>(
+        "tv_overlay_config_changed",
+        (updated) => {
+          if (!cancelled) setConfig(updated);
+        },
+      );
+      if (cancelled) {
+        stop();
+      } else {
+        unlisten = stop;
+      }
     })();
     return () => {
       cancelled = true;
+      unlisten?.();
     };
   }, [client]);
 
