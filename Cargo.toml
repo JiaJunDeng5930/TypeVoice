@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = [
+  "apps/desktop/src-tauri",
+  "crates/typevoice-core",
+  "crates/typevoice-observability",
+  "crates/typevoice-storage",
+  "crates/typevoice-platform",
+  "crates/typevoice-providers",
+  "crates/typevoice-engine",
+  "tools/xtask",
+]
+
+[profile.dev]
+# Speed up dev iterations: reduce debug info to lower link time while keeping backtraces usable.
+debug = 1

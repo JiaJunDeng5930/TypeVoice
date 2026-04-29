@@ -1,107 +1,28 @@
-mod asr_service;
-mod audio_device_notifications_windows;
-mod audio_devices_windows;
-mod context_capture;
+mod commands;
+pub use typevoice_core::{context_pack, ports};
+pub use typevoice_engine::{
+    audio_capture, rewrite, task_manager, transcription, transcription_actor, ui_events,
+    voice_tasks, voice_workflow, RuntimeState,
+};
+pub use typevoice_observability::obs;
 #[cfg(windows)]
-mod context_capture_windows;
-mod context_pack;
-mod data_dir;
-mod export;
-mod history;
+pub use typevoice_platform::context_capture_windows;
+pub use typevoice_platform::{
+    audio_device_notifications_windows, audio_devices_windows, context_capture, export, insertion,
+    pipeline, record_input, record_input_cache, subprocess, toolchain,
+};
+pub use typevoice_providers::{doubao_asr, llm, remote_asr};
+pub use typevoice_storage::{data_dir, history, settings};
 mod hotkeys;
-mod llm;
-mod model;
-mod obs;
-mod pipeline;
-mod python_runtime;
-mod record_input;
-mod record_input_cache;
-mod remote_asr;
-mod safe_print;
-mod settings;
-mod subprocess;
-mod task_manager;
-mod templates;
-mod toolchain;
 
 use history::HistoryItem;
 use llm::ApiKeyStatus;
-use model::ModelStatus;
 use obs::Span;
 use settings::Settings;
 use settings::SettingsPatch;
-use subprocess::CommandNoConsoleExt;
 use task_manager::TaskManager;
 use tauri::Emitter;
 use tauri::Manager;
-use templates::PromptTemplate;
-
-struct RuntimeState {
-    toolchain: std::sync::Mutex<toolchain::ToolchainStatus>,
-    python: std::sync::Mutex<python_runtime::PythonStatus>,
-}
-
-struct ActiveBackendRecording {
-    recording_id: String,
-    output_path: std::path::PathBuf,
-    child: std::process::Child,
-    started_at: std::time::Instant,
-    meter_join: Option<std::thread::JoinHandle<()>>,
-}
-
-struct RecordedAsset {
-    asset_id: String,
-    output_path: std::path::PathBuf,
-    record_elapsed_ms: u128,
-    created_at: std::time::Instant,
-}
-
-struct BackendRecordingInner {
-    active: Option<ActiveBackendRecording>,
-    assets: std::collections::HashMap<String, RecordedAsset>,
-}
-
-struct BackendRecordingState {
-    inner: std::sync::Mutex<BackendRecordingInner>,
-}
-
-impl RuntimeState {
-    fn new() -> Self {
-        Self {
-            toolchain: std::sync::Mutex::new(toolchain::ToolchainStatus::pending()),
-            python: std::sync::Mutex::new(python_runtime::PythonStatus::pending()),
-        }
-    }
-
-    fn set_toolchain(&self, st: toolchain::ToolchainStatus) {
-        let mut g = self.toolchain.lock().unwrap();
-        *g = st;
-    }
-
-    fn get_toolchain(&self) -> toolchain::ToolchainStatus {
-        self.toolchain.lock().unwrap().clone()
-    }
-
-    fn set_python(&self, st: python_runtime::PythonStatus) {
-        let mut g = self.python.lock().unwrap();
-        *g = st;
-    }
-
-    fn get_python(&self) -> python_runtime::PythonStatus {
-        self.python.lock().unwrap().clone()
-    }
-}
-
-impl BackendRecordingState {
-    fn new() -> Self {
-        Self {
-            inner: std::sync::Mutex::new(BackendRecordingInner {
-                active: None,
-                assets: std::collections::HashMap::new(),
-            }),
-        }
-    }
-}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct OverlayState {
@@ -111,47 +32,11 @@ struct OverlayState {
     ts_ms: i64,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct OverlayAudioLevelEvent {
-    recording_id: String,
-    rms: f64,
-    peak: f64,
-    ts_ms: i64,
-}
-
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct StartTaskRequest {
-    trigger_source: String, // ui|hotkey|fixture
-    record_mode: String,    // recording_asset|fixture
-    recording_asset_id: Option<String>,
-    fixture_name: Option<String>,
-    task_id: Option<String>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct StopBackendRecordingResult {
-    recording_id: String,
-    recording_asset_id: String,
-    ext: String,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ExportTextRequest {
-    task_id: Option<String>,
-    text: String,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-struct ExportTextResult {
-    copied: bool,
-    auto_paste_attempted: bool,
-    auto_paste_ok: bool,
-    error_code: Option<String>,
-    error_message: Option<String>,
+struct OverlayResizeRequest {
+    width: f64,
+    height: f64,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -171,6 +56,18 @@ struct UiLogEventRequest {
     task_id: Option<String>,
     ts_ms: Option<i64>,
     extra: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct ApiCheckResult {
+    ok: bool,
+    message: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct EffectiveSettingsValues {
+    llm_base_url: Option<String>,
+    llm_model: Option<String>,
 }
 
 fn sanitize_ui_text(raw: Option<String>, max_chars: usize) -> Option<String> {
@@ -344,6 +241,17 @@ fn overlay_set_state(app: tauri::AppHandle, state: OverlayState) -> Result<(), S
     Ok(())
 }
 
+#[tauri::command]
+fn overlay_resize(app: tauri::AppHandle, req: OverlayResizeRequest) -> Result<(), String> {
+    let width = req.width.clamp(320.0, 640.0);
+    let height = req.height.clamp(96.0, 520.0);
+    if let Some(w) = app.get_webview_window("overlay") {
+        w.set_size(tauri::LogicalSize::new(width, height))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 fn cmd_span(
     data_dir: &std::path::Path,
     task_id: Option<&str>,
@@ -351,730 +259,6 @@ fn cmd_span(
     ctx: Option<serde_json::Value>,
 ) -> Span {
     Span::start(data_dir, task_id, "Cmd", step_id, ctx)
-}
-
-fn repo_root() -> Result<std::path::PathBuf, String> {
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(3)
-        .map(|p| p.to_path_buf())
-        .ok_or_else(|| "repo root not found".to_string())
-}
-
-fn runtime_not_ready(runtime: &RuntimeState) -> Option<(&'static str, String)> {
-    let tc = runtime.get_toolchain();
-    if !tc.ready {
-        let msg = tc
-            .message
-            .unwrap_or_else(|| "E_TOOLCHAIN_NOT_READY: toolchain is not ready".to_string());
-        return Some(("E_TOOLCHAIN_NOT_READY", msg));
-    }
-
-    let py = runtime.get_python();
-    if !py.ready {
-        let msg = py
-            .message
-            .unwrap_or_else(|| "E_PYTHON_NOT_READY: python runtime is not ready".to_string());
-        return Some(("E_PYTHON_NOT_READY", msg));
-    }
-    None
-}
-
-fn start_opts_from_settings(data_dir: &std::path::Path) -> Result<task_manager::StartOpts, String> {
-    let s = settings::load_settings_strict(data_dir).map_err(|e| e.to_string())?;
-    let (rewrite_enabled, template_id) =
-        settings::resolve_rewrite_start_config(&s).map_err(|e| e.to_string())?;
-    let asr_preprocess = resolve_asr_preprocess_config(&s);
-    Ok(task_manager::StartOpts {
-        asr_provider: settings::resolve_asr_provider(&s),
-        remote_asr_url: settings::resolve_remote_asr_url(&s),
-        remote_asr_model: settings::resolve_remote_asr_model(&s),
-        remote_asr_concurrency: settings::resolve_remote_asr_concurrency(&s),
-        rewrite_enabled,
-        template_id,
-        context_cfg: context_capture::config_from_settings(&s),
-        rewrite_glossary: sanitize_rewrite_glossary(s.rewrite_glossary),
-        rewrite_include_glossary: s.rewrite_include_glossary.unwrap_or(true),
-        asr_preprocess,
-        pre_captured_context: None,
-        record_elapsed_ms: 0,
-        record_label: "Record".to_string(),
-    })
-}
-
-fn abort_pending_task_if_present(state: &tauri::State<'_, TaskManager>, task_id: &Option<String>) {
-    if let Some(id) = task_id.as_deref() {
-        state.abort_pending_task(id);
-    }
-}
-
-fn normalize_task_id(task_id: Option<&str>) -> Result<Option<String>, String> {
-    let raw = match task_id {
-        Some(v) => v.trim(),
-        None => return Ok(None),
-    };
-    if raw.is_empty() {
-        return Ok(None);
-    }
-    let parsed = uuid::Uuid::parse_str(raw)
-        .map_err(|e| format!("E_START_TASK_ID_INVALID: invalid task_id ({e})"))?;
-    Ok(Some(parsed.to_string()))
-}
-
-fn cleanup_expired_recording_assets(
-    recorder: &tauri::State<'_, BackendRecordingState>,
-    max_age: std::time::Duration,
-) {
-    let mut g = recorder.inner.lock().unwrap();
-    let expired_ids: Vec<String> = g
-        .assets
-        .iter()
-        .filter_map(|(id, asset)| {
-            if asset.created_at.elapsed() > max_age {
-                Some(id.clone())
-            } else {
-                None
-            }
-        })
-        .collect();
-    for id in expired_ids {
-        if let Some(asset) = g.assets.remove(&id) {
-            let _ = std::fs::remove_file(&asset.output_path);
-        }
-    }
-}
-
-fn has_active_recording(recorder: &tauri::State<'_, BackendRecordingState>) -> bool {
-    recorder.inner.lock().unwrap().active.is_some()
-}
-
-fn read_last_stderr_line(stderr: &mut std::process::ChildStderr) -> Option<String> {
-    let mut buf = String::new();
-    if std::io::Read::read_to_string(stderr, &mut buf).is_err() {
-        return None;
-    }
-    buf.lines()
-        .rev()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map(|line| line.to_string())
-}
-
-fn now_epoch_ms() -> i64 {
-    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-        Ok(dur) => dur.as_millis() as i64,
-        Err(_) => 0,
-    }
-}
-
-fn emit_overlay_audio_level(app: &tauri::AppHandle, recording_id: &str, rms: f64, peak: f64) {
-    let _ = app.emit(
-        "tv_overlay_audio_level",
-        OverlayAudioLevelEvent {
-            recording_id: recording_id.to_string(),
-            rms: rms.clamp(0.0, 1.0),
-            peak: peak.clamp(0.0, 1.0),
-            ts_ms: now_epoch_ms(),
-        },
-    );
-}
-
-fn spawn_overlay_meter_thread(
-    app: tauri::AppHandle,
-    recording_id: String,
-    mut stdout: std::process::ChildStdout,
-) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(move || {
-        const WINDOW_SAMPLES: usize = 800; // 50ms @ 16kHz
-        let mut read_buf = [0_u8; 4096];
-        let mut carry_low_byte: Option<u8> = None;
-        let mut sum_sq = 0.0_f64;
-        let mut max_abs = 0_i32;
-        let mut sample_count = 0_usize;
-
-        loop {
-            let n = match std::io::Read::read(&mut stdout, &mut read_buf) {
-                Ok(0) => break,
-                Ok(v) => v,
-                Err(_) => break,
-            };
-
-            let mut idx = 0_usize;
-            if let Some(low) = carry_low_byte.take() {
-                let sample = i16::from_le_bytes([low, read_buf[0]]);
-                let sample_i32 = i32::from(sample);
-                let normalized = f64::from(sample_i32) / 32768.0;
-                sum_sq += normalized * normalized;
-                max_abs = max_abs.max(sample_i32.abs());
-                sample_count += 1;
-                if sample_count >= WINDOW_SAMPLES {
-                    let rms = (sum_sq / sample_count as f64).sqrt();
-                    let peak = max_abs as f64 / 32768.0;
-                    emit_overlay_audio_level(&app, &recording_id, rms, peak);
-                    sum_sq = 0.0;
-                    max_abs = 0;
-                    sample_count = 0;
-                }
-                idx = 1;
-            }
-
-            while idx + 1 < n {
-                let sample = i16::from_le_bytes([read_buf[idx], read_buf[idx + 1]]);
-                let sample_i32 = i32::from(sample);
-                let normalized = f64::from(sample_i32) / 32768.0;
-                sum_sq += normalized * normalized;
-                max_abs = max_abs.max(sample_i32.abs());
-                sample_count += 1;
-                if sample_count >= WINDOW_SAMPLES {
-                    let rms = (sum_sq / sample_count as f64).sqrt();
-                    let peak = max_abs as f64 / 32768.0;
-                    emit_overlay_audio_level(&app, &recording_id, rms, peak);
-                    sum_sq = 0.0;
-                    max_abs = 0;
-                    sample_count = 0;
-                }
-                idx += 2;
-            }
-
-            if idx < n {
-                carry_low_byte = Some(read_buf[idx]);
-            }
-        }
-
-        emit_overlay_audio_level(&app, &recording_id, 0.0, 0.0);
-    })
-}
-
-fn join_overlay_meter_thread(active: &mut ActiveBackendRecording) {
-    if let Some(join_handle) = active.meter_join.take() {
-        let _ = join_handle.join();
-    }
-}
-
-fn take_recording_asset(
-    recorder: &tauri::State<'_, BackendRecordingState>,
-    asset_id: &str,
-) -> Option<RecordedAsset> {
-    let mut g = recorder.inner.lock().unwrap();
-    g.assets.remove(asset_id)
-}
-
-fn resolve_asr_preprocess_config(s: &settings::Settings) -> pipeline::PreprocessConfig {
-    let mut cfg = pipeline::PreprocessConfig::default();
-    if let Some(v) = s.asr_preprocess_silence_trim_enabled {
-        cfg.silence_trim_enabled = v;
-    }
-    if let Some(v) = s.asr_preprocess_silence_threshold_db {
-        cfg.silence_threshold_db = v;
-    }
-    if let Some(v) = s.asr_preprocess_silence_start_ms {
-        cfg.silence_trim_start_ms = v;
-    }
-    if let Some(v) = s.asr_preprocess_silence_end_ms {
-        cfg.silence_trim_end_ms = v;
-    }
-    cfg
-}
-
-fn sanitize_rewrite_glossary(glossary: Option<Vec<String>>) -> Vec<String> {
-    let mut out = Vec::new();
-    for item in glossary.unwrap_or_default() {
-        let v = item.trim();
-        if !v.is_empty() {
-            out.push(v.to_string());
-        }
-    }
-    out
-}
-
-#[tauri::command]
-async fn start_task(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, TaskManager>,
-    runtime: tauri::State<'_, RuntimeState>,
-    recorder: tauri::State<'_, BackendRecordingState>,
-    req: StartTaskRequest,
-) -> Result<String, String> {
-    let dir = match data_dir::data_dir() {
-        Ok(v) => v,
-        Err(e) => {
-            if let Some(task_id) = req.task_id.as_deref() {
-                state.abort_pending_task(task_id.trim());
-            }
-            return Err(e.to_string());
-        }
-    };
-    let requested_task_id = normalize_task_id(req.task_id.as_deref())?;
-    let mut opts = match start_opts_from_settings(&dir) {
-        Ok(v) => v,
-        Err(e) => {
-            let span = cmd_span(&dir, None, "CMD.start_task.settings", None);
-            span.err("config", "E_SETTINGS_INVALID", &e, None);
-            abort_pending_task_if_present(&state, &requested_task_id);
-            return Err(e);
-        }
-    };
-
-    let span = cmd_span(
-        &dir,
-        None,
-        "CMD.start_task",
-        Some(serde_json::json!({
-            "trigger_source": req.trigger_source.as_str(),
-            "record_mode": req.record_mode.as_str(),
-            "has_recording_asset_id": req.recording_asset_id.as_deref().map(|v| !v.trim().is_empty()).unwrap_or(false),
-            "fixture_name": req.fixture_name.as_deref(),
-            "has_task_id": requested_task_id.as_ref().map(|v| !v.trim().is_empty()).unwrap_or(false),
-            "rewrite_enabled": opts.rewrite_enabled,
-            "template_id": opts.template_id.as_deref(),
-        })),
-    );
-    let task_id_for_cleanup = requested_task_id.clone();
-
-    cleanup_expired_recording_assets(&recorder, std::time::Duration::from_secs(120));
-    if state.has_active_task() {
-        let msg = "E_TASK_ALREADY_ACTIVE: another task is already running";
-        span.err("task", "E_TASK_ALREADY_ACTIVE", msg, None);
-        abort_pending_task_if_present(&state, &task_id_for_cleanup);
-        return Err(msg.to_string());
-    }
-    if has_active_recording(&recorder) {
-        let msg = "E_RECORD_ALREADY_ACTIVE: recording is still active";
-        span.err("task", "E_RECORD_ALREADY_ACTIVE", msg, None);
-        abort_pending_task_if_present(&state, &task_id_for_cleanup);
-        return Err(msg.to_string());
-    }
-
-    if let Some((code, msg)) = runtime_not_ready(&runtime) {
-        span.err("config", code, &msg, None);
-        abort_pending_task_if_present(&state, &task_id_for_cleanup);
-        return Err(msg);
-    }
-
-    let start_res = match req.record_mode.as_str() {
-        "recording_asset" => {
-            let recording_asset_id = match req.recording_asset_id {
-                Some(v) if !v.trim().is_empty() => v,
-                _ => {
-                    span.err(
-                        "config",
-                        "E_START_TASK_ASSET_MISSING",
-                        "recording_asset_id is required when record_mode=recording_asset",
-                        None,
-                    );
-                    abort_pending_task_if_present(&state, &task_id_for_cleanup);
-                    return Err(
-                        "E_START_TASK_ASSET_MISSING: recording_asset_id is required".to_string()
-                    );
-                }
-            };
-            let asset = match take_recording_asset(&recorder, recording_asset_id.trim()) {
-                Some(v) => v,
-                None => {
-                    span.err(
-                        "io",
-                        "E_RECORD_ASSET_NOT_FOUND",
-                        "recording asset not found",
-                        None,
-                    );
-                    abort_pending_task_if_present(&state, &task_id_for_cleanup);
-                    return Err(
-                        "E_RECORD_ASSET_NOT_FOUND: recording asset not found or expired"
-                            .to_string(),
-                    );
-                }
-            };
-            opts.record_elapsed_ms = asset.record_elapsed_ms;
-            opts.record_label = "Record (backend)".to_string();
-            if !asset.output_path.exists() {
-                span.err(
-                    "io",
-                    "E_RECORD_OUTPUT_MISSING",
-                    "recorded file missing",
-                    None,
-                );
-                abort_pending_task_if_present(&state, &task_id_for_cleanup);
-                return Err("E_RECORD_OUTPUT_MISSING: recorded file missing".to_string());
-            }
-            if let Some(task_id) = requested_task_id.clone() {
-                state.start_recording_file_with_task_id(app, task_id, asset.output_path, opts)
-            } else {
-                state.start_recording_file(app, asset.output_path, opts)
-            }
-        }
-        "fixture" => {
-            opts.record_elapsed_ms = 0;
-            opts.record_label = "Record (fixture)".to_string();
-            let fixture_name = match req.fixture_name {
-                Some(v) if !v.trim().is_empty() => v,
-                _ => {
-                    span.err(
-                        "config",
-                        "E_START_TASK_FIXTURE_MISSING",
-                        "fixture_name is required when record_mode=fixture",
-                        None,
-                    );
-                    abort_pending_task_if_present(&state, &task_id_for_cleanup);
-                    return Err(
-                        "E_START_TASK_FIXTURE_MISSING: fixture_name is required".to_string()
-                    );
-                }
-            };
-            if let Some(task_id) = requested_task_id.clone() {
-                state.start_fixture_with_task_id(app, task_id, fixture_name, opts)
-            } else {
-                state.start_fixture(app, fixture_name, opts)
-            }
-        }
-        _ => {
-            span.err(
-                "config",
-                "E_START_TASK_MODE_INVALID",
-                "record_mode must be recording_asset|fixture",
-                None,
-            );
-            abort_pending_task_if_present(&state, &task_id_for_cleanup);
-            return Err("E_START_TASK_MODE_INVALID: invalid record_mode".to_string());
-        }
-    };
-
-    match start_res {
-        Ok(task_id) => {
-            span.ok(Some(serde_json::json!({"task_id": task_id})));
-            Ok(task_id)
-        }
-        Err(e) => {
-            span.err_anyhow("task", "E_START_TASK_FAILED", &e, None);
-            abort_pending_task_if_present(&state, &task_id_for_cleanup);
-            Err(e.to_string())
-        }
-    }
-}
-
-#[tauri::command]
-fn start_backend_recording(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, TaskManager>,
-    recorder: tauri::State<'_, BackendRecordingState>,
-    record_input_cache: tauri::State<'_, record_input_cache::RecordInputCacheState>,
-) -> Result<String, String> {
-    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let span = cmd_span(&dir, None, "CMD.start_backend_recording", None);
-    if !cfg!(windows) {
-        let msg = "E_RECORD_UNSUPPORTED: backend recording is only supported on Windows";
-        span.err("config", "E_RECORD_UNSUPPORTED", msg, None);
-        return Err(msg.to_string());
-    }
-    if state.has_active_task() {
-        let msg = "E_RECORD_TASK_ACTIVE: another task is already running";
-        span.err("task", "E_RECORD_TASK_ACTIVE", msg, None);
-        return Err(msg.to_string());
-    }
-    cleanup_expired_recording_assets(&recorder, std::time::Duration::from_secs(120));
-    let mut g = recorder.inner.lock().unwrap();
-    if g.active.is_some() {
-        let msg = "E_RECORD_ALREADY_ACTIVE: recording is already active";
-        span.err("task", "E_RECORD_ALREADY_ACTIVE", msg, None);
-        return Err(msg.to_string());
-    }
-
-    let root = repo_root()?;
-    let tmp = root.join("tmp").join("desktop");
-    std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
-    let recording_id = uuid::Uuid::new_v4().to_string();
-    let output_path = tmp.join(format!("recording-{recording_id}.wav"));
-    let cached_input = match record_input_cache.get_last_ok() {
-        Some(v) => v,
-        None => {
-            let snapshot = record_input_cache.snapshot();
-            let msg = "E_RECORD_INPUT_CACHE_NOT_READY: record input cache is not ready; wait for cache refresh and retry".to_string();
-            span.err(
-                "config",
-                "E_RECORD_INPUT_CACHE_NOT_READY",
-                &msg,
-                Some(serde_json::json!({
-                    "refresh_in_progress": snapshot.refresh_in_progress,
-                    "pending_reason": snapshot.pending_reason,
-                    "last_error": snapshot.last_error.as_ref().map(|v| serde_json::json!({
-                        "code": v.code,
-                        "message": v.message,
-                        "ts_ms": v.ts_ms,
-                        "reason": v.reason,
-                    })),
-                })),
-            );
-            return Err(msg);
-        }
-    };
-    let resolved_input = cached_input.resolved.clone();
-    let input_spec = resolved_input.spec.clone();
-    let ffmpeg = pipeline::ffmpeg_cmd().map_err(|e| e.to_string())?;
-
-    let mut child = match std::process::Command::new(&ffmpeg)
-        .args([
-            "-y",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-f",
-            "dshow",
-            "-i",
-            input_spec.as_str(),
-            "-ac",
-            "1",
-            "-ar",
-            "16000",
-            "-c:a",
-            "pcm_s16le",
-        ])
-        .arg(output_path.as_os_str())
-        .args(["-f", "s16le", "pipe:1"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .no_console()
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(e) => {
-            let msg = format!("E_RECORD_START_FAILED: failed to start ffmpeg recorder: {e}");
-            span.err("process", "E_RECORD_START_FAILED", &msg, None);
-            return Err(msg);
-        }
-    };
-
-    let stdout = match child.stdout.take() {
-        Some(v) => v,
-        None => {
-            let msg = "E_RECORD_START_FAILED: recorder stdout not available".to_string();
-            span.err("process", "E_RECORD_START_FAILED", &msg, None);
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = std::fs::remove_file(&output_path);
-            return Err(msg);
-        }
-    };
-    let meter_join = spawn_overlay_meter_thread(app, recording_id.clone(), stdout);
-
-    std::thread::sleep(std::time::Duration::from_millis(120));
-    match child.try_wait() {
-        Ok(Some(status)) => {
-            let stderr_tail = child.stderr.as_mut().and_then(read_last_stderr_line);
-            let mut msg = if status.success() {
-                "E_RECORD_START_FAILED: recorder exited unexpectedly right after start".to_string()
-            } else {
-                format!("E_RECORD_START_FAILED: recorder exited right after start with {status}")
-            };
-            if let Some(line) = stderr_tail.as_deref() {
-                msg.push_str("; stderr=");
-                msg.push_str(line);
-            }
-            span.err("process", "E_RECORD_START_FAILED", &msg, None);
-            let _ = std::fs::remove_file(&output_path);
-            let _ = meter_join.join();
-            return Err(msg);
-        }
-        Ok(None) => {}
-        Err(e) => {
-            let msg = format!("E_RECORD_START_FAILED: failed to probe recorder process: {e}");
-            span.err("process", "E_RECORD_START_FAILED", &msg, None);
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = std::fs::remove_file(&output_path);
-            let _ = meter_join.join();
-            return Err(msg);
-        }
-    }
-
-    g.active = Some(ActiveBackendRecording {
-        recording_id: recording_id.clone(),
-        output_path: output_path.clone(),
-        child,
-        started_at: std::time::Instant::now(),
-        meter_join: Some(meter_join),
-    });
-
-    span.ok(Some(serde_json::json!({
-        "recording_id": recording_id,
-        "output_path": output_path,
-        "record_input_spec": input_spec,
-        "record_input_strategy": resolved_input.strategy_used,
-        "record_input_resolved_by": resolved_input.resolved_by,
-        "record_input_endpoint_id": resolved_input.endpoint_id,
-        "record_input_friendly_name": resolved_input.friendly_name,
-        "record_input_resolution_log": resolved_input.resolution_log,
-        "record_input_cache_reason": cached_input.reason,
-        "record_input_cache_refreshed_ts_ms": cached_input.refreshed_at_ms,
-    })));
-    Ok(recording_id)
-}
-
-#[tauri::command]
-fn stop_backend_recording(
-    _app: tauri::AppHandle,
-    recorder: tauri::State<'_, BackendRecordingState>,
-    recording_id: &str,
-) -> Result<StopBackendRecordingResult, String> {
-    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let span = cmd_span(
-        &dir,
-        None,
-        "CMD.stop_backend_recording",
-        Some(serde_json::json!({
-            "has_recording_id": !recording_id.trim().is_empty(),
-        })),
-    );
-
-    cleanup_expired_recording_assets(&recorder, std::time::Duration::from_secs(120));
-    let mut active = {
-        let mut g = recorder.inner.lock().unwrap();
-        match g.active.take() {
-            Some(active) => active,
-            None => {
-                let msg = "E_RECORD_NOT_ACTIVE: no active recording";
-                span.err("task", "E_RECORD_NOT_ACTIVE", msg, None);
-                return Err(msg.to_string());
-            }
-        }
-    };
-
-    if !recording_id.trim().is_empty() && active.recording_id != recording_id {
-        let mut g = recorder.inner.lock().unwrap();
-        g.active = Some(active);
-        let msg = "E_RECORD_ID_MISMATCH: recording id mismatch";
-        span.err("task", "E_RECORD_ID_MISMATCH", msg, None);
-        return Err(msg.to_string());
-    }
-
-    if let Some(stdin) = active.child.stdin.as_mut() {
-        let _ = std::io::Write::write_all(stdin, b"q\n");
-        let _ = std::io::Write::flush(stdin);
-    }
-
-    let mut status = None;
-    for _ in 0..100 {
-        match active.child.try_wait() {
-            Ok(Some(s)) => {
-                status = Some(s);
-                break;
-            }
-            Ok(None) => {
-                std::thread::sleep(std::time::Duration::from_millis(20));
-            }
-            Err(_) => break,
-        }
-    }
-    if status.is_none() {
-        let _ = active.child.kill();
-        status = active.child.wait().ok();
-    }
-    let status = match status {
-        Some(s) => s,
-        None => {
-            let stderr_tail = active.child.stderr.as_mut().and_then(read_last_stderr_line);
-            let mut msg = "E_RECORD_STOP_FAILED: recorder process wait failed".to_string();
-            if let Some(line) = stderr_tail.as_deref() {
-                msg.push_str("; stderr=");
-                msg.push_str(line);
-            }
-            join_overlay_meter_thread(&mut active);
-            span.err("process", "E_RECORD_STOP_FAILED", &msg, None);
-            return Err(msg);
-        }
-    };
-    let stderr_tail = active.child.stderr.as_mut().and_then(read_last_stderr_line);
-    if !status.success() {
-        let mut msg = format!("E_RECORD_STOP_FAILED: recorder exited with {status}");
-        if let Some(line) = stderr_tail.as_deref() {
-            msg.push_str("; stderr=");
-            msg.push_str(line);
-        }
-        join_overlay_meter_thread(&mut active);
-        span.err("process", "E_RECORD_STOP_FAILED", &msg, None);
-        let _ = std::fs::remove_file(&active.output_path);
-        return Err(msg);
-    }
-
-    if !active.output_path.exists() {
-        let msg = "E_RECORD_OUTPUT_MISSING: recorded file missing";
-        join_overlay_meter_thread(&mut active);
-        span.err("io", "E_RECORD_OUTPUT_MISSING", msg, None);
-        return Err(msg.to_string());
-    }
-    join_overlay_meter_thread(&mut active);
-
-    let elapsed_ms = active.started_at.elapsed().as_millis();
-    let asset_id = uuid::Uuid::new_v4().to_string();
-    {
-        let mut g = recorder.inner.lock().unwrap();
-        g.assets.insert(
-            asset_id.clone(),
-            RecordedAsset {
-                asset_id: asset_id.clone(),
-                output_path: active.output_path.clone(),
-                record_elapsed_ms: elapsed_ms,
-                created_at: std::time::Instant::now(),
-            },
-        );
-    }
-    let result = StopBackendRecordingResult {
-        recording_id: active.recording_id.clone(),
-        recording_asset_id: asset_id.clone(),
-        ext: "wav".to_string(),
-    };
-    span.ok(Some(serde_json::json!({
-        "recording_id": result.recording_id.clone(),
-        "recording_asset_id": result.recording_asset_id.clone(),
-        "ext": result.ext.clone(),
-        "record_elapsed_ms": elapsed_ms,
-    })));
-    Ok(result)
-}
-
-#[tauri::command]
-fn abort_backend_recording(
-    _app: tauri::AppHandle,
-    recorder: tauri::State<'_, BackendRecordingState>,
-    recording_id: Option<String>,
-) -> Result<(), String> {
-    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let span = cmd_span(
-        &dir,
-        None,
-        "CMD.abort_backend_recording",
-        Some(serde_json::json!({
-            "has_recording_id": recording_id.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false),
-        })),
-    );
-    let mut active = {
-        let mut g = recorder.inner.lock().unwrap();
-        match g.active.take() {
-            Some(v) => v,
-            None => {
-                span.ok(Some(serde_json::json!({"aborted": false})));
-                return Ok(());
-            }
-        }
-    };
-    if let Some(expected) = recording_id {
-        if !expected.trim().is_empty() && active.recording_id != expected {
-            let mut g = recorder.inner.lock().unwrap();
-            g.active = Some(active);
-            let msg = "E_RECORD_ID_MISMATCH: recording id mismatch";
-            span.err("task", "E_RECORD_ID_MISMATCH", msg, None);
-            return Err(msg.to_string());
-        }
-    }
-    if let Some(stdin) = active.child.stdin.as_mut() {
-        let _ = std::io::Write::write_all(stdin, b"q\n");
-        let _ = std::io::Write::flush(stdin);
-    }
-    let _ = active.child.kill();
-    let _ = active.child.wait();
-    join_overlay_meter_thread(&mut active);
-    let _ = std::fs::remove_file(&active.output_path);
-    span.ok(Some(serde_json::json!({"aborted": true})));
-    Ok(())
 }
 
 #[tauri::command]
@@ -1085,35 +269,10 @@ fn runtime_toolchain_status(
 }
 
 #[tauri::command]
-fn runtime_python_status(
-    runtime: tauri::State<'_, RuntimeState>,
-) -> Result<python_runtime::PythonStatus, String> {
-    Ok(runtime.get_python())
-}
-
-#[tauri::command]
-fn cancel_task(state: tauri::State<TaskManager>, task_id: &str) -> Result<(), String> {
-    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let span = cmd_span(
-        &dir,
-        Some(task_id),
-        "CMD.cancel_task",
-        Some(serde_json::json!({"task_id": task_id})),
-    );
-    match state.cancel(task_id) {
-        Ok(()) => {
-            span.ok(None);
-            Ok(())
-        }
-        Err(e) => {
-            span.err_anyhow("task", "E_CMD_CANCEL", &e, None);
-            Err(format!("E_CMD_CANCEL: {e}"))
-        }
-    }
-}
-
-#[tauri::command]
-fn abort_pending_task(state: tauri::State<TaskManager>, task_id: &str) -> Result<(), String> {
+fn abort_pending_task(
+    workflow: tauri::State<voice_workflow::VoiceWorkflow>,
+    task_id: &str,
+) -> Result<(), String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let span = cmd_span(
         &dir,
@@ -1125,110 +284,9 @@ fn abort_pending_task(state: tauri::State<TaskManager>, task_id: &str) -> Result
         span.ok(Some(serde_json::json!({"removed": false})));
         return Ok(());
     }
-    let removed = state.abort_pending_task(task_id.trim());
+    let removed = workflow.abort_pending_task(task_id.trim());
     span.ok(Some(serde_json::json!({"removed": removed})));
     Ok(())
-}
-
-#[tauri::command]
-fn list_templates() -> Result<Vec<PromptTemplate>, String> {
-    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let span = cmd_span(&dir, None, "CMD.list_templates", None);
-    match templates::load_templates(&dir) {
-        Ok(v) => {
-            span.ok(Some(serde_json::json!({"count": v.len()})));
-            Ok(v)
-        }
-        Err(e) => {
-            span.err_anyhow("templates", "E_CMD_TPL_LIST", &e, None);
-            Err(e.to_string())
-        }
-    }
-}
-
-#[tauri::command]
-fn upsert_template(tpl: PromptTemplate) -> Result<PromptTemplate, String> {
-    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let tpl_id = tpl.id.clone();
-    let has_id = !tpl_id.trim().is_empty();
-    let name_chars = tpl.name.len();
-    let prompt_chars = tpl.system_prompt.len();
-    let span = cmd_span(
-        &dir,
-        None,
-        "CMD.upsert_template",
-        Some(
-            serde_json::json!({"has_id": has_id, "id": tpl_id, "name_chars": name_chars, "prompt_chars": prompt_chars}),
-        ),
-    );
-    match templates::upsert_template(&dir, tpl) {
-        Ok(v) => {
-            span.ok(Some(serde_json::json!({"id": v.id})));
-            Ok(v)
-        }
-        Err(e) => {
-            span.err_anyhow("templates", "E_CMD_TPL_UPSERT", &e, None);
-            Err(e.to_string())
-        }
-    }
-}
-
-#[tauri::command]
-fn delete_template(id: &str) -> Result<(), String> {
-    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let span = cmd_span(
-        &dir,
-        None,
-        "CMD.delete_template",
-        Some(serde_json::json!({"id": id})),
-    );
-    match templates::delete_template(&dir, id) {
-        Ok(()) => {
-            span.ok(None);
-            Ok(())
-        }
-        Err(e) => {
-            span.err_anyhow("templates", "E_CMD_TPL_DELETE", &e, None);
-            Err(e.to_string())
-        }
-    }
-}
-
-#[tauri::command]
-fn templates_export_json() -> Result<String, String> {
-    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let span = cmd_span(&dir, None, "CMD.templates_export_json", None);
-    match templates::export_templates_json(&dir) {
-        Ok(s) => {
-            span.ok(Some(serde_json::json!({"bytes": s.len()})));
-            Ok(s)
-        }
-        Err(e) => {
-            span.err_anyhow("templates", "E_CMD_TPL_EXPORT", &e, None);
-            Err(e.to_string())
-        }
-    }
-}
-
-#[tauri::command]
-fn templates_import_json(json: &str, mode: &str) -> Result<usize, String> {
-    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let span = cmd_span(
-        &dir,
-        None,
-        "CMD.templates_import_json",
-        Some(serde_json::json!({"mode": mode, "json_chars": json.len()})),
-    );
-    match templates::import_templates_json(&dir, json, mode) {
-        Ok(n) => {
-            span.ok(Some(serde_json::json!({"count": n})));
-            Ok(n)
-        }
-        Err(e) => {
-            span.err_anyhow("templates", "E_CMD_TPL_IMPORT", &e, None);
-            Err(e.to_string())
-        }
-    }
 }
 
 #[tauri::command]
@@ -1280,6 +338,44 @@ fn llm_api_key_status() -> Result<ApiKeyStatus, String> {
 }
 
 #[tauri::command]
+async fn check_llm_api_key(
+    base_url: String,
+    model: String,
+    reasoning_effort: Option<String>,
+) -> Result<ApiCheckResult, String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(
+        &dir,
+        None,
+        "CMD.check_llm_api_key",
+        Some(serde_json::json!({
+            "has_base_url": !base_url.trim().is_empty(),
+            "has_model": !model.trim().is_empty(),
+            "reasoning_effort": reasoning_effort.as_deref().unwrap_or(""),
+        })),
+    );
+
+    let cfg = match llm::config_from_values(&base_url, &model, reasoning_effort.as_deref()) {
+        Ok(v) => v,
+        Err(e) => {
+            span.err_anyhow("config", "E_CMD_CHECK_LLM_KEY", &e, None);
+            return Ok(api_check_failure(llm_check_error_message(&e)));
+        }
+    };
+
+    match llm::check_api_key_live(&cfg).await {
+        Ok(()) => {
+            span.ok(Some(serde_json::json!({"provider": "llm"})));
+            Ok(api_check_success("LLM API check passed."))
+        }
+        Err(e) => {
+            span.err_anyhow("api", "E_CMD_CHECK_LLM_KEY", &e, None);
+            Ok(api_check_failure(llm_check_error_message(&e)))
+        }
+    }
+}
+
+#[tauri::command]
 fn set_remote_asr_api_key(api_key: &str) -> Result<(), String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let span = cmd_span(
@@ -1325,6 +421,201 @@ fn remote_asr_api_key_status() -> Result<ApiKeyStatus, String> {
         serde_json::json!({"configured": st.configured, "source": st.source, "reason": st.reason}),
     ));
     Ok(st)
+}
+
+#[tauri::command]
+async fn check_remote_asr_api_key(
+    url: String,
+    model: Option<String>,
+) -> Result<ApiCheckResult, String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(
+        &dir,
+        None,
+        "CMD.check_remote_asr_api_key",
+        Some(serde_json::json!({
+            "has_url": !url.trim().is_empty(),
+            "has_model": model.as_deref().map(|v| !v.trim().is_empty()).unwrap_or(false),
+        })),
+    );
+    let cfg = remote_asr::RemoteAsrConfig {
+        url,
+        model: model.and_then(|v| {
+            let t = v.trim().to_string();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
+        }),
+        concurrency: 1,
+    };
+
+    match remote_asr::check_api_key_live(&cfg).await {
+        Ok(()) => {
+            span.ok(Some(serde_json::json!({"provider": "remote_asr"})));
+            Ok(api_check_success("Remote ASR API check passed."))
+        }
+        Err(e) => {
+            span.err("api", &e.code, &e.message, None);
+            Ok(api_check_failure(remote_asr_check_error_message(&e)))
+        }
+    }
+}
+
+#[tauri::command]
+fn set_doubao_asr_credentials(app_key: &str, access_key: &str) -> Result<(), String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(
+        &dir,
+        None,
+        "CMD.set_doubao_asr_credentials",
+        Some(serde_json::json!({
+            "app_key_chars": app_key.len(),
+            "access_key_chars": access_key.len(),
+        })),
+    );
+    match doubao_asr::set_credentials(app_key, access_key) {
+        Ok(()) => {
+            span.ok(None);
+            Ok(())
+        }
+        Err(e) => {
+            span.err_anyhow("auth", "E_CMD_SET_DOUBAO_ASR_CREDENTIALS", &e, None);
+            Err(e.to_string())
+        }
+    }
+}
+
+#[tauri::command]
+fn clear_doubao_asr_credentials() -> Result<(), String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(&dir, None, "CMD.clear_doubao_asr_credentials", None);
+    match doubao_asr::clear_credentials() {
+        Ok(()) => {
+            span.ok(None);
+            Ok(())
+        }
+        Err(e) => {
+            span.err_anyhow("auth", "E_CMD_CLEAR_DOUBAO_ASR_CREDENTIALS", &e, None);
+            Err(e.to_string())
+        }
+    }
+}
+
+#[tauri::command]
+fn doubao_asr_credentials_status() -> Result<ApiKeyStatus, String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(&dir, None, "CMD.doubao_asr_credentials_status", None);
+    let st = doubao_asr::credentials_status();
+    span.ok(Some(
+        serde_json::json!({"configured": st.configured, "source": st.source, "reason": st.reason}),
+    ));
+    Ok(st)
+}
+
+#[tauri::command]
+async fn check_doubao_asr_credentials() -> Result<ApiCheckResult, String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(&dir, None, "CMD.check_doubao_asr_credentials", None);
+    match doubao_asr::check_credentials_live().await {
+        Ok(()) => {
+            span.ok(Some(serde_json::json!({"provider": "doubao_asr"})));
+            Ok(api_check_success("Doubao ASR API check passed."))
+        }
+        Err(e) => {
+            span.err_anyhow("api", "E_CMD_CHECK_DOUBAO_ASR_CREDENTIALS", &e, None);
+            Ok(api_check_failure(doubao_check_error_message(&e)))
+        }
+    }
+}
+
+fn api_check_success(message: &str) -> ApiCheckResult {
+    ApiCheckResult {
+        ok: true,
+        message: message.to_string(),
+    }
+}
+
+fn api_check_failure(message: String) -> ApiCheckResult {
+    ApiCheckResult { ok: false, message }
+}
+
+fn llm_check_error_message(e: &anyhow::Error) -> String {
+    let raw = e.to_string();
+    if raw.contains("E_LLM_CONFIG_BASE_URL_MISSING") {
+        return "Enter the LLM API base URL.".to_string();
+    }
+    if raw.contains("E_LLM_CONFIG_MODEL_MISSING") {
+        return "Enter the LLM model.".to_string();
+    }
+    if raw.contains("keyring") || raw.contains("empty api key") {
+        return "Save the LLM API key or set TYPEVOICE_LLM_API_KEY.".to_string();
+    }
+    if raw.contains("E_LLM_CHECK_HTTP_STATUS_401") || raw.contains("E_LLM_CHECK_HTTP_STATUS_403") {
+        return "The LLM API rejected the key or account permission.".to_string();
+    }
+    if raw.contains("E_LLM_CHECK_HTTP_STATUS_404") {
+        return "The LLM API base URL or model was not found.".to_string();
+    }
+    if raw.contains("E_LLM_CHECK_HTTP_STATUS_429") {
+        return "The LLM API rate limit has been reached.".to_string();
+    }
+    if raw.contains("E_LLM_CHECK_HTTP_SEND") {
+        return "Cannot reach the LLM API. Check the base URL and network.".to_string();
+    }
+    if raw.contains("E_LLM_CHECK_PARSE") || raw.contains("E_LLM_CHECK_EMPTY") {
+        return "The LLM API responded in an unexpected format.".to_string();
+    }
+    "LLM API check failed. Check the base URL, model, key, and account permissions.".to_string()
+}
+
+fn remote_asr_check_error_message(e: &remote_asr::RemoteAsrError) -> String {
+    match e.code.as_str() {
+        "E_REMOTE_ASR_CONFIG" => "Enter the remote ASR URL.".to_string(),
+        "E_REMOTE_ASR_API_KEY_MISSING" => {
+            "Save the remote ASR API key or set TYPEVOICE_REMOTE_ASR_API_KEY.".to_string()
+        }
+        "E_REMOTE_ASR_HTTP_STATUS_401" | "E_REMOTE_ASR_HTTP_STATUS_403" => {
+            "The remote ASR API rejected the key or account permission.".to_string()
+        }
+        "E_REMOTE_ASR_HTTP_STATUS_404" => "The remote ASR API URL was not found.".to_string(),
+        "E_REMOTE_ASR_HTTP_STATUS_429" => {
+            "The remote ASR API rate limit has been reached.".to_string()
+        }
+        "E_REMOTE_ASR_HTTP_SEND" => {
+            "Cannot reach the remote ASR API. Check the URL and network.".to_string()
+        }
+        "E_REMOTE_ASR_PARSE" => "The remote ASR API responded in an unexpected format.".to_string(),
+        code if code.starts_with("E_REMOTE_ASR_HTTP_STATUS_5") => {
+            "The remote ASR API service returned a server error.".to_string()
+        }
+        _ => {
+            "Remote ASR API check failed. Check the URL, key, and account permissions.".to_string()
+        }
+    }
+}
+
+fn doubao_check_error_message(e: &anyhow::Error) -> String {
+    let raw = e.to_string();
+    if raw.contains("E_DOUBAO_ASR_CREDENTIALS_MISSING")
+        || raw.contains("E_DOUBAO_ASR_APP_KEY_MISSING")
+        || raw.contains("E_DOUBAO_ASR_ACCESS_KEY_MISSING")
+        || raw.contains("keyring")
+    {
+        return "Save the Doubao ASR App Key and Access Key or set the Doubao ASR environment variables.".to_string();
+    }
+    if raw.contains("E_DOUBAO_ASR_CHECK_TIMEOUT") {
+        return "Doubao ASR did not respond before the check timed out.".to_string();
+    }
+    if raw.contains("E_DOUBAO_ASR_ERROR_") {
+        return "Doubao ASR rejected the credentials or account permission.".to_string();
+    }
+    if raw.contains("E_DOUBAO_ASR_CHECK_CONNECT") {
+        return "Cannot reach Doubao ASR. Check the network connection.".to_string();
+    }
+    "Doubao ASR API check failed. Check the App Key, Access Key, and account permissions."
+        .to_string()
 }
 
 fn history_db_path() -> Result<std::path::PathBuf, String> {
@@ -1395,92 +686,13 @@ fn history_clear() -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn export_text(req: ExportTextRequest) -> Result<ExportTextResult, String> {
-    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let span = cmd_span(
-        &dir,
-        req.task_id.as_deref(),
-        "CMD.export_text",
-        Some(serde_json::json!({
-            "chars": req.text.chars().count(),
-            "has_task_id": req.task_id.as_deref().map(|v| !v.is_empty()).unwrap_or(false),
-        })),
-    );
-
-    if let Err(e) = export::copy_text_to_clipboard(&req.text) {
-        span.err("export", &e.code, &e.message, None);
-        return Err(format!("{}: {}", e.code, e.message));
-    }
-
-    let settings = match settings::load_settings_strict(&dir) {
-        Ok(v) => v,
-        Err(e) => {
-            span.err_anyhow("settings", "E_CMD_EXPORT_SETTINGS", &e, None);
-            return Err(e.to_string());
-        }
-    };
-    let auto_paste_enabled = settings::resolve_auto_paste_enabled(&settings);
-    if !auto_paste_enabled {
-        span.ok(Some(serde_json::json!({
-            "copied": true,
-            "auto_paste_enabled": false,
-            "auto_paste_attempted": false,
-        })));
-        return Ok(ExportTextResult {
-            copied: true,
-            auto_paste_attempted: false,
-            auto_paste_ok: true,
-            error_code: None,
-            error_message: None,
-        });
-    }
-
-    match export::auto_paste_text(&req.text).await {
-        Ok(()) => {
-            span.ok(Some(serde_json::json!({
-                "copied": true,
-                "auto_paste_enabled": true,
-                "auto_paste_attempted": true,
-                "auto_paste_ok": true,
-            })));
-            Ok(ExportTextResult {
-                copied: true,
-                auto_paste_attempted: true,
-                auto_paste_ok: true,
-                error_code: None,
-                error_message: None,
-            })
-        }
-        Err(e) => {
-            span.err(
-                "export",
-                &e.code,
-                &e.message,
-                Some(serde_json::json!({
-                    "copied": true,
-                    "auto_paste_enabled": true,
-                    "auto_paste_attempted": true,
-                })),
-            );
-            Ok(ExportTextResult {
-                copied: true,
-                auto_paste_attempted: true,
-                auto_paste_ok: false,
-                error_code: Some(e.code),
-                error_message: Some(e.message),
-            })
-        }
-    }
-}
-
-#[tauri::command]
 fn get_settings() -> Result<Settings, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let span = cmd_span(&dir, None, "CMD.get_settings", None);
     match settings::load_settings_strict(&dir) {
         Ok(s) => {
             span.ok(Some(
-                serde_json::json!({"rewrite_enabled": s.rewrite_enabled, "template_id": s.rewrite_template_id}),
+                serde_json::json!({"rewrite_enabled": s.rewrite_enabled, "has_llm_prompt": s.llm_prompt.as_deref().map(|v| !v.trim().is_empty()).unwrap_or(false)}),
             ));
             Ok(s)
         }
@@ -1489,6 +701,37 @@ fn get_settings() -> Result<Settings, String> {
             Err(e.to_string())
         }
     }
+}
+
+#[tauri::command]
+fn effective_settings_values() -> Result<EffectiveSettingsValues, String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let span = cmd_span(&dir, None, "CMD.effective_settings_values", None);
+    let settings = match settings::load_settings_strict(&dir) {
+        Ok(v) => v,
+        Err(e) => {
+            span.err_anyhow("settings", "E_CMD_EFFECTIVE_SETTINGS_LOAD", &e, None);
+            return Err(e.to_string());
+        }
+    };
+    let llm_base_url = settings
+        .llm_base_url
+        .or_else(|| std::env::var("TYPEVOICE_LLM_BASE_URL").ok())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let llm_model = settings
+        .llm_model
+        .or_else(|| std::env::var("TYPEVOICE_LLM_MODEL").ok())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    span.ok(Some(serde_json::json!({
+        "has_llm_base_url": llm_base_url.is_some(),
+        "has_llm_model": llm_model.is_some(),
+    })));
+    Ok(EffectiveSettingsValues {
+        llm_base_url,
+        llm_model,
+    })
 }
 
 #[tauri::command]
@@ -1534,14 +777,12 @@ fn set_settings(
 #[tauri::command]
 fn update_settings(
     app: tauri::AppHandle,
-    state: tauri::State<TaskManager>,
     hotkeys: tauri::State<hotkeys::HotkeyManager>,
     record_input_cache: tauri::State<record_input_cache::RecordInputCacheState>,
     patch: SettingsPatch,
 ) -> Result<Settings, String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let patch_summary = serde_json::json!({
-        "asr_model": patch.asr_model.is_some(),
         "asr_provider": patch.asr_provider.is_some(),
         "remote_asr_url": patch.remote_asr_url.is_some(),
         "remote_asr_model": patch.remote_asr_model.is_some(),
@@ -1549,12 +790,12 @@ fn update_settings(
         "llm_base_url": patch.llm_base_url.is_some(),
         "llm_model": patch.llm_model.is_some(),
         "llm_reasoning_effort": patch.llm_reasoning_effort.is_some(),
+        "llm_prompt": patch.llm_prompt.is_some(),
         "record_input_strategy": patch.record_input_strategy.is_some(),
         "record_follow_default_role": patch.record_follow_default_role.is_some(),
         "record_fixed_endpoint_id": patch.record_fixed_endpoint_id.is_some(),
         "record_fixed_friendly_name": patch.record_fixed_friendly_name.is_some(),
         "rewrite_enabled": patch.rewrite_enabled.is_some(),
-        "rewrite_template_id": patch.rewrite_template_id.is_some(),
         "rewrite_glossary": patch.rewrite_glossary.is_some(),
         "auto_paste_enabled": patch.auto_paste_enabled.is_some(),
         "rewrite_include_glossary": patch.rewrite_include_glossary.is_some(),
@@ -1566,8 +807,7 @@ fn update_settings(
         "context_include_prev_window_screenshot": patch.context_include_prev_window_screenshot.is_some(),
         "llm_supports_vision": patch.llm_supports_vision.is_some(),
         "hotkeys_enabled": patch.hotkeys_enabled.is_some(),
-        "hotkey_ptt": patch.hotkey_ptt.is_some(),
-        "hotkey_toggle": patch.hotkey_toggle.is_some(),
+        "hotkey_primary": patch.hotkey_primary.is_some(),
         "hotkeys_show_overlay": patch.hotkeys_show_overlay.is_some(),
         "asr_preprocess_silence_trim_enabled": patch.asr_preprocess_silence_trim_enabled.is_some(),
         "asr_preprocess_silence_threshold_db": patch
@@ -1584,8 +824,6 @@ fn update_settings(
             return Err(e.to_string());
         }
     };
-    let asr_model_changed = patch.asr_model.is_some();
-    let asr_provider_changed = patch.asr_provider.is_some();
     let record_input_changed = patch.record_input_strategy.is_some()
         || patch.record_follow_default_role.is_some()
         || patch.record_fixed_endpoint_id.is_some()
@@ -1630,19 +868,19 @@ fn update_settings(
             .filter(|v| !v.is_empty())
             .map(ToOwned::to_owned);
     }
+    match settings::normalize_hotkey_primary(next.hotkey_primary.as_deref()) {
+        Ok(primary) => {
+            next.hotkey_primary = Some(primary);
+        }
+        Err(e) => {
+            span.err_anyhow("config", "E_SETTINGS_HOTKEY_PRIMARY_INVALID", &e, None);
+            return Err(e.to_string());
+        }
+    }
     if let Err(e) = settings::save_settings(&dir, &next) {
         span.err_anyhow("settings", "E_CMD_UPDATE_SETTINGS", &e, None);
         return Err(e.to_string());
     }
-    let asr_provider = settings::resolve_asr_provider(&next);
-    if asr_provider == "local" {
-        if asr_model_changed || asr_provider_changed {
-            state.restart_asr_best_effort("settings_changed");
-        }
-    } else if asr_model_changed || asr_provider_changed {
-        state.kill_asr_best_effort("settings_changed_remote");
-    }
-
     // Hotkeys are also best-effort; failures are traced and should not break settings.
     hotkeys.apply_from_settings_best_effort(&app, &dir, &next);
     if cfg!(windows) && record_input_changed {
@@ -1651,94 +889,6 @@ fn update_settings(
 
     span.ok(None);
     Ok(next)
-}
-
-#[tauri::command]
-fn asr_model_status() -> Result<ModelStatus, String> {
-    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let span = cmd_span(&dir, None, "CMD.asr_model_status", None);
-    let model_id = match pipeline::resolve_asr_model_id(&dir) {
-        Ok(v) => v,
-        Err(e) => {
-            span.err_anyhow("model", "E_CMD_MODEL_ID", &e, None);
-            return Err(e.to_string());
-        }
-    };
-
-    let st = if std::path::Path::new(&model_id).exists() {
-        match model::verify_model_dir(std::path::Path::new(&model_id)) {
-            Ok(st) => st,
-            Err(e) => {
-                span.err_anyhow("model", "E_CMD_MODEL_STATUS", &e, None);
-                return Err(e.to_string());
-            }
-        }
-    } else {
-        ModelStatus {
-            model_dir: model_id,
-            ok: true,
-            reason: Some("remote_model_not_locally_verified".to_string()),
-            model_version: None,
-        }
-    };
-    let _ok = st.ok;
-    span.ok(Some(
-        serde_json::json!({"ok": st.ok, "reason": st.reason, "model_version": st.model_version}),
-    ));
-    Ok(st)
-}
-
-#[tauri::command]
-async fn download_asr_model() -> Result<ModelStatus, String> {
-    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let span = cmd_span(&dir, None, "CMD.download_asr_model", None);
-    let root = repo_root()?;
-    let model_dir = model::default_model_dir(&root);
-    let py = match python_runtime::resolve_python_binary(&root) {
-        Ok(p) => p,
-        Err(e) => {
-            span.err_anyhow("config", "E_PYTHON_NOT_READY", &e, None);
-            return Err(e.to_string());
-        }
-    };
-    let root2 = root.clone();
-    let py2 = py.clone();
-    let model_dir2 = model_dir.clone();
-    let st_res = tauri::async_runtime::spawn_blocking(move || {
-        model::download_model(&root2, &py2, &model_dir2)
-    })
-    .await;
-    let st = match st_res {
-        Ok(Ok(st)) => st,
-        Ok(Err(e)) => {
-            span.err_anyhow("model", "E_CMD_MODEL_DOWNLOAD", &e, None);
-            return Err(e.to_string());
-        }
-        Err(e) => {
-            let ae = anyhow::anyhow!("spawn_blocking failed: {e}");
-            span.err_anyhow("runtime", "E_CMD_JOIN", &ae, None);
-            return Err(ae.to_string());
-        }
-    };
-    // Set settings.asr_model to local dir if ok.
-    if st.ok {
-        let mut s = match settings::load_settings_strict(&dir) {
-            Ok(v) => v,
-            Err(e) => {
-                span.err_anyhow("settings", "E_CMD_MODEL_DOWNLOAD_SETTINGS", &e, None);
-                return Err(e.to_string());
-            }
-        };
-        s.asr_model = Some(model_dir.display().to_string());
-        if let Err(e) = settings::save_settings(&dir, &s) {
-            span.err_anyhow("settings", "E_CMD_MODEL_DOWNLOAD_SAVE", &e, None);
-            return Err(e.to_string());
-        }
-    }
-    span.ok(Some(
-        serde_json::json!({"ok": st.ok, "reason": st.reason, "model_version": st.model_version}),
-    ));
-    Ok(st)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1750,8 +900,10 @@ pub fn run() {
     obs::startup::mark_best_effort("context_generated");
     tauri::Builder::default()
         .manage(TaskManager::new())
+        .manage(voice_workflow::VoiceWorkflow::new())
+        .manage(transcription::TranscriptionService::new())
+        .manage(audio_capture::RecordingRegistry::new())
         .manage(RuntimeState::new())
-        .manage(BackendRecordingState::new())
         .manage(record_input_cache::RecordInputCacheState::new())
         .manage(audio_device_notifications_windows::AudioDeviceNotificationState::new())
         .manage(hotkeys::HotkeyManager::new())
@@ -1784,6 +936,9 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             obs::startup::mark_best_effort("setup_enter");
+            let mailbox = ui_events::UiEventMailbox::new(app.handle().clone());
+            app.manage(transcription_actor::TranscriptionActor::new(mailbox.clone()));
+            app.manage(mailbox);
 
             // Small always-on-top overlay window for hotkey-driven UX.
             // Keep it hidden by default; the frontend will invoke overlay_set_state to show/hide.
@@ -1803,26 +958,11 @@ pub fn run() {
             .build();
 
             let mut toolchain_ready = false;
-            let mut python_ready = false;
             if let Ok(dir) = data_dir::data_dir() {
                 let runtime = app.state::<RuntimeState>();
                 let st = toolchain::initialize_and_verify(&app.handle(), &dir);
                 toolchain_ready = st.ready;
                 runtime.set_toolchain(st);
-                if let Ok(root) = repo_root() {
-                    let py = python_runtime::initialize_and_verify(&dir, &root);
-                    python_ready = py.ready;
-                    runtime.set_python(py);
-                } else {
-                    let py = python_runtime::PythonStatus {
-                        ready: false,
-                        code: Some("E_PYTHON_NOT_READY".to_string()),
-                        message: Some("E_PYTHON_NOT_READY: repo root not found".to_string()),
-                        python_path: None,
-                        python_version: None,
-                    };
-                    runtime.set_python(py);
-                }
 
                 if cfg!(windows) {
                     let record_input_cache = app.state::<record_input_cache::RecordInputCacheState>();
@@ -1846,11 +986,8 @@ pub fn run() {
                 }
             }
 
-            // Warm up the ASR runner in background so first transcription is fast.
-            // If runtime preflight failed, skip warmup to avoid noisy startup failures.
-            if toolchain_ready && python_ready {
+            if toolchain_ready {
                 let state = app.state::<TaskManager>();
-                state.warmup_asr_best_effort();
                 state.warmup_context_best_effort();
             }
 
@@ -1881,38 +1018,51 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            start_task,
-            start_backend_recording,
-            stop_backend_recording,
-            abort_backend_recording,
-            cancel_task,
+            commands::record_transcribe_start,
+            commands::record_transcribe_stop,
+            commands::record_transcribe_cancel,
+            commands::rewrite_text,
+            commands::insert_text,
+            commands::workflow_snapshot,
+            commands::workflow_command,
+            commands::workflow_apply_event,
+            commands::workflow_report_asr_completed,
+            commands::workflow_report_asr_empty,
+            commands::workflow_report_asr_failed,
+            commands::workflow_rewrite,
+            commands::workflow_insert,
+            commands::workflow_report_rewrite_completed,
+            commands::workflow_report_rewrite_failed,
+            commands::workflow_report_insert_completed,
+            commands::workflow_report_insert_failed,
+            commands::overlay_insert_text,
+            commands::transcribe_fixture,
             abort_pending_task,
-            list_templates,
-            upsert_template,
-            delete_template,
-            templates_export_json,
-            templates_import_json,
             set_llm_api_key,
             clear_llm_api_key,
             llm_api_key_status,
+            check_llm_api_key,
             set_remote_asr_api_key,
             clear_remote_asr_api_key,
             remote_asr_api_key_status,
+            check_remote_asr_api_key,
+            set_doubao_asr_credentials,
+            clear_doubao_asr_credentials,
+            doubao_asr_credentials_status,
+            check_doubao_asr_credentials,
             history_append,
             history_list,
             history_clear,
-            export_text,
             get_settings,
+            effective_settings_values,
             list_audio_capture_devices,
             set_settings,
             update_settings,
             hotkeys::check_hotkey_available,
             runtime_toolchain_status,
-            runtime_python_status,
             overlay_set_state,
+            overlay_resize,
             ui_log_event,
-            asr_model_status,
-            download_asr_model
         ])
         .run(ctx)
         .expect("error while running tauri application");

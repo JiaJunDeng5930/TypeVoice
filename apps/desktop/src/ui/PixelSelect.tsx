@@ -61,9 +61,7 @@ export function PixelSelect({
         <span className="pxSelectValue">
           {selectedLabel || placeholder || "-"}
         </span>
-        <span className="pxSelectArrow" aria-hidden="true">
-          v
-        </span>
+        <span className="pxSelectArrow" aria-hidden="true" />
       </button>
 
       {open ? (

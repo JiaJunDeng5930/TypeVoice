@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { defaultTauriGateway } from "./infra/runtimePorts";
 import type { Settings } from "./types";
 import { PixelTabs, type TabKey } from "./ui/PixelTabs";
@@ -6,6 +7,7 @@ import { PixelToastHost, type ToastItem, type ToastTone } from "./ui/PixelToast"
 import { MainScreen } from "./screens/MainScreen";
 import { HistoryScreen } from "./screens/HistoryScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
+import { userMessageFromError } from "./domain/diagnostic";
 
 let toastSeq = 0;
 
@@ -55,8 +57,7 @@ export default function App() {
       setSettingsError(null);
     } catch (err) {
       setSettings(null);
-      const msg = typeof err === "string" ? err : String(err);
-      setSettingsError(msg);
+      setSettingsError(userMessageFromError(err, "Settings need attention"));
     }
   }, []);
 
@@ -77,40 +78,103 @@ export default function App() {
     setEpoch((x) => x + 1);
   }, []);
 
-  const subtitle = useMemo(() => {
-    return tab === "main" ? "ONE BUTTON" : tab === "history" ? "ALL RUNS" : "CONFIG";
-  }, [tab]);
+  const runWindowCommand = useCallback(
+    (command: () => Promise<void>, failureMessage: string) => {
+      void command().catch(() => {
+        pushToast(failureMessage, "danger");
+      });
+    },
+    [pushToast],
+  );
 
   return (
     <div className="appBg">
-      <div className="layout">
-        <div className="topbar">
+      <header
+        className="windowTitlebar"
+        data-tauri-drag-region
+        onDoubleClick={() => {
+          runWindowCommand(
+            () => getCurrentWindow().toggleMaximize(),
+            "Window resize failed",
+          );
+        }}
+      >
+        <div className="windowTitle" data-tauri-drag-region>TypeVoice</div>
+        <div className="windowControls" onDoubleClick={(event) => event.stopPropagation()}>
+          <button
+            type="button"
+            className="windowControl windowControlMinimize"
+            aria-label="Minimize"
+            title="Minimize"
+            onClick={() => {
+              runWindowCommand(
+                () => getCurrentWindow().minimize(),
+                "Window minimize failed",
+              );
+            }}
+          >
+            <span />
+          </button>
+          <button
+            type="button"
+            className="windowControl windowControlMaximize"
+            aria-label="Maximize"
+            title="Maximize"
+            onClick={() => {
+              runWindowCommand(
+                () => getCurrentWindow().toggleMaximize(),
+                "Window resize failed",
+              );
+            }}
+          >
+            <span />
+          </button>
+          <button
+            type="button"
+            className="windowControl windowControlClose"
+            aria-label="Close"
+            title="Close"
+            onClick={() => {
+              runWindowCommand(
+                () => getCurrentWindow().close(),
+                "Window close failed",
+              );
+            }}
+          >
+            <span />
+          </button>
+        </div>
+      </header>
+      <div className="layout appShell">
+        <aside className="sideRail">
           <div className="brand">
             <div className="brandTitle">TYPEVOICE</div>
-            <div className="brandSub">{subtitle}</div>
           </div>
           <PixelTabs active={tab} onChange={setTab} />
-        </div>
+          <div />
+        </aside>
 
-        <div style={{ display: tab === "main" ? "block" : "none" }}>
-          <MainScreen
-            settings={settings}
-            pushToast={pushToast}
-            onHistoryChanged={onHistoryChanged}
-          />
-        </div>
-        <div style={{ display: tab === "history" ? "block" : "none" }}>
-          <HistoryScreen epoch={epoch} pushToast={pushToast} />
-        </div>
-        <div style={{ display: tab === "settings" ? "block" : "none" }}>
-          <SettingsScreen
-            settings={settings}
-            savePatch={savePatch}
-            pushToast={pushToast}
-            onHistoryCleared={onHistoryChanged}
-          />
-          {settingsError ? <div className="muted">SETTINGS ERROR: {settingsError}</div> : null}
-        </div>
+        <main className="contentStage">
+          <div style={{ display: tab === "main" ? "block" : "none" }}>
+            <MainScreen
+              settings={settings}
+              pushToast={pushToast}
+              onHistoryChanged={onHistoryChanged}
+            />
+          </div>
+          <div style={{ display: tab === "history" ? "block" : "none" }}>
+            <HistoryScreen epoch={epoch} pushToast={pushToast} />
+          </div>
+          <div style={{ display: tab === "settings" ? "block" : "none" }}>
+            <SettingsScreen
+              settings={settings}
+              savePatch={savePatch}
+              pushToast={pushToast}
+              onHistoryCleared={onHistoryChanged}
+            />
+            {settingsError ? <div className="muted">{settingsError}</div> : null}
+          </div>
+        </main>
       </div>
 
       <PixelToastHost toasts={toasts} onDismiss={dismissToast} />

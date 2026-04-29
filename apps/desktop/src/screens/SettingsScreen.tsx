@@ -1,10 +1,10 @@
+import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { defaultTauriGateway, type TauriGateway } from "../infra/runtimePorts";
 import type {
+  ApiCheckResult,
   ApiKeyStatus,
   AudioCaptureDevice,
-  ModelStatus,
-  PromptTemplate,
   Settings,
 } from "../types";
 import { PixelButton } from "../ui/PixelButton";
@@ -12,6 +12,7 @@ import { PixelDialog } from "../ui/PixelDialog";
 import { PixelInput, PixelTextarea } from "../ui/PixelInput";
 import { PixelSelect, type PixelSelectOption } from "../ui/PixelSelect";
 import { PixelToggle } from "../ui/PixelToggle";
+import { IconGear } from "../ui/icons";
 
 type Props = {
   settings: Settings | null;
@@ -32,7 +33,7 @@ const REASONING: PixelSelectOption[] = [
 ];
 
 const ASR_PROVIDERS: PixelSelectOption[] = [
-  { value: "local", label: "local (on-device)" },
+  { value: "doubao", label: "doubao streaming" },
   { value: "remote", label: "remote (cloud)" },
 ];
 
@@ -47,47 +48,89 @@ const RECORD_DEFAULT_ROLES: PixelSelectOption[] = [
   { value: "console", label: "console (eConsole)" },
 ];
 
-type RecordingHotkey = "ptt" | "toggle";
+const PRIMARY_HOTKEYS: PixelSelectOption[] = [
+  { value: "Alt", label: "Alt" },
+  { value: "Ctrl", label: "Ctrl" },
+  { value: "Shift", label: "Shift" },
+  { value: "F1", label: "F1" },
+  { value: "F2", label: "F2" },
+  { value: "F3", label: "F3" },
+  { value: "F4", label: "F4" },
+  { value: "F5", label: "F5" },
+  { value: "F6", label: "F6" },
+  { value: "F7", label: "F7" },
+  { value: "F8", label: "F8" },
+  { value: "F9", label: "F9" },
+  { value: "F10", label: "F10" },
+  { value: "F11", label: "F11" },
+  { value: "F12", label: "F12" },
+];
 
-type HotkeyAvailability = {
-  available: boolean;
-  reason?: string | null;
-  reason_code?: string | null;
+type SettingsPanelId =
+  | "asr"
+  | "recording"
+  | "preprocess"
+  | "llm"
+  | "llmKey"
+  | "rewrite"
+  | "context"
+  | "glossary"
+  | "export"
+  | "hotkeys"
+  | "history";
+
+type EffectiveSettingsValues = {
+  llm_base_url?: string | null;
+  llm_model?: string | null;
 };
 
-const MODIFIER_ONLY_KEY_CODES = new Set([
-  "ControlLeft",
-  "ControlRight",
-  "ShiftLeft",
-  "ShiftRight",
-  "AltLeft",
-  "AltRight",
-  "MetaLeft",
-  "MetaRight",
-]);
+type SettingsLineProps = {
+  title: string;
+  detail?: string;
+  panel: SettingsPanelId;
+  expandedPanels: SettingsPanelId[];
+  onTogglePanel: (panel: SettingsPanelId) => void;
+  control?: ReactNode;
+  children?: ReactNode;
+};
 
-function isModifierOnlyCode(code: string): boolean {
-  return MODIFIER_ONLY_KEY_CODES.has(code);
+function SettingsLine({
+  title,
+  detail,
+  panel,
+  expandedPanels,
+  onTogglePanel,
+  control,
+  children,
+}: SettingsLineProps) {
+  const expanded = expandedPanels.includes(panel);
+  return (
+    <div className={`settingsLineBlock ${expanded ? "isExpanded" : ""}`}>
+      <div className="settingsLine">
+        <div className="settingsLineText">
+          <div className="settingsLineTitle">{title}</div>
+          {detail ? <div className="settingsLineDetail">{detail}</div> : null}
+        </div>
+        <button
+          type="button"
+          className="settingsGear"
+          aria-label={`${title} settings`}
+          aria-expanded={expanded}
+          onClick={() => onTogglePanel(panel)}
+        >
+          <IconGear size={22} tone={expanded ? "accent" : "muted"} filled={expanded} />
+        </button>
+        {control ? <div className="settingsLineControl">{control}</div> : null}
+      </div>
+      {expanded && children ? <div className="settingsLinePanel">{children}</div> : null}
+    </div>
+  );
 }
 
-function shortcutFromKeyboardEvent(event: KeyboardEvent): string | null {
-  if (isModifierOnlyCode(event.code)) {
-    return null;
-  }
-
-  const parts: string[] = [];
-  if (event.ctrlKey) parts.push("CTRL");
-  if (event.shiftKey) parts.push("SHIFT");
-  if (event.altKey) parts.push("ALT");
-  if (event.metaKey) parts.push("SUPER");
-  const base = event.code.trim();
-  if (!base) return null;
-  parts.push(base.toUpperCase());
-  return parts.join("+");
-}
-
-function isSameHotkey(a: string, b: string): boolean {
-  return a.trim().toUpperCase() === b.trim().toUpperCase();
+function sensitiveSettingDisplay(status: ApiKeyStatus | null): string {
+  if (!status?.configured) return "";
+  const source = status.source.trim();
+  return source ? `Configured via ${source}` : "Configured";
 }
 
 export function SettingsScreen({
@@ -97,12 +140,13 @@ export function SettingsScreen({
   onHistoryCleared,
   gateway = defaultTauriGateway,
 }: Props) {
-  const [asrModel, setAsrModel] = useState("");
-  const [asrProvider, setAsrProvider] = useState("local");
+  const [asrProvider, setAsrProvider] = useState("doubao");
   const [remoteAsrUrl, setRemoteAsrUrl] = useState("https://api.server/transcribe");
   const [remoteAsrModel, setRemoteAsrModel] = useState("");
   const [remoteAsrConcurrency, setRemoteAsrConcurrency] = useState("4");
   const [remoteAsrKeyDraft, setRemoteAsrKeyDraft] = useState("");
+  const [doubaoAppKeyDraft, setDoubaoAppKeyDraft] = useState("");
+  const [doubaoAccessKeyDraft, setDoubaoAccessKeyDraft] = useState("");
   const [asrPreprocessTrimEnabled, setAsrPreprocessTrimEnabled] = useState(false);
   const [asrPreprocessThresholdDb, setAsrPreprocessThresholdDb] = useState("-50");
   const [asrPreprocessStartMs, setAsrPreprocessStartMs] = useState("300");
@@ -110,8 +154,8 @@ export function SettingsScreen({
   const [llmBaseUrl, setLlmBaseUrl] = useState("");
   const [llmModel, setLlmModel] = useState("");
   const [reasoning, setReasoning] = useState("default");
+  const [llmPrompt, setLlmPrompt] = useState("");
   const [rewriteEnabled, setRewriteEnabled] = useState(false);
-  const [rewriteTemplateId, setRewriteTemplateId] = useState("");
   const [rewriteGlossaryDraft, setRewriteGlossaryDraft] = useState("");
   const [autoPasteEnabled, setAutoPasteEnabled] = useState(true);
   const [recordInputStrategy, setRecordInputStrategy] = useState("follow_default");
@@ -121,9 +165,7 @@ export function SettingsScreen({
   const [audioCaptureDevices, setAudioCaptureDevices] = useState<AudioCaptureDevice[]>([]);
 
   const [hotkeysEnabled, setHotkeysEnabled] = useState(true);
-  const [hotkeyPtt, setHotkeyPtt] = useState("F9");
-  const [hotkeyToggle, setHotkeyToggle] = useState("F10");
-  const [recordingHotkey, setRecordingHotkey] = useState<RecordingHotkey | null>(null);
+  const [hotkeyPrimary, setHotkeyPrimary] = useState("Alt");
   const [hotkeysShowOverlay, setHotkeysShowOverlay] = useState(true);
   const [contextIncludeHistory, setContextIncludeHistory] = useState(true);
   const [contextIncludeClipboard, setContextIncludeClipboard] = useState(true);
@@ -132,22 +174,24 @@ export function SettingsScreen({
     useState(true);
   const [rewriteIncludeGlossary, setRewriteIncludeGlossary] = useState(true);
 
-  const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
-
-  const [templates, setTemplates] = useState<PromptTemplate[]>([]);
-  const [tplId, setTplId] = useState("");
-  const [tplDraft, setTplDraft] = useState("");
-
   const [keyDraft, setKeyDraft] = useState("");
-  const [templatesJson, setTemplatesJson] = useState("");
+  const [llmKeyStatus, setLlmKeyStatus] = useState<ApiKeyStatus | null>(null);
+  const [remoteAsrKeyStatus, setRemoteAsrKeyStatus] = useState<ApiKeyStatus | null>(null);
+  const [doubaoCredentialsStatus, setDoubaoCredentialsStatus] = useState<ApiKeyStatus | null>(null);
 
   const [confirmClear, setConfirmClear] = useState(false);
-  const [isCheckingHotkey, setIsCheckingHotkey] = useState(false);
+  const [llmCheckPending, setLlmCheckPending] = useState(false);
+  const [remoteAsrCheckPending, setRemoteAsrCheckPending] = useState(false);
+  const [doubaoCheckPending, setDoubaoCheckPending] = useState(false);
+  const [expandedSettingsPanels, setExpandedSettingsPanels] = useState<SettingsPanelId[]>([]);
 
   useEffect(() => {
     if (!settings) return;
-    setAsrModel(settings.asr_model ?? "");
-    setAsrProvider(settings.asr_provider === "remote" ? "remote" : "local");
+    setAsrProvider(
+      settings.asr_provider === "remote"
+        ? "remote"
+        : "doubao",
+    );
     setRemoteAsrUrl(settings.remote_asr_url?.trim() || "https://api.server/transcribe");
     setRemoteAsrModel(settings.remote_asr_model ?? "");
     {
@@ -172,13 +216,13 @@ export function SettingsScreen({
     setLlmBaseUrl(settings.llm_base_url ?? "");
     setLlmModel(settings.llm_model ?? "");
     setReasoning(settings.llm_reasoning_effort ?? "default");
+    setLlmPrompt(settings.llm_prompt ?? "");
 
     if (typeof settings.rewrite_enabled !== "boolean") {
-      pushToast("SETTINGS INVALID: rewrite_enabled missing", "danger");
+      pushToast("Settings need attention", "danger");
       return;
     }
     setRewriteEnabled(settings.rewrite_enabled);
-    setRewriteTemplateId(settings.rewrite_template_id ?? "");
     setRewriteGlossaryDraft((settings.rewrite_glossary || []).join("\n"));
     setRewriteIncludeGlossary(settings.rewrite_include_glossary ?? true);
     setAutoPasteEnabled(settings.auto_paste_enabled ?? true);
@@ -196,16 +240,15 @@ export function SettingsScreen({
     setRecordFixedFriendlyName(settings.record_fixed_friendly_name ?? "");
 
     if (typeof settings.hotkeys_enabled !== "boolean") {
-      pushToast("SETTINGS INVALID: hotkeys_enabled missing", "danger");
+      pushToast("Settings need attention", "danger");
       return;
     }
     if (typeof settings.hotkeys_show_overlay !== "boolean") {
-      pushToast("SETTINGS INVALID: hotkeys_show_overlay missing", "danger");
+      pushToast("Settings need attention", "danger");
       return;
     }
     setHotkeysEnabled(settings.hotkeys_enabled);
-    setHotkeyPtt(settings.hotkey_ptt ?? "");
-    setHotkeyToggle(settings.hotkey_toggle ?? "");
+    setHotkeyPrimary(normalizePrimaryHotkey(settings.hotkey_primary));
     setHotkeysShowOverlay(settings.hotkeys_show_overlay);
 
     setContextIncludeHistory(settings.context_include_history ?? true);
@@ -217,22 +260,31 @@ export function SettingsScreen({
   }, [settings, pushToast]);
 
   useEffect(() => {
+    if (!settings) return;
     (async () => {
-      await refreshModelStatus();
-      await refreshTemplates();
+      await refreshSensitiveSettingStatuses();
+      try {
+        const effective = (await gateway.invoke(
+          "effective_settings_values",
+        )) as EffectiveSettingsValues;
+        if (!settings.llm_base_url?.trim() && effective.llm_base_url?.trim()) {
+          setLlmBaseUrl(effective.llm_base_url.trim());
+        }
+        if (!settings.llm_model?.trim() && effective.llm_model?.trim()) {
+          setLlmModel(effective.llm_model.trim());
+        }
+      } catch {
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings]);
+
+  useEffect(() => {
+    (async () => {
       await refreshAudioCaptureDevices();
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  useEffect(() => {
-    const tpl = templates.find((t) => t.id === tplId);
-    if (tpl) setTplDraft(tpl.system_prompt || "");
-  }, [tplId, templates]);
-
-  const templateOptions: PixelSelectOption[] = useMemo(() => {
-    return templates.map((t) => ({ value: t.id, label: t.name }));
-  }, [templates]);
 
   const captureDeviceOptions: PixelSelectOption[] = useMemo(() => {
     return audioCaptureDevices.map((v) => {
@@ -247,42 +299,11 @@ export function SettingsScreen({
     });
   }, [audioCaptureDevices]);
 
-  const selectedRewriteLabel = useMemo(() => {
-    const t = templates.find((x) => x.id === rewriteTemplateId);
-    return t?.name || "";
-  }, [rewriteTemplateId, templates]);
-
   useEffect(() => {
     const found = audioCaptureDevices.find((v) => v.endpoint_id === recordFixedEndpointId);
     if (!found) return;
     setRecordFixedFriendlyName(found.friendly_name);
   }, [audioCaptureDevices, recordFixedEndpointId]);
-
-  async function startRecording(target: RecordingHotkey) {
-    if (!hotkeysEnabled) return;
-    if (recordingHotkey === target) {
-      setRecordingHotkey(null);
-      return;
-    }
-    setRecordingHotkey(target);
-    pushToast("PRESS A KEYBOARD SHORTCUT", "default");
-  }
-
-  async function refreshTemplates() {
-    try {
-      const t = (await gateway.invoke("list_templates")) as PromptTemplate[];
-      setTemplates(t);
-      if (!tplId) setTplId(t[0]?.id || "");
-
-      // Keep rewrite template id valid when templates list changes.
-      if (rewriteTemplateId && !t.some((x) => x.id === rewriteTemplateId)) {
-        setRewriteTemplateId("");
-      }
-    } catch {
-      // templates are optional
-      setTemplates([]);
-    }
-  }
 
   async function refreshAudioCaptureDevices() {
     try {
@@ -299,28 +320,22 @@ export function SettingsScreen({
     }
   }
 
-  async function refreshModelStatus() {
+  async function refreshSensitiveSettingStatuses() {
     try {
-      const st = (await gateway.invoke("asr_model_status")) as ModelStatus;
-      setModelStatus(st);
+      const [llmStatus, remoteStatus, doubaoStatus] = await Promise.all([
+        gateway.invoke("llm_api_key_status") as Promise<ApiKeyStatus>,
+        gateway.invoke("remote_asr_api_key_status") as Promise<ApiKeyStatus>,
+        gateway.invoke("doubao_asr_credentials_status") as Promise<ApiKeyStatus>,
+      ]);
+      setLlmKeyStatus(llmStatus);
+      setRemoteAsrKeyStatus(remoteStatus);
+      setDoubaoCredentialsStatus(doubaoStatus);
     } catch {
-      setModelStatus(null);
-    }
-  }
-
-  async function downloadModel() {
-    pushToast("DOWNLOADING...", "default");
-    try {
-      const st = (await gateway.invoke("download_asr_model")) as ModelStatus;
-      setModelStatus(st);
-      pushToast(st.ok ? "MODEL OK" : "MODEL FAILED", st.ok ? "ok" : "danger");
-    } catch {
-      pushToast("MODEL FAILED", "danger");
     }
   }
 
   async function saveAsr() {
-    const provider = asrProvider === "remote" ? "remote" : "local";
+    const provider = asrProvider === "remote" ? "remote" : "doubao";
     const concurrencyNum = Number(remoteAsrConcurrency);
     if (provider === "remote" && !remoteAsrUrl.trim()) {
       pushToast("REMOTE ASR URL REQUIRED", "danger");
@@ -333,7 +348,6 @@ export function SettingsScreen({
     const normalizedConcurrency = Math.max(1, Math.min(16, Math.round(concurrencyNum)));
     try {
       await savePatch({
-        asr_model: asrModel.trim() ? asrModel.trim() : null,
         asr_provider: provider,
         remote_asr_url: remoteAsrUrl.trim() ? remoteAsrUrl.trim() : null,
         remote_asr_model: remoteAsrModel.trim() ? remoteAsrModel.trim() : null,
@@ -341,7 +355,6 @@ export function SettingsScreen({
       });
       setRemoteAsrConcurrency(String(normalizedConcurrency));
       pushToast("SAVED", "ok");
-      await refreshModelStatus();
     } catch {
       pushToast("SAVE FAILED", "danger");
     }
@@ -430,14 +443,14 @@ export function SettingsScreen({
   }
 
   async function saveRewrite() {
-    if (rewriteEnabled && !rewriteTemplateId.trim()) {
-      pushToast("REWRITE TEMPLATE REQUIRED", "danger");
+    if (rewriteEnabled && !llmPrompt.trim()) {
+      pushToast("LLM PROMPT REQUIRED", "danger");
       return;
     }
     try {
       await savePatch({
         rewrite_enabled: rewriteEnabled,
-        rewrite_template_id: rewriteTemplateId.trim() ? rewriteTemplateId.trim() : null,
+        llm_prompt: llmPrompt,
         rewrite_include_glossary: rewriteIncludeGlossary,
       });
       pushToast("SAVED", "ok");
@@ -485,63 +498,15 @@ export function SettingsScreen({
   }
 
   async function saveHotkeys() {
-    const ptt = hotkeyPtt.trim();
-    const toggle = hotkeyToggle.trim();
-    if (hotkeysEnabled && (!ptt || !toggle)) {
-      pushToast("HOTKEYS REQUIRE PTT/TOGGLE", "danger");
-      return;
-    }
-    if (hotkeysEnabled && isSameHotkey(ptt, toggle)) {
-      pushToast("HOTKEYS PTT and TOGGLE cannot be the same", "danger");
-      return;
-    }
     try {
       await savePatch({
         hotkeys_enabled: hotkeysEnabled,
-        hotkey_ptt: ptt || null,
-        hotkey_toggle: toggle || null,
+        hotkey_primary: normalizePrimaryHotkey(hotkeyPrimary),
         hotkeys_show_overlay: hotkeysShowOverlay,
       });
       pushToast("SAVED", "ok");
     } catch {
       pushToast("SAVE FAILED", "danger");
-    }
-  }
-
-  async function saveTemplate() {
-    if (!tplId) return;
-    const base = templates.find((t) => t.id === tplId);
-    if (!base) return;
-    try {
-      const updated = (await gateway.invoke("upsert_template", {
-        tpl: { ...base, system_prompt: tplDraft },
-      })) as PromptTemplate;
-      setTemplates((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
-      pushToast("TEMPLATE SAVED", "ok");
-    } catch {
-      pushToast("TEMPLATE SAVE FAILED", "danger");
-    }
-  }
-
-  async function exportTemplates() {
-    try {
-      const s = (await gateway.invoke("templates_export_json")) as string;
-      setTemplatesJson(s);
-      pushToast("EXPORTED", "ok");
-    } catch {
-      pushToast("EXPORT FAILED", "danger");
-    }
-  }
-
-  async function importTemplates(mode: "merge" | "replace") {
-    const json = templatesJson.trim();
-    if (!json) return;
-    try {
-      await gateway.invoke("templates_import_json", { json, mode });
-      await refreshTemplates();
-      pushToast("IMPORTED", "ok");
-    } catch {
-      pushToast("IMPORT FAILED", "danger");
     }
   }
 
@@ -551,6 +516,7 @@ export function SettingsScreen({
     try {
       await gateway.invoke("set_llm_api_key", { apiKey: k });
       setKeyDraft("");
+      await refreshSensitiveSettingStatuses();
       pushToast("KEY SAVED", "ok");
     } catch {
       pushToast("KEY SAVE FAILED", "danger");
@@ -560,6 +526,8 @@ export function SettingsScreen({
   async function clearApiKey() {
     try {
       await gateway.invoke("clear_llm_api_key");
+      setLlmKeyStatus(null);
+      await refreshSensitiveSettingStatuses();
       pushToast("KEY CLEARED", "ok");
     } catch {
       pushToast("KEY CLEAR FAILED", "danger");
@@ -567,14 +535,19 @@ export function SettingsScreen({
   }
 
   async function checkApiKey() {
+    if (llmCheckPending) return;
+    setLlmCheckPending(true);
     try {
-      const st = (await gateway.invoke("llm_api_key_status")) as ApiKeyStatus;
-      pushToast(
-        st.configured ? "KEY OK" : "KEY MISSING",
-        st.configured ? "ok" : "danger",
-      );
+      const result = (await gateway.invoke("check_llm_api_key", {
+        baseUrl: llmBaseUrl,
+        model: llmModel,
+        reasoningEffort: reasoning,
+      })) as ApiCheckResult;
+      pushToast(result.message, result.ok ? "ok" : "danger");
     } catch {
-      pushToast("KEY CHECK FAILED", "danger");
+      pushToast("API key check failed. Try again after checking the settings.", "danger");
+    } finally {
+      setLlmCheckPending(false);
     }
   }
 
@@ -584,6 +557,7 @@ export function SettingsScreen({
     try {
       await gateway.invoke("set_remote_asr_api_key", { apiKey: k });
       setRemoteAsrKeyDraft("");
+      await refreshSensitiveSettingStatuses();
       pushToast("REMOTE KEY SAVED", "ok");
     } catch {
       pushToast("REMOTE KEY SAVE FAILED", "danger");
@@ -593,6 +567,8 @@ export function SettingsScreen({
   async function clearRemoteAsrApiKey() {
     try {
       await gateway.invoke("clear_remote_asr_api_key");
+      setRemoteAsrKeyStatus(null);
+      await refreshSensitiveSettingStatuses();
       pushToast("REMOTE KEY CLEARED", "ok");
     } catch {
       pushToast("REMOTE KEY CLEAR FAILED", "danger");
@@ -600,14 +576,57 @@ export function SettingsScreen({
   }
 
   async function checkRemoteAsrApiKey() {
+    if (remoteAsrCheckPending) return;
+    setRemoteAsrCheckPending(true);
     try {
-      const st = (await gateway.invoke("remote_asr_api_key_status")) as ApiKeyStatus;
-      pushToast(
-        st.configured ? "REMOTE KEY OK" : "REMOTE KEY MISSING",
-        st.configured ? "ok" : "danger",
-      );
+      const result = (await gateway.invoke("check_remote_asr_api_key", {
+        url: remoteAsrUrl,
+        model: remoteAsrModel,
+      })) as ApiCheckResult;
+      pushToast(result.message, result.ok ? "ok" : "danger");
     } catch {
-      pushToast("REMOTE KEY CHECK FAILED", "danger");
+      pushToast("Remote ASR API check failed. Try again after checking the settings.", "danger");
+    } finally {
+      setRemoteAsrCheckPending(false);
+    }
+  }
+
+  async function setDoubaoAsrCredentials() {
+    const appKey = doubaoAppKeyDraft.trim();
+    const accessKey = doubaoAccessKeyDraft.trim();
+    if (!appKey || !accessKey) return;
+    try {
+      await gateway.invoke("set_doubao_asr_credentials", { appKey, accessKey });
+      setDoubaoAppKeyDraft("");
+      setDoubaoAccessKeyDraft("");
+      await refreshSensitiveSettingStatuses();
+      pushToast("DOUBAO KEY SAVED", "ok");
+    } catch {
+      pushToast("DOUBAO KEY SAVE FAILED", "danger");
+    }
+  }
+
+  async function clearDoubaoAsrCredentials() {
+    try {
+      await gateway.invoke("clear_doubao_asr_credentials");
+      setDoubaoCredentialsStatus(null);
+      await refreshSensitiveSettingStatuses();
+      pushToast("DOUBAO KEY CLEARED", "ok");
+    } catch {
+      pushToast("DOUBAO KEY CLEAR FAILED", "danger");
+    }
+  }
+
+  async function checkDoubaoAsrCredentials() {
+    if (doubaoCheckPending) return;
+    setDoubaoCheckPending(true);
+    try {
+      const result = (await gateway.invoke("check_doubao_asr_credentials")) as ApiCheckResult;
+      pushToast(result.message, result.ok ? "ok" : "danger");
+    } catch {
+      pushToast("Doubao ASR API check failed. Try again after checking the settings.", "danger");
+    } finally {
+      setDoubaoCheckPending(false);
     }
   }
 
@@ -623,553 +642,488 @@ export function SettingsScreen({
     }
   }
 
-  useEffect(() => {
-    if (!recordingHotkey) return;
-    if (!hotkeysEnabled) {
-      setRecordingHotkey(null);
-      return;
-    }
-
-    const onKeyDown = async (event: KeyboardEvent) => {
-      if (event.repeat) return;
-      event.preventDefault();
-
-      const candidate = shortcutFromKeyboardEvent(event);
-      if (!candidate) {
-        pushToast("HOTKEY NOT AVAILABLE: modifier-only keys are not valid", "danger");
-        return;
-      }
-
-      const otherKey = recordingHotkey === "ptt" ? hotkeyToggle : hotkeyPtt;
-      if (otherKey && isSameHotkey(candidate, otherKey)) {
-        pushToast("HOTKEY NOT AVAILABLE: PTT and TOGGLE must be different", "danger");
-        return;
-      }
-
-      setIsCheckingHotkey(true);
-
-      try {
-        const ignoreSelf = recordingHotkey === "ptt" ? hotkeyPtt : hotkeyToggle;
-        const result = (await gateway.invoke("check_hotkey_available", {
-          shortcut: candidate,
-          ignore_self: ignoreSelf?.trim() || null,
-        })) as HotkeyAvailability;
-
-        if (!result.available) {
-          const code = result.reason_code ? ` (${result.reason_code})` : "";
-          pushToast(
-            `HOTKEY NOT AVAILABLE: ${result.reason || "Unavailable"}${code}`,
-            "danger",
-          );
-          return;
-        }
-
-        const normalized = candidate.toUpperCase();
-        if (recordingHotkey === "ptt") {
-          setHotkeyPtt(normalized);
-        } else {
-          setHotkeyToggle(normalized);
-        }
-        setRecordingHotkey(null);
-      } catch {
-        pushToast("HOTKEY CHECK FAILED", "danger");
-      } finally {
-        setIsCheckingHotkey(false);
-      }
-    };
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [
-    recordingHotkey,
-    hotkeysEnabled,
-    hotkeyPtt,
-    hotkeyToggle,
-    pushToast,
-    gateway,
-  ]);
-
   const asrStatusText = useMemo(() => {
-    if (asrProvider === "remote") {
-      return `REMOTE ${remoteAsrUrl.trim() || "https://api.server/transcribe"}`;
+    if (asrProvider === "doubao") {
+      return "Doubao streaming  wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async";
     }
-    if (!modelStatus) return "UNKNOWN";
+    return `Remote ${remoteAsrUrl.trim() || "https://api.server/transcribe"}`;
+  }, [asrProvider, remoteAsrUrl]);
 
-    const version = modelStatus.model_version ? `  ${modelStatus.model_version}` : "";
-    const location = `  ${modelStatus.model_dir}`;
+  const llmKeyDisplay = sensitiveSettingDisplay(llmKeyStatus);
+  const remoteAsrKeyDisplay = sensitiveSettingDisplay(remoteAsrKeyStatus);
+  const doubaoCredentialsDisplay = sensitiveSettingDisplay(doubaoCredentialsStatus);
 
-    if (modelStatus.ok) {
-      switch (modelStatus.reason) {
-        case "manifest.json_missing":
-          return `OK${version}  manifest.json_missing (integrity checks skipped, ASR still usable)${location}`;
-        case "remote_model_not_locally_verified":
-          return `OK${version}  remote model id, not locally verified${location}`;
-        case null:
-        case undefined:
-          return `OK${version}${location}`;
-        default:
-          return `OK${version}  ${modelStatus.reason}${location}`;
-      }
-    }
-
-    return `FAILED${version}  ${modelStatus.reason || ""}${location}`;
-  }, [asrProvider, modelStatus, remoteAsrUrl]);
+  function toggleSettingsPanel(panel: SettingsPanelId) {
+    setExpandedSettingsPanels((current) =>
+      current.includes(panel)
+        ? current.filter((value) => value !== panel)
+        : [...current, panel],
+    );
+  }
 
   return (
-    <div className="stack">
-      <div className="card">
-        <div className="sectionTitle">ASR</div>
-        <div className="row">
-          <PixelButton onClick={downloadModel} tone="accent" disabled={asrProvider !== "local"}>
-            DOWNLOAD
-          </PixelButton>
-          <PixelButton onClick={refreshModelStatus}>REFRESH</PixelButton>
-          <div className="muted">{asrStatusText}</div>
-        </div>
-        <div style={{ marginTop: 12 }} className="stack">
-          <PixelSelect value={asrProvider} onChange={setAsrProvider} options={ASR_PROVIDERS} />
-          {asrProvider === "local" ? (
-            <PixelInput
-              value={asrModel}
-              onChange={setAsrModel}
-              placeholder="asr_model (local dir or HF repo id)"
-            />
-          ) : (
-            <>
-              <PixelInput
-                value={remoteAsrUrl}
-                onChange={setRemoteAsrUrl}
-                placeholder="remote ASR URL (e.g. https://api.server/transcribe)"
-              />
-              <PixelInput
-                value={remoteAsrModel}
-                onChange={setRemoteAsrModel}
-                placeholder="remote model name (optional)"
-              />
-              <PixelInput
-                value={remoteAsrConcurrency}
-                onChange={setRemoteAsrConcurrency}
-                placeholder="remote slicing concurrency (1-16)"
-              />
-              <div className="sectionTitle" style={{ marginTop: 8 }}>
-                REMOTE API KEY
-              </div>
-              <PixelInput
-                value={remoteAsrKeyDraft}
-                onChange={setRemoteAsrKeyDraft}
-                placeholder="save to keyring (or env TYPEVOICE_REMOTE_ASR_API_KEY)"
-              />
+    <div className="pageSurface settingsSurface">
+      <div className="pageHeader settingsHeader">
+        <div className="sectionTitle">settings</div>
+        <div className="ok">Saved</div>
+      </div>
+      <div className="settingsGrid">
+        <div className="settingsColumn">
+          <div className="card">
+          <SettingsLine
+            title="Speech recognition"
+            detail={asrStatusText}
+            panel="asr"
+            expandedPanels={expandedSettingsPanels}
+            onTogglePanel={toggleSettingsPanel}
+            control={<PixelSelect value={asrProvider} onChange={setAsrProvider} options={ASR_PROVIDERS} />}
+          >
+            <div className="stack">
+              {asrProvider === "doubao" ? (
+                <>
+                  <PixelInput
+                    value={doubaoAppKeyDraft || doubaoCredentialsDisplay}
+                    onChange={setDoubaoAppKeyDraft}
+                    placeholder="App Key not configured"
+                    readOnly={!doubaoAppKeyDraft && !!doubaoCredentialsDisplay}
+                  />
+                  <PixelInput
+                    value={doubaoAccessKeyDraft || doubaoCredentialsDisplay}
+                    onChange={setDoubaoAccessKeyDraft}
+                    placeholder="Access Key not configured"
+                    readOnly={!doubaoAccessKeyDraft && !!doubaoCredentialsDisplay}
+                  />
+                  <div className="row" style={{ justifyContent: "flex-end" }}>
+                    <PixelButton
+                      onClick={setDoubaoAsrCredentials}
+                      tone="accent"
+                      disabled={!doubaoAppKeyDraft.trim() || !doubaoAccessKeyDraft.trim()}
+                    >
+                      Save key
+                    </PixelButton>
+                    <PixelButton onClick={clearDoubaoAsrCredentials} tone="danger">
+                      Clear key
+                    </PixelButton>
+                    <PixelButton onClick={checkDoubaoAsrCredentials} disabled={doubaoCheckPending}>
+                      {doubaoCheckPending ? "Checking" : "Check key"}
+                    </PixelButton>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <PixelInput
+                    value={remoteAsrUrl}
+                    onChange={setRemoteAsrUrl}
+                    placeholder="remote ASR URL (e.g. https://api.server/transcribe)"
+                  />
+                  <PixelInput
+                    value={remoteAsrModel}
+                    onChange={setRemoteAsrModel}
+                    placeholder="remote model name (optional)"
+                  />
+                  <PixelInput
+                    value={remoteAsrConcurrency}
+                    onChange={setRemoteAsrConcurrency}
+                    placeholder="remote slicing concurrency (1-16)"
+                  />
+                  <PixelInput
+                    value={remoteAsrKeyDraft || remoteAsrKeyDisplay}
+                    onChange={setRemoteAsrKeyDraft}
+                    placeholder="Remote ASR key not configured"
+                    readOnly={!remoteAsrKeyDraft && !!remoteAsrKeyDisplay}
+                  />
+                  <div className="row" style={{ justifyContent: "flex-end" }}>
+                    <PixelButton
+                      onClick={setRemoteAsrApiKey}
+                      tone="accent"
+                      disabled={!remoteAsrKeyDraft.trim()}
+                    >
+                      Save key
+                    </PixelButton>
+                    <PixelButton onClick={clearRemoteAsrApiKey} tone="danger">
+                      Clear key
+                    </PixelButton>
+                    <PixelButton onClick={checkRemoteAsrApiKey} disabled={remoteAsrCheckPending}>
+                      {remoteAsrCheckPending ? "Checking" : "Check key"}
+                    </PixelButton>
+                  </div>
+                </>
+              )}
               <div className="row" style={{ justifyContent: "flex-end" }}>
-                <PixelButton
-                  onClick={setRemoteAsrApiKey}
-                  tone="accent"
-                  disabled={!remoteAsrKeyDraft.trim()}
-                >
-                  SAVE KEY
+                <PixelButton onClick={saveAsr} tone="accent">
+                  Save
                 </PixelButton>
-                <PixelButton onClick={clearRemoteAsrApiKey} tone="danger">
-                  CLEAR KEY
-                </PixelButton>
-                <PixelButton onClick={checkRemoteAsrApiKey}>CHECK KEY</PixelButton>
               </div>
-            </>
-          )}
-          <div className="row" style={{ justifyContent: "flex-end" }}>
-            <PixelButton onClick={saveAsr} tone="accent">
-              SAVE
-            </PixelButton>
-          </div>
-        </div>
-        <div className="sectionTitle" style={{ marginTop: 18 }}>
-          RECORDING INPUT
-        </div>
-        <div className="stack">
-          <PixelSelect
-            value={recordInputStrategy}
-            onChange={setRecordInputStrategy}
-            options={RECORD_INPUT_STRATEGIES}
-          />
-          {recordInputStrategy === "follow_default" ? (
-            <PixelSelect
-              value={recordFollowDefaultRole}
-              onChange={setRecordFollowDefaultRole}
-              options={RECORD_DEFAULT_ROLES}
-            />
-          ) : null}
-          {recordInputStrategy === "fixed_device" ? (
-            <>
+            </div>
+          </SettingsLine>
+
+          <SettingsLine
+            title="Recording input"
+            detail={recordFixedFriendlyName || "Capture source"}
+            panel="recording"
+            expandedPanels={expandedSettingsPanels}
+            onTogglePanel={toggleSettingsPanel}
+            control={
               <PixelSelect
-                value={recordFixedEndpointId}
-                onChange={setRecordFixedEndpointId}
-                options={captureDeviceOptions}
-                placeholder="select fixed capture endpoint"
+                value={recordInputStrategy}
+                onChange={setRecordInputStrategy}
+                options={RECORD_INPUT_STRATEGIES}
               />
-              {recordFixedFriendlyName ? (
-                <div className="muted">fixed: {recordFixedFriendlyName}</div>
+            }
+          >
+            <div className="stack">
+              {recordInputStrategy === "follow_default" ? (
+                <PixelSelect
+                  value={recordFollowDefaultRole}
+                  onChange={setRecordFollowDefaultRole}
+                  options={RECORD_DEFAULT_ROLES}
+                />
               ) : null}
-            </>
-          ) : null}
-          {audioCaptureDevices.length === 0 ? (
-            <div className="muted">no active capture endpoints detected</div>
-          ) : null}
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <div className="muted">
-              default role applies on next recording start; ongoing recording will not switch.
+              {recordInputStrategy === "fixed_device" ? (
+                <>
+                  <PixelSelect
+                    value={recordFixedEndpointId}
+                    onChange={setRecordFixedEndpointId}
+                    options={captureDeviceOptions}
+                    placeholder="select fixed capture endpoint"
+                  />
+                  {recordFixedFriendlyName ? (
+                    <div className="muted">fixed: {recordFixedFriendlyName}</div>
+                  ) : null}
+                </>
+              ) : null}
+              {audioCaptureDevices.length === 0 ? (
+                <div className="muted">No active capture endpoints detected.</div>
+              ) : null}
+              <div className="row" style={{ justifyContent: "flex-end" }}>
+                <PixelButton onClick={refreshAudioCaptureDevices}>Refresh</PixelButton>
+                <PixelButton onClick={saveRecordingInput} tone="accent">
+                  Save
+                </PixelButton>
+              </div>
             </div>
-            <div className="row" style={{ justifyContent: "flex-end" }}>
-              <PixelButton onClick={refreshAudioCaptureDevices}>REFRESH</PixelButton>
-              <PixelButton onClick={saveRecordingInput} tone="accent">
-                SAVE
-              </PixelButton>
+          </SettingsLine>
+
+          <SettingsLine
+            title="Silence trim"
+            detail={asrPreprocessTrimEnabled ? "On" : "Off"}
+            panel="preprocess"
+            expandedPanels={expandedSettingsPanels}
+            onTogglePanel={toggleSettingsPanel}
+            control={
+              <PixelToggle
+                value={asrPreprocessTrimEnabled}
+                onChange={setAsrPreprocessTrimEnabled}
+                label="silence trim"
+              />
+            }
+          >
+            <div className="stack">
+              <div className="settingsField">
+                <div className="muted">阈值（dB）</div>
+                <PixelInput
+                  value={asrPreprocessThresholdDb}
+                  onChange={setAsrPreprocessThresholdDb}
+                  placeholder="-50"
+                />
+              </div>
+              <div className="settingsField">
+                <div className="muted">前段静音 (ms)</div>
+                <PixelInput
+                  value={asrPreprocessStartMs}
+                  onChange={setAsrPreprocessStartMs}
+                  placeholder="300"
+                />
+              </div>
+              <div className="settingsField">
+                <div className="muted">末段静音 (ms)</div>
+                <PixelInput
+                  value={asrPreprocessEndMs}
+                  onChange={setAsrPreprocessEndMs}
+                  placeholder="300"
+                />
+              </div>
+              <div className="row" style={{ justifyContent: "flex-end" }}>
+                <PixelButton onClick={savePreprocessConfig} tone="accent">
+                  Save
+                </PixelButton>
+              </div>
             </div>
+          </SettingsLine>
           </div>
-        </div>
-        <div className="sectionTitle" style={{ marginTop: 18 }}>
-          PREPROCESS
-        </div>
-        <div className="stack">
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <div className="muted">{asrPreprocessTrimEnabled ? "SILENCE TRIM ON" : "SILENCE TRIM OFF"}</div>
-            <PixelToggle
-              value={asrPreprocessTrimEnabled}
-              onChange={setAsrPreprocessTrimEnabled}
-              label="silence trim"
-            />
-          </div>
-          <div className="row">
-            <div className="muted">阈值（dB）</div>
-            <PixelInput
-              value={asrPreprocessThresholdDb}
-              onChange={setAsrPreprocessThresholdDb}
-              placeholder="-50"
-            />
-          </div>
-          <div className="row">
-            <div className="muted">前段静音 (ms)</div>
-            <PixelInput
-              value={asrPreprocessStartMs}
-              onChange={setAsrPreprocessStartMs}
-              placeholder="300"
-            />
-          </div>
-          <div className="row">
-            <div className="muted">末段静音 (ms)</div>
-            <PixelInput
-              value={asrPreprocessEndMs}
-              onChange={setAsrPreprocessEndMs}
-              placeholder="300"
-            />
-          </div>
-          <div className="row" style={{ justifyContent: "flex-end" }}>
-            <PixelButton onClick={savePreprocessConfig} tone="accent">
-              SAVE
-            </PixelButton>
-          </div>
-        </div>
-      </div>
 
-      <div className="card">
-        <div className="sectionTitle">LLM</div>
-        <div className="stack">
-          <PixelInput
-            value={llmBaseUrl}
-            onChange={setLlmBaseUrl}
-            placeholder="API Base URL (e.g. https://api.openai.com/v1)"
-          />
-          <PixelInput value={llmModel} onChange={setLlmModel} placeholder="Model" />
-          <PixelSelect value={reasoning} onChange={setReasoning} options={REASONING} />
-          <div className="row" style={{ justifyContent: "flex-end" }}>
-            <PixelButton onClick={saveLlm} tone="accent">
-              SAVE
-            </PixelButton>
-          </div>
-        </div>
-
-        <div className="sectionTitle" style={{ marginTop: 18 }}>
-          API KEY
-        </div>
-        <div className="stack">
-          <PixelInput
-            value={keyDraft}
-            onChange={setKeyDraft}
-            placeholder="save to keyring (or env TYPEVOICE_LLM_API_KEY)"
-          />
-          <div className="row" style={{ justifyContent: "flex-end" }}>
-            <PixelButton onClick={setApiKey} tone="accent" disabled={!keyDraft.trim()}>
-              SAVE
-            </PixelButton>
-            <PixelButton onClick={clearApiKey} tone="danger">
-              CLEAR
-            </PixelButton>
-            <PixelButton onClick={checkApiKey}>CHECK</PixelButton>
-          </div>
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="sectionTitle">REWRITE</div>
-        <div className="row" style={{ justifyContent: "space-between" }}>
-          <div className="muted">
-            {rewriteEnabled ? "ON" : "OFF"}
-            {rewriteEnabled && selectedRewriteLabel ? `  /  ${selectedRewriteLabel}` : ""}
-          </div>
-          <PixelToggle value={rewriteEnabled} onChange={setRewriteEnabled} label="rewrite" />
-        </div>
-        <div style={{ marginTop: 12 }} className="stack">
-          <PixelSelect
-            value={rewriteTemplateId}
-            onChange={setRewriteTemplateId}
-            options={[{ value: "", label: "- template -" }, ...templateOptions]}
-            disabled={!templates.length}
-          />
-          <div className="row" style={{ justifyContent: "flex-end" }}>
-            <PixelButton onClick={saveRewrite} tone="accent">
-              SAVE
-            </PixelButton>
-          </div>
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="sectionTitle">REWRITE CONTEXT SWITCH</div>
-        <div className="stack">
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <div className="muted">Context 历史片段</div>
-            <PixelToggle
-              value={contextIncludeHistory}
-              onChange={setContextIncludeHistory}
-              label="history"
-            />
-          </div>
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <div className="muted">Context 剪贴板</div>
-            <PixelToggle
-              value={contextIncludeClipboard}
-              onChange={setContextIncludeClipboard}
-              label="clipboard"
-            />
-          </div>
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <div className="muted">Window 元信息</div>
-            <PixelToggle
-              value={contextIncludePrevWindowMeta}
-              onChange={setContextIncludePrevWindowMeta}
-              label="prev window meta"
-            />
-          </div>
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <div className="muted">Window 截图</div>
-            <PixelToggle
-              value={contextIncludePrevWindowScreenshot}
-              onChange={setContextIncludePrevWindowScreenshot}
-              label="prev window screenshot"
-            />
-          </div>
-          <div className="row" style={{ justifyContent: "flex-end" }}>
-            <PixelButton onClick={saveContextConfig} tone="accent">
-              SAVE
-            </PixelButton>
-          </div>
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="sectionTitle">GLOSSARY</div>
-        <div className="muted">
-          每行一个词；空行会自动忽略。用于 rewrite 阶段作为“上下文词汇/术语”约束模型遵循。
-        </div>
-        <div style={{ marginTop: 12 }} className="stack">
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <div className="muted">REWRITE 词库启用</div>
-            <PixelToggle
-              value={rewriteIncludeGlossary}
-              onChange={setRewriteIncludeGlossary}
-              label="rewrite glossary"
-            />
-          </div>
-          <PixelTextarea
-            value={rewriteGlossaryDraft}
-            onChange={setRewriteGlossaryDraft}
-            placeholder={"比如：QPSK\nTypeScript\nOAuth"}
-            rows={8}
-          />
-          <div className="row" style={{ justifyContent: "flex-end" }}>
-            <PixelButton onClick={saveGlossary} tone="accent">
-              SAVE
-            </PixelButton>
-          </div>
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="sectionTitle">EXPORT</div>
-        <div className="stack">
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <div className="muted">{autoPasteEnabled ? "AUTO PASTE ON" : "AUTO PASTE OFF"}</div>
-            <PixelToggle
-              value={autoPasteEnabled}
-              onChange={setAutoPasteEnabled}
-              label="auto paste"
-            />
-          </div>
-          <div className="muted">Use platform APIs to paste automatically (no shortcut simulation).</div>
-          <div className="row" style={{ justifyContent: "flex-end" }}>
-            <PixelButton onClick={saveExportConfig} tone="accent">
-              SAVE
-            </PixelButton>
-          </div>
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="sectionTitle">HOTKEYS</div>
-        <div className="row" style={{ justifyContent: "space-between" }}>
-          <div className="muted">
-            {hotkeysEnabled ? "ON" : "OFF"}
-            {hotkeysEnabled ? `  /  PTT ${hotkeyPtt || "-"}  /  TOGGLE ${hotkeyToggle || "-"}` : ""}
-          </div>
-          <PixelToggle value={hotkeysEnabled} onChange={setHotkeysEnabled} label="hotkeys" />
-        </div>
-        <div style={{ marginTop: 12 }} className="stack">
-          <div className="row">
-            <PixelInput
-              value={hotkeyPtt}
-              onChange={setHotkeyPtt}
-              placeholder="PTT (press to talk) e.g. F9"
-              disabled={!hotkeysEnabled}
-              readOnly
-            />
-            <PixelButton
-              onClick={() => startRecording("ptt")}
-              disabled={!hotkeysEnabled || (recordingHotkey !== null && recordingHotkey !== "ptt")}
-              tone={recordingHotkey === "ptt" ? "accent" : "default"}
+          <div className="card">
+            <SettingsLine
+              title="Rewrite"
+              detail={rewriteEnabled ? "On" : "Off"}
+              panel="rewrite"
+              expandedPanels={expandedSettingsPanels}
+              onTogglePanel={toggleSettingsPanel}
+              control={<PixelToggle value={rewriteEnabled} onChange={setRewriteEnabled} label="rewrite" />}
             >
-              {recordingHotkey === "ptt"
-                ? isCheckingHotkey
-                  ? "CHECKING..."
-                  : "WAITING"
-                : "RECORD"}
-            </PixelButton>
+              <div className="stack">
+                <PixelTextarea
+                  value={llmPrompt}
+                  onChange={setLlmPrompt}
+                  placeholder="LLM prompt..."
+                  rows={10}
+                />
+                <div className="row" style={{ justifyContent: "flex-end" }}>
+                  <PixelButton onClick={saveRewrite} tone="accent">
+                    Save
+                  </PixelButton>
+                </div>
+              </div>
+            </SettingsLine>
           </div>
-          <div className="row">
-            <PixelInput
-              value={hotkeyToggle}
-              onChange={setHotkeyToggle}
-              placeholder="TOGGLE e.g. F10"
-              disabled={!hotkeysEnabled}
-              readOnly
-            />
-            <PixelButton
-              onClick={() => startRecording("toggle")}
-              disabled={!hotkeysEnabled || (recordingHotkey !== null && recordingHotkey !== "toggle")}
-              tone={recordingHotkey === "toggle" ? "accent" : "default"}
-            >
-              {recordingHotkey === "toggle"
-                ? isCheckingHotkey
-                  ? "CHECKING..."
-                  : "WAITING"
-                : "RECORD"}
-            </PixelButton>
-          </div>
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <div className="muted">{hotkeysShowOverlay ? "OVERLAY ON" : "OVERLAY OFF"}</div>
-            <PixelToggle
-              value={hotkeysShowOverlay}
-              onChange={setHotkeysShowOverlay}
-              label="overlay"
-            />
-          </div>
-          <div className="row" style={{ justifyContent: "flex-end" }}>
-            <PixelButton onClick={saveHotkeys} tone="accent">
-              SAVE
-            </PixelButton>
-          </div>
-        </div>
-      </div>
 
-      <div className="card">
-        <div className="sectionTitle">TEMPLATES</div>
-        <div className="stack">
-          <PixelSelect
-            value={tplId}
-            onChange={setTplId}
-            options={templateOptions}
-            placeholder="-"
-            disabled={!templates.length}
-          />
-          <PixelTextarea
-            value={tplDraft}
-            onChange={setTplDraft}
-            placeholder="system prompt..."
-            rows={8}
-            disabled={!tplId}
-          />
-          <div className="row" style={{ justifyContent: "flex-end" }}>
-            <PixelButton onClick={saveTemplate} tone="accent" disabled={!tplId}>
-              SAVE
-            </PixelButton>
+          <div className="card">
+            <SettingsLine
+              title="Glossary"
+              detail="One term per line"
+              panel="glossary"
+              expandedPanels={expandedSettingsPanels}
+              onTogglePanel={toggleSettingsPanel}
+              control={
+                <PixelToggle
+                  value={rewriteIncludeGlossary}
+                  onChange={setRewriteIncludeGlossary}
+                  label="rewrite glossary"
+                />
+              }
+            >
+              <div className="stack">
+                <div className="muted">
+                  每行一个词；空行会自动忽略。用于 rewrite 阶段作为上下文词汇或术语约束模型遵循。
+                </div>
+                <PixelTextarea
+                  value={rewriteGlossaryDraft}
+                  onChange={setRewriteGlossaryDraft}
+                  placeholder={"比如：QPSK\nTypeScript\nOAuth"}
+                  rows={8}
+                />
+                <div className="row" style={{ justifyContent: "flex-end" }}>
+                  <PixelButton onClick={saveGlossary} tone="accent">
+                    Save
+                  </PixelButton>
+                </div>
+              </div>
+            </SettingsLine>
+          </div>
+
+          <div className="card">
+            <SettingsLine
+              title="Hotkeys"
+              detail={hotkeysEnabled ? "On" : "Off"}
+              panel="hotkeys"
+              expandedPanels={expandedSettingsPanels}
+              onTogglePanel={toggleSettingsPanel}
+              control={<PixelToggle value={hotkeysEnabled} onChange={setHotkeysEnabled} label="hotkeys" />}
+            >
+              <div className="stack">
+                <div className="hotkeyGuide">
+                  <div><span>{hotkeyPrimary}</span><span>short press starts or stops recording</span></div>
+                </div>
+                <div className="stack">
+                  <div className="muted">Primary Key</div>
+                  <PixelSelect
+                    value={hotkeyPrimary}
+                    onChange={setHotkeyPrimary}
+                    options={PRIMARY_HOTKEYS}
+                  />
+                </div>
+                <div className="settingsInlineToggle">
+                  <span>Overlay</span>
+                  <PixelToggle
+                    value={hotkeysShowOverlay}
+                    onChange={setHotkeysShowOverlay}
+                    label="overlay"
+                  />
+                </div>
+                <div className="row" style={{ justifyContent: "flex-end" }}>
+                  <PixelButton onClick={saveHotkeys} tone="accent">
+                    Save
+                  </PixelButton>
+                </div>
+              </div>
+            </SettingsLine>
           </div>
         </div>
 
-        <div className="sectionTitle" style={{ marginTop: 18 }}>
-          IMPORT / EXPORT
-        </div>
-        <div className="stack">
-          <PixelTextarea
-            value={templatesJson}
-            onChange={setTemplatesJson}
-            placeholder='[{"id","name","system_prompt"}, ...]'
-            rows={7}
-          />
-          <div className="row" style={{ justifyContent: "flex-end" }}>
-            <PixelButton onClick={exportTemplates}>EXPORT</PixelButton>
-            <PixelButton
-              onClick={() => importTemplates("merge")}
-              tone="accent"
-              disabled={!templatesJson.trim()}
+        <div className="settingsColumn">
+          <div className="card">
+            <SettingsLine
+              title="Language model"
+              detail={llmModel.trim() || "Model settings"}
+              panel="llm"
+              expandedPanels={expandedSettingsPanels}
+              onTogglePanel={toggleSettingsPanel}
+              control={<PixelSelect value={reasoning} onChange={setReasoning} options={REASONING} />}
             >
-              IMPORT MERGE
-            </PixelButton>
-            <PixelButton
-              onClick={() => importTemplates("replace")}
-              tone="danger"
-              disabled={!templatesJson.trim()}
-            >
-              IMPORT REPLACE
-            </PixelButton>
+              <div className="stack">
+                <PixelInput
+                  value={llmBaseUrl}
+                  onChange={setLlmBaseUrl}
+                  placeholder="API Base URL (e.g. https://api.openai.com/v1)"
+                />
+                <PixelInput value={llmModel} onChange={setLlmModel} placeholder="Model" />
+                <div className="row" style={{ justifyContent: "flex-end" }}>
+                  <PixelButton onClick={saveLlm} tone="accent">
+                    Save
+                  </PixelButton>
+                </div>
+              </div>
+            </SettingsLine>
           </div>
-        </div>
-      </div>
 
-      <div className="card">
-        <div className="sectionTitle">HISTORY</div>
-        <div className="row" style={{ justifyContent: "flex-end" }}>
-          <PixelButton onClick={() => setConfirmClear(true)} tone="danger">
-            CLEAR ALL
-          </PixelButton>
+          <div className="card">
+            <SettingsLine
+              title="API key"
+              detail="Stored in keyring or environment"
+              panel="llmKey"
+              expandedPanels={expandedSettingsPanels}
+              onTogglePanel={toggleSettingsPanel}
+            >
+              <div className="stack">
+                <PixelInput
+                  value={keyDraft || llmKeyDisplay}
+                  onChange={setKeyDraft}
+                  placeholder="LLM API key not configured"
+                  readOnly={!keyDraft && !!llmKeyDisplay}
+                />
+                <div className="row" style={{ justifyContent: "flex-end" }}>
+                  <PixelButton onClick={setApiKey} tone="accent" disabled={!keyDraft.trim()}>
+                    Save
+                  </PixelButton>
+                  <PixelButton onClick={clearApiKey} tone="danger">
+                    Clear
+                  </PixelButton>
+                  <PixelButton onClick={checkApiKey} disabled={llmCheckPending}>
+                    {llmCheckPending ? "Checking" : "Check"}
+                  </PixelButton>
+                </div>
+              </div>
+            </SettingsLine>
+          </div>
+
+          <div className="card">
+            <SettingsLine
+              title="Improvement context"
+              detail="Inputs available to rewriting"
+              panel="context"
+              expandedPanels={expandedSettingsPanels}
+              onTogglePanel={toggleSettingsPanel}
+            >
+              <div className="stack">
+                <div className="settingsInlineToggle">
+                  <span>Recent dictated text</span>
+                  <PixelToggle
+                    value={contextIncludeHistory}
+                    onChange={setContextIncludeHistory}
+                    label="recent dictated text"
+                  />
+                </div>
+                <div className="settingsInlineToggle">
+                  <span>Clipboard text</span>
+                  <PixelToggle
+                    value={contextIncludeClipboard}
+                    onChange={setContextIncludeClipboard}
+                    label="clipboard text"
+                  />
+                </div>
+                <div className="settingsInlineToggle">
+                  <span>Current app name and title</span>
+                  <PixelToggle
+                    value={contextIncludePrevWindowMeta}
+                    onChange={setContextIncludePrevWindowMeta}
+                    label="current app name and title"
+                  />
+                </div>
+                <div className="settingsInlineToggle">
+                  <span>Current screen image</span>
+                  <PixelToggle
+                    value={contextIncludePrevWindowScreenshot}
+                    onChange={setContextIncludePrevWindowScreenshot}
+                    label="current screen image"
+                  />
+                </div>
+                <div className="row" style={{ justifyContent: "flex-end" }}>
+                  <PixelButton onClick={saveContextConfig} tone="accent">
+                    Save
+                  </PixelButton>
+                </div>
+              </div>
+            </SettingsLine>
+          </div>
+
+          <div className="card">
+            <SettingsLine
+              title="Export"
+              detail={autoPasteEnabled ? "Auto paste on" : "Auto paste off"}
+              panel="export"
+              expandedPanels={expandedSettingsPanels}
+              onTogglePanel={toggleSettingsPanel}
+              control={
+                <PixelToggle
+                  value={autoPasteEnabled}
+                  onChange={setAutoPasteEnabled}
+                  label="auto paste"
+                />
+              }
+            >
+              <div className="stack">
+                <div className="muted">Use platform APIs to paste automatically.</div>
+                <div className="row" style={{ justifyContent: "flex-end" }}>
+                  <PixelButton onClick={saveExportConfig} tone="accent">
+                    Save
+                  </PixelButton>
+                </div>
+              </div>
+            </SettingsLine>
+          </div>
+
+          <div className="card">
+            <SettingsLine
+              title="History"
+              detail="Stored dictation records"
+              panel="history"
+              expandedPanels={expandedSettingsPanels}
+              onTogglePanel={toggleSettingsPanel}
+            >
+              <div className="row" style={{ justifyContent: "flex-end" }}>
+                <PixelButton onClick={() => setConfirmClear(true)} tone="danger">
+                  Clear all
+                </PixelButton>
+              </div>
+            </SettingsLine>
+          </div>
         </div>
       </div>
 
       <PixelDialog
         open={confirmClear}
-        title="CLEAR HISTORY"
+        title="Clear history"
         onClose={() => setConfirmClear(false)}
         actions={
           <>
-            <PixelButton onClick={() => setConfirmClear(false)}>CANCEL</PixelButton>
+            <PixelButton onClick={() => setConfirmClear(false)}>Cancel</PixelButton>
             <PixelButton onClick={clearHistory} tone="danger">
-              CLEAR
+              Clear
             </PixelButton>
           </>
         }
       >
         <div className="stack">
-          <div>THIS WILL DELETE ALL HISTORY ITEMS.</div>
-          <div className="muted">THIS ACTION CANNOT BE UNDONE.</div>
+          <div>This will delete all history items.</div>
+          <div className="muted">This action cannot be undone.</div>
         </div>
       </PixelDialog>
     </div>
   );
+}
+
+function normalizePrimaryHotkey(value: string | null | undefined): string {
+  const raw = (value || "").trim();
+  const found = PRIMARY_HOTKEYS.find((item) => item.value.toLowerCase() === raw.toLowerCase());
+  return found?.value || "Alt";
 }

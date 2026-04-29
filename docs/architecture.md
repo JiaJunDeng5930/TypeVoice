@@ -1,160 +1,162 @@
-# TypeVoice 架构（Windows MVP）
+# TypeVoice 架构
 
-目标：在满足 `docs/base-spec.md` 与 `docs/verification.md` 的前提下，给出可实现、可取消、可度量、可扩展（热键/托盘/自动输入）的最小架构。
+目标：前端只发送用户意图并渲染后端状态快照；后端核心状态机统一控制录音转录、改写、插入和取消，并通过统一事件通道驱动显示。
 
-## 1. 分层与依赖方向（冻结）
+## 1. 分层与依赖方向
 
-采用“端口-适配器（Hexagonal）”思路：
+- Frontend：React UI，只负责交互、显示和发送用户意图命令。
+- Commands：Tauri 命令入口，负责参数映射、状态注入和调用核心状态机。
+- Core Modules：`voice_workflow`、`voice_tasks`、`audio_capture`、`transcription`、`rewrite`、`insertion`、`ui_events`。
+- Adapters：Doubao ASR、远程 HTTP ASR、FFmpeg、LLM API、平台输入、存储、系统音频设备。
 
-- Presentation（Tauri + Web UI）
-  - 只负责交互与展示
-  - 不直接处理音频/模型/网络细节
-- Application（Use Cases / Pipeline Orchestrator）
-  - 负责把 Record/Preprocess/Transcribe/Rewrite/Persist/Export 这些阶段串起来
-  - 负责取消、状态机、事件与指标
-- Adapters（实现层）
-  - FFmpeg 调用适配器
-  - ASR Runner 适配器（PyTorch CUDA）
-  - LLM API 适配器
-  - Storage（历史记录/模板/配置/安全存储）
-  - Platform（剪贴板、未来的热键/托盘/自动输入）
+依赖方向：
 
-依赖约束：
+- 前端通过 typed backend client 调用 `workflow_snapshot`、`workflow_command` 和 `workflow_apply_event`。
+- 命令层只推进 `voice_workflow`。
+- `voice_workflow` 持有核心业务状态，并把耗时动作交给 `voice_tasks`。
+- `voice_tasks` 调用录音、转录、改写、插入能力模块，并把异步结果投递给前端。
+- 能力模块依赖端口或适配器。
+- 前端收到状态型异步事件后调用 `workflow_apply_event`，状态机返回新的 `WorkflowView`。
+- 显示事件和状态型事件都发入 `UiEventMailbox`，由 `ui_events` actor 统一投递 `ui_event`。
+- `audio_capture` 继续直接投递 `audio.level`，因为音频电平是录音资源采样事件。
 
-- Presentation 依赖 Application（通过 Tauri commands/events）
-- Application 只依赖 Ports（trait/interface）
-- Adapters 实现 Ports
+## 2. 核心模块
 
-## 2. 关键组件与职责
-
-### 2.1 PipelineOrchestrator（应用层核心）
+### 2.1 voice_workflow
 
 职责：
 
-- 接收“开始录音/结束录音/取消任务/用 fixtures 运行验证”等命令
-- 驱动阶段状态机，产出 UI 事件与结构化 metrics
-- 串行/并行策略：MVP 以串行为主，避免资源竞争
-- 任务隔离：同一时间最多 1 个 active 任务（MVP 冻结，后续可扩展为队列）
+- 作为后端唯一核心业务状态机。
+- 持有当前 `phase`、会话 ID、录音 session ID、转录结果、改写结果、hotkey 预采集上下文和最近错误。
+- 统一校验合法流转，非法操作返回结构化错误码。
+- 用户命令进入进行中阶段后返回 `WorkflowView`。
+- 接收前端转发的状态型事件，并据此完成、取消或失败当前任务。
+- 用 `taskId` 和事件 ID 校验异步事件，避免过期结果覆盖当前状态。
 
-输入：
+状态：
 
-- 录音输入（来自 Recorder）或 音频文件路径（fixtures / 用户导入）
-- 用户配置（模型路径、模板、LLM 开关等）
+- `Idle`
+- `Recording`
+- `Transcribing`
+- `Transcribed`
+- `Rewriting`
+- `Rewritten`
+- `Inserting`
+- `Cancelled`
+- `Failed`
 
-输出：
-
-- Task events（阶段变更、进度、完成/失败）
-- Task result（asr_text、final_text、耗时、rtf、错误码）
-
-统一入口约束（新增）：
-
-- 对外仅暴露单一任务启动命令 `start_task(req)`。
-- `req` 仅表达触发意图与输入模式（例如 `trigger_source`、`record_mode`、`recording_asset_id`），不携带可变执行策略。
-- 热键与 UI 必须走同一条 Orchestrator 路径，不允许并行实现第二套任务入口。
-- 录音停止命令不得直接起任务；只返回受管控的录音资产句柄（`recording_asset_id`），再由 `start_task(req)` 进入统一编排。
-- 录音资产句柄必须由后端注册并托管生命周期（租约到期自动回收），禁止 UI 直接传入文件路径触发任务。
-
-### 2.2 Recorder（适配器）
+### 2.2 audio_capture
 
 职责：
 
-- 提供录音音频文件（临时文件）
-- 对外隐藏平台差异（Windows 设备枚举等）
+- 管理录音会话生命周期。
+- 管理录音音频产物和短期资产消费。
+- 通过 Windows dshow 适配器采集音频。
+- 通过 `UiEventMailbox` 投递音频电平事件。
 
-实现约束（新增）：
+状态机调用：
 
-- 主录音链路由后端命令托管，前端不直接持有录音数据生命周期。
-- 推荐命令形态：`start_backend_recording` / `stop_backend_recording` / `abort_backend_recording`，其中 `stop_backend_recording` 仅结束采集并返回 `recording_asset_id`。
+- `record_transcribe_start(req) -> { sessionId }`
+- `record_transcribe_cancel() -> void`
 
-注意：录音实现与 ASR 解耦，验证与性能测量默认走 fixtures（不依赖录音）。
-
-### 2.3 FFmpegAdapter（适配器）
-
-职责：
-
-- 定位内置 `ffmpeg.exe`
-- 将输入音频统一转为 ASR 需要的格式（建议 wav/pcm/16k/mono，最终以 ASR runner 要求为准）
-- 可取消（需要能 kill ffmpeg 进程）
-- 产出：标准化音频文件路径 + metrics（elapsed_ms、exit_code）
-
-### 2.4 AsrAdapter（适配器，冻结选择：PyTorch CUDA）
+### 2.3 voice_tasks
 
 职责：
 
-- 管理 ASR Runner 的生命周期与调用
-- 约束：不允许降级到 CPU
-  - 若 cuda 不可用或 runner 返回 cpu，视为失败（错误码需明确）
-- 产出：text + metrics（rtf、device_used、elapsed_ms）
+- 作为耗时异步任务执行层。
+- 停止录音后调用转录模块。
+- 调用改写和插入模块。
+- 任务过程中投递 `displayOnly` 事件。
+- 任务完成、失败、取消时投递 `stateChanging` 事件给前端。
 
-进程边界（建议）：
-
-- ASR Runner 为独立进程（Python），避免 Rust 侧直接链接 PyTorch 的复杂度。
-- IPC 建议：stdin/stdout JSON（单请求单响应）或本地 HTTP（若需要并发）。
-
-### 2.5 LlmRewriteAdapter（适配器）
+### 2.4 transcription
 
 职责：
 
-- 将 asr_text + 模板渲染后的 prompt 发给 API
-- 失败必须回退：保留 asr_text，final_text=asr_text，并返回结构化错误
-- 默认验证不调用真实 API（见 `docs/verification.md`）
+- 提供统一语音转录能力。
+- 管理预处理、取消、转录 provider 选择、历史初始写入、性能指标。
+- 保留取消 token、子进程句柄等边缘资源状态。
+- 依赖 Doubao provider 和远程 HTTP provider。
 
-### 2.6 TemplateStore / SettingsStore / HistoryStore（适配器）
+Provider：
+
+- Doubao：WebSocket 流式语音转录 provider。
+- Remote：HTTP API 语音转录 provider。
+
+状态机调用：
+
+- `record_transcribe_stop() -> TranscriptionResult`
+- `transcribe_fixture(req) -> TranscriptionResult`
+
+### 2.5 rewrite
 
 职责：
 
-- 模板：增删改查、导入导出（JSON）、模板版本快照（至少保存模板名+hash）
-- 设置：非敏感配置落盘
-- API Key：走 Windows 安全存储（Credential Manager）或等价方案
-- 历史：仅文本与元信息（不保存音频）
+- 独立执行文本改写。
+- 读取 LLM 提示词、上下文和术语表。
+- 接收 `voice_workflow` 传入的 hotkey 预采集上下文。
+- 成功后更新同一条历史记录的 `final_text`。
 
-### 2.7 MetricsSink（适配器）
+状态机调用：
+
+- `rewrite_text(req) -> RewriteResult`
+
+### 2.6 insertion
 
 职责：
 
-- 追加写入结构化 metrics（建议 JSONL 一行一条）
-- quick/full 验证只需要控制台摘要 + JSONL 指标，不生成长报告
-- 日志写入统一由 `apps/desktop/src-tauri/src/obs/` 模块负责：
-  - `trace.jsonl` 与 `metrics.jsonl` 使用“有界队列 + 单写线程”串行落盘，业务代码只提交结构化事件，不直接打开文件。
-  - `trace` 继续保留 `step_id/code/error_chain/backtrace` 诊断语义；`metrics` 统一使用 `type` 标签化记录（`task_event/task_perf/task_done/debug_artifact/logger_dropped`）。
-  - 队列拥塞时不阻塞主流程，采用丢弃计数并写入 `logger_dropped` 指标，保证可观测。
+- 统一管理复制和自动写入目标窗口。
+- 自动写入失败时保留复制成功状态，并返回结构化错误。
 
-## 3. 核心端口（Ports）建议
+状态机调用：
 
-为保证可测试与可替换，应用层依赖以下抽象：
+- `insert_text(req) -> InsertResult`
 
-- `AudioPreprocessorPort`
-  - `preprocess(input_path) -> output_path + metrics`
-- `AsrPort`
-  - `transcribe(audio_path, params) -> text + metrics`
-- `RewritePort`
-  - `rewrite(text, template, params) -> text + metrics`
-- `HistoryPort`
-  - `append(record)`
-  - `list(limit)`
-- `TemplatePort`
-  - `list/get/upsert/delete/import/export`
-- `ClipboardPort`
-  - `copy(text)`
-- `MetricsPort`
-  - `append(event)`
+### 2.7 ui_events
 
-### 3.1 当前实现约束（可测试性）
+职责：
 
-- `TaskManager` 必须通过可注入依赖访问外部系统：
-  - `AsrClient`（ASR 启动/重启/转写）
-  - `ContextCollector`（上下文抓取）
-  - `TaskManagerDeps`（FFmpeg 预处理、模板读取、历史写入、指标写入）
-- 应用编排代码不得直接硬编码外部依赖构造，默认实现由 `TaskManager::new()` 装配，测试可注入替身实现。
-- 前端屏幕组件不得直接绑定 Tauri API；必须通过运行时端口访问：
-  - `TauriGateway`（命令调用与事件订阅）
-  - `TimerPort`（定时器）
-  - `ClipboardPort`（剪贴板）
+- 提供 `UiEventMailbox`。
+- 启动 actor，从 mailbox 读取事件并投递给前端 `ui_event`。
+- 事件覆盖 workflow 状态快照、音频电平、任务进度、转录完成、改写完成、插入结果、取消和诊断错误。
+- 每个事件包含 `effect`，取值为 `displayOnly` 或 `stateChanging`。
 
-## 4. Gate 驱动的关键实现约束
+## 3. 前端交互
 
-这些是为了让 `quick/full` Gate 可实现而强制的架构约束：
+主屏幕只发送用户意图：
 
-- 所有阶段必须产出结构化 metrics（至少：task_id、stage、elapsed_ms、result_code、device_used、rtf）。
-- 取消必须是跨阶段的一等公民（CancelToken + 可终止外部进程）。
-- fixtures 路径约定必须固定（`fixtures/zh_10s.ogg` 等），且通过 FFmpeg 预处理统一格式，避免样本格式差异影响结果。
+- 主按钮发送 `primary`，由 `voice_workflow` 按当前阶段决定开始、停止或取消。
+- `REWRITE` 发送 `rewriteLast`，由 `voice_workflow` 选择最近一次 ASR 文本。
+- `INSERT` 发送 `insertLast`，由 `voice_workflow` 选择当前最终文本。
+- 点击最近结果文本发送 `copyLast`，由 `voice_workflow` 执行复制。
+
+前端显示来自 `WorkflowView` 的按钮文案、禁用状态、最近结果和诊断文本。
+
+前端事件处理：
+
+- `displayOnly` 事件只更新界面过程显示。
+- `stateChanging` 事件调用 `workflow_apply_event`。
+- `workflow_apply_event` 返回的 `WorkflowView` 是主界面状态来源。
+
+## 4. 数据契约
+
+核心结果类型：
+
+- `TranscriptionResult { transcriptId, asrText, finalText, metrics, historyId }`
+- `RewriteResult { transcriptId, finalText, rewriteMs }`
+- `InsertResult { copied, autoPasteAttempted, autoPasteOk, errorCode, errorMessage }`
+- `WorkflowView { phase, taskId, recordingSessionId, lastTranscriptId, lastAsrText, lastText, lastCreatedAtMs, diagnosticCode, diagnosticLine, primaryLabel, primaryDisabled, canRewrite, canInsert, canCopy }`
+- `UiEvent { kind, effect, eventId, sequence, taskId, stage, status, message, elapsedMs, errorCode, payload, tsMs }`
+
+历史记录规则：
+
+- 转录完成时创建历史记录，`final_text` 初始等于 `asr_text`。
+- 改写完成时更新同一条历史记录。
+- 插入只消费文本，不修改历史记录。
+
+## 5. 验证约束
+
+- 后端必须通过 `cargo check --locked --workspace`。
+- 前端必须通过 `npm run build`。
+- Rust 验证工具和后端 Rust 单测保持通过。
+- Windows 一键网关仍作为功能实现后的最终验证入口。

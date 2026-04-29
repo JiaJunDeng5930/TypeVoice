@@ -9,6 +9,103 @@ export type TaskEvent = {
   step_id?: string | null;
 };
 
+export type UiEvent = {
+  kind: string;
+  effect?: "displayOnly" | "stateChanging" | null;
+  eventId?: string | null;
+  sequence?: number | null;
+  taskId?: string | null;
+  stage?: string | null;
+  status?: "started" | "completed" | "failed" | "cancelled" | "recording" | null;
+  message: string;
+  elapsedMs?: number | null;
+  errorCode?: string | null;
+  payload?: unknown;
+  tsMs: number;
+};
+
+export type WorkflowApplyEventRequest = {
+  eventId: string;
+  kind: string;
+  taskId?: string | null;
+  status?: string | null;
+  message: string;
+  errorCode?: string | null;
+  payload?: unknown;
+};
+
+export type WorkflowAsrCompletedRequest = {
+  transcriptId: string;
+  text: string;
+  metrics: TranscriptionMetrics;
+};
+
+export type WorkflowAsrEmptyRequest = {
+  transcriptId: string;
+};
+
+export type WorkflowTaskFailedRequest = {
+  transcriptId: string;
+  code: string;
+  message: string;
+};
+
+export type WorkflowTextCommandRequest = {
+  text: string;
+};
+
+export type RecordTranscribeStartResult = {
+  sessionId: string;
+};
+
+export type TranscriptionMetrics = {
+  rtf: number;
+  deviceUsed: string;
+  preprocessMs: number;
+  asrMs: number;
+};
+
+export type TranscriptionResult = {
+  transcriptId: string;
+  asrText: string;
+  finalText: string;
+  metrics: TranscriptionMetrics;
+  historyId: string;
+};
+
+export type RewriteResult = {
+  transcriptId: string;
+  finalText: string;
+  rewriteMs: number;
+};
+
+export type InsertResult = {
+  copied: boolean;
+  autoPasteAttempted: boolean;
+  autoPasteOk: boolean;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+};
+
+export type WorkflowCommand = "primary" | "rewriteLast" | "insertLast" | "copyLast" | "cancel";
+
+export type WorkflowView = {
+  phase: string;
+  taskId?: string | null;
+  recordingSessionId?: string | null;
+  lastTranscriptId?: string | null;
+  lastAsrText: string;
+  lastText: string;
+  lastCreatedAtMs?: number | null;
+  diagnosticCode?: string | null;
+  diagnosticLine: string;
+  primaryLabel: string;
+  primaryDisabled: boolean;
+  canRewrite: boolean;
+  canInsert: boolean;
+  canCopy: boolean;
+};
+
 export type TaskDone = {
   task_id: string;
   asr_text: string;
@@ -19,7 +116,6 @@ export type TaskDone = {
   asr_ms: number;
   rewrite_ms?: number | null;
   rewrite_enabled: boolean;
-  template_id?: string | null;
 };
 
 export type ExportTextResult = {
@@ -30,14 +126,7 @@ export type ExportTextResult = {
   error_message?: string | null;
 };
 
-export type PromptTemplate = {
-  id: string;
-  name: string;
-  system_prompt: string;
-};
-
 export type Settings = {
-  asr_model?: string | null;
   asr_provider?: string | null;
   remote_asr_url?: string | null;
   remote_asr_model?: string | null;
@@ -49,6 +138,7 @@ export type Settings = {
   llm_base_url?: string | null;
   llm_model?: string | null;
   llm_reasoning_effort?: string | null;
+  llm_prompt?: string | null;
   record_input_spec?: string | null;
   record_input_strategy?: string | null;
   record_follow_default_role?: string | null;
@@ -59,7 +149,6 @@ export type Settings = {
   record_last_working_dshow_spec?: string | null;
   record_last_working_ts_ms?: number | null;
   rewrite_enabled?: boolean | null;
-  rewrite_template_id?: string | null;
   rewrite_glossary?: string[] | null;
   auto_paste_enabled?: boolean | null;
   rewrite_include_glossary?: boolean | null;
@@ -73,8 +162,7 @@ export type Settings = {
   llm_supports_vision?: boolean | null;
 
   hotkeys_enabled?: boolean | null;
-  hotkey_ptt?: string | null;
-  hotkey_toggle?: string | null;
+  hotkey_primary?: string | null;
   hotkeys_show_overlay?: boolean | null;
 };
 
@@ -85,17 +173,15 @@ export type AudioCaptureDevice = {
   is_default_console: boolean;
 };
 
-export type ModelStatus = {
-  model_dir: string;
-  ok: boolean;
-  reason?: string | null;
-  model_version?: string | null;
-};
-
 export type ApiKeyStatus = {
   configured: boolean;
   source: string;
   reason?: string | null;
+};
+
+export type ApiCheckResult = {
+  ok: boolean;
+  message: string;
 };
 
 export type RuntimeToolchainStatus = {
@@ -107,18 +193,12 @@ export type RuntimeToolchainStatus = {
   expected_version: string;
 };
 
-export type RuntimePythonStatus = {
-  ready: boolean;
-  code?: string | null;
-  message?: string | null;
-  python_path?: string | null;
-  python_version?: string | null;
-};
-
 export type HistoryItem = {
   task_id: string;
   created_at_ms: number;
   asr_text: string;
+  rewritten_text: string;
+  inserted_text: string;
   final_text: string;
   template_id?: string | null;
   rtf: number;

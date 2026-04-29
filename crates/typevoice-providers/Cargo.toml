@@ -1,0 +1,21 @@
+[package]
+name = "typevoice-providers"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+flate2 = "1"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+keyring = { version = "3", features = ["windows-native"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["fs", "macros", "rt", "sync", "time"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+tokio-util = "0.7"
+typevoice-core = { path = "../typevoice-core" }
+typevoice-observability = { path = "../typevoice-observability" }
+typevoice-storage = { path = "../typevoice-storage" }
+uuid = { version = "1", features = ["v4"] }

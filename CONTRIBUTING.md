@@ -11,7 +11,7 @@ Thanks for your interest in TypeVoice.
 
 1. Install dependencies:
    - `cd apps/desktop && npm ci`
-   - `cd /path/to/TypeVoice && ./.venv/bin/python -m pip install -r requirements.txt`
+   - `cd /path/to/TypeVoice && cargo xtask fixtures download`
 2. Start desktop app:
    - `cd apps/desktop && npm run tauri dev`
 
@@ -19,9 +19,9 @@ Thanks for your interest in TypeVoice.
 
 Run at repo root:
 
-- `./.venv/bin/python -m pytest -q tests`
-- `./.venv/bin/python scripts/verify_quick.py`
-- `./.venv/bin/python scripts/verify_full.py` (requires local fixtures/model and GPU)
+- `cargo test --locked -p xtask`
+- `cargo xtask verify quick`
+- `cargo xtask verify full`
 
 ## Pull Request Guidelines
 

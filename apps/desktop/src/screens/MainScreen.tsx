@@ -1,57 +1,32 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  browserClipboard,
-  browserTimer,
   defaultTauriGateway,
-  type ClipboardPort,
   type TauriGateway,
-  type TimerPort,
 } from "../infra/runtimePorts";
+import { createBackendClient, type BackendClient } from "../infra/backendClient";
+import { buildDiagnostic, buildUiEventDiagnostic, userMessageFromDiagnostic } from "../domain/diagnostic";
 import {
-  buildDiagnostic,
-  buildTaskEventDiagnostic,
-  compactDetail,
-  hotkeyCaptureHint,
-  type DiagnosticView,
-  toDiagnosticLine,
-} from "../domain/diagnostic";
+  EMPTY_WORKFLOW_VIEW,
+  primaryActionLabel,
+  statusLabelFromPhase,
+  workflowPhaseName,
+  workflowViewFromPayload,
+} from "../domain/workflowView";
 import type {
-  ExportTextResult,
-  HistoryItem,
-  RuntimePythonStatus,
   RuntimeToolchainStatus,
   Settings,
-  TaskDone,
-  TaskEvent,
+  TranscriptionMetrics,
+  WorkflowCommand,
+  WorkflowView,
 } from "../types";
 import { IconStart, IconStop, IconTranscribing } from "../ui/icons";
-
-type UiState = "idle" | "recording" | "transcribing" | "cancelling";
-
-type HotkeyRecordEvent = {
-  kind: "ptt" | "toggle";
-  state: "Pressed" | "Released";
-  shortcut: string;
-  ts_ms: number;
-  task_id?: string | null;
-  capture_status?: "ok" | "err" | null;
-  capture_error_code?: string | null;
-  capture_error_message?: string | null;
-};
-
-type StopBackendRecordingResult = {
-  recordingId: string;
-  recordingAssetId: string;
-  ext: string;
-};
 
 type Props = {
   settings: Settings | null;
   pushToast: (msg: string, tone?: "default" | "ok" | "danger") => void;
   onHistoryChanged: () => void;
   gateway?: TauriGateway;
-  timer?: TimerPort;
-  clipboard?: ClipboardPort;
+  backend?: BackendClient;
 };
 
 export function MainScreen({
@@ -59,148 +34,103 @@ export function MainScreen({
   pushToast,
   onHistoryChanged,
   gateway = defaultTauriGateway,
-  timer = browserTimer,
-  clipboard = browserClipboard,
+  backend,
 }: Props) {
-  const [ui, setUi] = useState<UiState>("idle");
+  const client = useMemo(() => backend || createBackendClient(gateway), [backend, gateway]);
+  const [workflow, setWorkflow] = useState<WorkflowView>(EMPTY_WORKFLOW_VIEW);
   const [hover, setHover] = useState(false);
-  const [diagnosticLine, setDiagnosticLine] = useState<string>("");
+  const [liveTranscript, setLiveTranscript] = useState("");
+  const autoRewriteStartedRef = useRef<Set<string>>(new Set());
+  const autoInsertStartedRef = useRef<Set<string>>(new Set());
 
-  const [lastText, setLastText] = useState<string>("");
-  const [lastMeta, setLastMeta] = useState<string>("NO LAST RESULT");
-  const [lastHover, setLastHover] = useState(false);
-
-  const uiRef = useRef<UiState>("idle");
-  useEffect(() => {
-    uiRef.current = ui;
-  }, [ui]);
-
-  const activeTaskIdRef = useRef<string>("");
-  const backendRecordingIdRef = useRef<string>("");
-  const hotkeySessionRef = useRef<boolean>(false);
-  const pendingTaskIdRef = useRef<string | null>(null);
-
-  const hasHotkeyConfig =
-    typeof settings?.hotkeys_enabled === "boolean" &&
-    typeof settings?.hotkeys_show_overlay === "boolean";
-  const hotkeysEnabledRef = useRef<boolean>(false);
-  const showOverlayRef = useRef<boolean>(false);
-  const hasHotkeyConfigRef = useRef<boolean>(hasHotkeyConfig);
-  const pushToastRef = useRef(pushToast);
-  const onHistoryChangedRef = useRef(onHistoryChanged);
-
-  useEffect(() => {
-    hasHotkeyConfigRef.current = hasHotkeyConfig;
-    hotkeysEnabledRef.current = hasHotkeyConfig ? settings?.hotkeys_enabled === true : false;
-    showOverlayRef.current = hasHotkeyConfig ? settings?.hotkeys_show_overlay === true : false;
-    pushToastRef.current = pushToast;
-    onHistoryChangedRef.current = onHistoryChanged;
-  }, [hasHotkeyConfig, onHistoryChanged, pushToast, settings]);
-
-  const hint = useMemo(() => {
-    if (ui === "idle") return "START";
-    if (ui === "recording") return "STOP";
-    if (ui === "cancelling") return "CANCELLING";
-    return "CANCEL";
-  }, [ui]);
-
-  async function overlaySet(visible: boolean, status: string, detail?: string | null) {
-    if (!showOverlayRef.current) return;
+  const runAutoInsert = useCallback(async (view: WorkflowView) => {
+    const phase = workflowPhaseName(view.phase);
+    const transcriptId = optionalString(view.lastTranscriptId);
+    const text = (view.lastText || view.lastAsrText || "").trim();
+    if ((phase !== "transcribed" && phase !== "rewritten") || !transcriptId || !text) return;
+    if (autoInsertStartedRef.current.has(transcriptId)) return;
+    autoInsertStartedRef.current.add(transcriptId);
     try {
-      await gateway.invoke("overlay_set_state", {
-        state: { visible, status, detail: detail || null, ts_ms: Date.now() },
-      });
-    } catch {
-      // ignore
+      await client.workflowInsert({ text });
+      const refreshed = await client.workflowSnapshot();
+      setWorkflow(refreshed);
+      onHistoryChanged();
+    } catch (err) {
+      const diag = buildDiagnostic(err, "Text could not be pasted");
+      pushToast(diag.title, "danger");
+      try {
+        const refreshed = await client.workflowSnapshot();
+        setWorkflow(refreshed);
+      } catch (refreshErr) {
+        const refreshDiag = buildDiagnostic(refreshErr, "WORKFLOW STATE FAILED");
+        pushToast(refreshDiag.title, "danger");
+      }
     }
-  }
+  }, [client, onHistoryChanged, pushToast]);
 
-  function overlayFlash(status: string, ms: number, detail?: string | null) {
-    void overlaySet(true, status, detail || null);
-    timer.setTimeout(() => {
-      void overlaySet(false, "IDLE");
-    }, ms);
-  }
+  const runAutoRewrite = useCallback(async (view: WorkflowView) => {
+    const phase = workflowPhaseName(view.phase);
+    const transcriptId = optionalString(view.lastTranscriptId);
+    const text = (view.lastText || view.lastAsrText || "").trim();
+    if (phase !== "transcribed" || !transcriptId || !text) return;
+    if (autoRewriteStartedRef.current.has(transcriptId)) return;
+    if (settings?.rewrite_enabled !== true) return;
+    autoRewriteStartedRef.current.add(transcriptId);
+    try {
+      await client.workflowRewrite({ text });
+      const refreshed = await client.workflowSnapshot();
+      setWorkflow(refreshed);
+      await runAutoInsert(refreshed);
+    } catch (err) {
+      const diag = buildDiagnostic(err, "Text improvement failed");
+      pushToast(diag.title, "danger");
+      try {
+        const refreshed = await client.workflowSnapshot();
+        setWorkflow(refreshed);
+      } catch (refreshErr) {
+        const refreshDiag = buildDiagnostic(refreshErr, "WORKFLOW STATE FAILED");
+        pushToast(refreshDiag.title, "danger");
+      }
+    }
+  }, [client, pushToast, runAutoInsert, settings?.rewrite_enabled]);
 
-  function waitMs(ms: number): Promise<void> {
-    return new Promise((resolve) => {
-      timer.setTimeout(() => {
-        resolve();
-      }, ms);
+  const acceptWorkflowView = useCallback(async (next: WorkflowView, autoContinue: boolean) => {
+    setWorkflow(next);
+    const phase = workflowPhaseName(next.phase);
+    if (phase === "recording") setLiveTranscript("");
+    if (!autoContinue) return;
+    if (phase === "transcribed") {
+      if (settings?.rewrite_enabled === true) {
+        await runAutoRewrite(next);
+      } else {
+        await runAutoInsert(next);
+      }
+      return;
+    }
+    if (phase === "rewritten") {
+      await runAutoInsert(next);
+    }
+  }, [runAutoInsert, runAutoRewrite, settings?.rewrite_enabled]);
+
+  useEffect(() => {
+    (async () => {
+      const view = await client.workflowSnapshot();
+      await acceptWorkflowView(view, false);
+    })().catch((err) => {
+      const diag = buildDiagnostic(err, "WORKFLOW STATE FAILED");
+      pushToast(diag.title, "danger");
     });
-  }
-
-  async function abortPendingTaskBestEffort(taskId: string | null) {
-    if (!taskId || !taskId.trim()) return;
-    try {
-      await gateway.invoke("abort_pending_task", { taskId });
-    } catch {
-      // ignore
-    }
-  }
-
-  async function logUiEventBestEffort(req: Record<string, unknown>) {
-    try {
-      await gateway.invoke("ui_log_event", { req });
-    } catch {
-      // ignore
-    }
-  }
-
-  function logDiagnosticBestEffort(diag: DiagnosticView, extra?: Record<string, unknown>) {
-    void logUiEventBestEffort({
-      kind: "diagnostic",
-      code: diag.code,
-      title: diag.title,
-      detail: diag.detail,
-      actionHint: diag.actionHint,
-      screen: "main",
-      tab: "main",
-      tsMs: Date.now(),
-      extra: extra || null,
-    });
-  }
-
-  useEffect(() => {
-    if (!hasHotkeyConfig) {
-      pushToast("SETTINGS INVALID: HOTKEY FLAGS MISSING", "danger");
-    }
-  }, [hasHotkeyConfig, pushToast]);
+  }, [acceptWorkflowView, client, pushToast]);
 
   useEffect(() => {
     (async () => {
       try {
-        const runtime = (await gateway.invoke("runtime_toolchain_status")) as RuntimeToolchainStatus;
-        if (!runtime.ready) {
-          pushToast("TOOLCHAIN NOT READY", "danger");
-        }
+        const runtime = await client.runtimeToolchainStatus() as RuntimeToolchainStatus;
+        if (!runtime.ready) pushToast("Local audio tools need repair", "danger");
       } catch {
-        // ignore
-      }
-      try {
-        const runtime = (await gateway.invoke("runtime_python_status")) as RuntimePythonStatus;
-        if (!runtime.ready) {
-          pushToast("PYTHON NOT READY", "danger");
-        }
-      } catch {
-        // ignore
-      }
-
-      try {
-        const rows = (await gateway.invoke("history_list", {
-          limit: 1,
-          beforeMs: null,
-        })) as HistoryItem[];
-        const h = rows[0];
-        if (!h) return;
-        const text = h.final_text || h.asr_text || "";
-        setLastText(text);
-        setLastMeta(new Date(h.created_at_ms).toLocaleString());
-      } catch {
-        // ignore
       }
     })();
-  }, []);
+  }, [client, pushToast]);
 
   useEffect(() => {
     let cancelled = false;
@@ -210,7 +140,6 @@ export function MainScreen({
         try {
           fn();
         } catch {
-          // ignore
         }
         return;
       }
@@ -218,355 +147,155 @@ export function MainScreen({
     };
 
     (async () => {
-      const unlistenDone = await gateway.listen<TaskDone>("task_done", async (done) => {
-        if (!done) return;
-        if (done.task_id !== activeTaskIdRef.current) return;
-        activeTaskIdRef.current = "";
-        setUi("idle");
-        setDiagnosticLine("");
-
-        const text = done.final_text || done.asr_text || "";
-        setLastText(text);
-        setLastMeta(new Date().toLocaleString());
-        const fromHotkey = hotkeySessionRef.current;
-        try {
-          if (fromHotkey && showOverlayRef.current) {
-            await overlaySet(false, "IDLE");
-            await waitMs(60);
+      const unlistenUiEvent = await client.listenUiEvent(async (ev) => {
+        if (!ev || ev.kind === "audio.level") return;
+        if (ev.kind === "transcription.partial") {
+          const partial = transcriptionPartialPayload(ev.payload);
+          if (partial?.text) setLiveTranscript(partial.text);
+          return;
+        }
+        if (ev.kind === "workflow.state") {
+          const next = workflowViewFromPayload(ev.payload);
+          if (next) {
+            await acceptWorkflowView(next, true);
           }
-          const exported = (await gateway.invoke("export_text", {
-            req: {
-              taskId: done.task_id,
-              text,
-            },
-          })) as ExportTextResult;
-
-          if (exported.auto_paste_attempted && !exported.auto_paste_ok) {
-            const code = exported.error_code || "E_EXPORT_PASTE_FAILED";
-            const detail = compactDetail(
-              [code, exported.error_message || "auto paste failed"].filter(Boolean).join(": "),
-            );
-            setDiagnosticLine(detail);
-            pushToastRef.current(`AUTO PASTE FAILED: ${code}`, "danger");
-            if (fromHotkey) {
-              overlayFlash("ERROR", 1400, code);
+          return;
+        }
+        if (isDisplayFailureEvent(ev.kind, ev.status)) return;
+        if (ev.kind === "workflow.task.failed") {
+          const diag = buildUiEventDiagnostic(ev, failureTitleFromStage(ev.stage));
+          if (isAsrFailureStage(ev.stage)) {
+            const transcriptId = optionalString(ev.taskId);
+            if (transcriptId) {
+              try {
+                const next = await client.workflowReportAsrFailed({
+                  transcriptId,
+                  code: optionalString(ev.errorCode) || "E_TRANSCRIBE_FAILED",
+                  message: ev.message,
+                });
+                await acceptWorkflowView(next, false);
+              } catch (err) {
+                const diag = buildDiagnostic(err, "WORKFLOW EVENT FAILED");
+                pushToast(diag.title, "danger");
+              }
             }
           }
-          else {
-            pushToastRef.current(exported.auto_paste_attempted ? "COPIED + PASTED" : "COPIED", "ok");
-            if (fromHotkey) {
-              overlayFlash(exported.auto_paste_attempted ? "PASTED" : "COPIED", 800);
-            }
-          }
-        } catch (err) {
-          const diag = buildDiagnostic(err, "EXPORT FAILED");
-          logDiagnosticBestEffort(diag, { source: "task_done_export" });
-          pushToastRef.current(diag.title, "danger");
-          setDiagnosticLine(toDiagnosticLine(diag));
-          if (fromHotkey) {
-            overlayFlash("ERROR", 1400, diag.code);
-          }
-        } finally {
-          if (fromHotkey) {
-            hotkeySessionRef.current = false;
-          }
+          pushToast(diag.title, "danger");
+          return;
         }
-        onHistoryChangedRef.current();
-      });
-      trackUnlisten(unlistenDone);
-
-      const unlistenEvent = await gateway.listen<TaskEvent>("task_event", (ev) => {
-        if (!ev) return;
-        if (ev.task_id !== activeTaskIdRef.current) return;
-
-        if (ev.status === "failed" && ev.stage !== "Rewrite") {
-          activeTaskIdRef.current = "";
-          setUi("idle");
-          const diag = buildTaskEventDiagnostic(ev, "TRANSCRIBE FAILED");
-          logDiagnosticBestEffort(diag, {
-            source: "task_event",
-            taskStage: ev.stage,
-            taskStatus: ev.status,
-            taskId: ev.task_id,
-          });
-          pushToastRef.current(diag.title, "danger");
-          setDiagnosticLine(toDiagnosticLine(diag));
-          if (hotkeySessionRef.current) {
-            overlayFlash("ERROR", 1400, diag.code);
-            hotkeySessionRef.current = false;
-          }
-        }
-        if (ev.status === "failed" && ev.stage === "Rewrite") {
-          const diag = buildTaskEventDiagnostic(ev, "REWRITE FAILED");
-          logDiagnosticBestEffort(diag, {
-            source: "task_event",
-            taskStage: ev.stage,
-            taskStatus: ev.status,
-            taskId: ev.task_id,
-          });
-          pushToastRef.current(diag.title, "danger");
-          setDiagnosticLine(toDiagnosticLine(diag));
+        if (ev.status === "failed") {
+          const diag = buildUiEventDiagnostic(ev, failureTitleFromStage(ev.stage));
+          pushToast(diag.title, "danger");
+          return;
         }
         if (ev.status === "cancelled") {
-          activeTaskIdRef.current = "";
-          setUi("idle");
-          pushToastRef.current("CANCELLED", "default");
-          setDiagnosticLine("");
-          if (hotkeySessionRef.current) {
-            overlayFlash("CANCELLED", 800);
-            hotkeySessionRef.current = false;
-          }
-        }
-      });
-      trackUnlisten(unlistenEvent);
-
-      const unlistenHotkey = await gateway.listen<HotkeyRecordEvent>("tv_hotkey_record", (hk) => {
-        if (!hasHotkeyConfigRef.current) {
-          pushToastRef.current("SETTINGS INVALID", "danger");
+          pushToast("CANCELLED", "default");
           return;
         }
-        if (!hotkeysEnabledRef.current) return;
-        if (!hk) return;
-
-        const cur = uiRef.current;
-        if (hk.kind === "ptt") {
-          if (hk.state === "Pressed" && cur === "idle") {
-            if (hk.capture_status !== "ok" || !hk.task_id) {
-              const captureCode = hk.capture_error_code || "E_HOTKEY_EVENT_INCOMPLETE";
-              const hint = hotkeyCaptureHint(captureCode);
-              const detail = compactDetail(
-                [captureCode, hk.capture_error_message || hint]
-                  .filter(Boolean)
-                  .join(": "),
-              );
-              void logUiEventBestEffort({
-                kind: "diagnostic",
-                code: captureCode,
-                title: hint,
-                detail,
-                actionHint: "CHECK TRACE.JSONL WITH THIS ERROR CODE",
-                screen: "main",
-                tab: "main",
-                triggerSource: "hotkey",
-                tsMs: Date.now(),
-                extra: {
-                  hotkeyKind: hk.kind,
-                  hotkeyState: hk.state,
-                  captureStatus: hk.capture_status || null,
-                  hasTaskId: !!hk.task_id,
-                  shortcut: hk.shortcut,
-                },
-              });
-              setDiagnosticLine(detail);
-              pushToastRef.current(hint, "danger");
-              void overlaySet(true, "ERROR", hint);
-              timer.setTimeout(() => {
-                void overlaySet(false, "IDLE");
-              }, 1200);
+        if (ev.kind === "transcription.empty") {
+          const transcriptId = optionalString(ev.taskId);
+          if (transcriptId) {
+            try {
+              const next = await client.workflowReportAsrEmpty({ transcriptId });
+              await acceptWorkflowView(next, false);
+            } catch (err) {
+              const diag = buildDiagnostic(err, "WORKFLOW EVENT FAILED");
+              pushToast(diag.title, "danger");
               return;
             }
-            void startRecording("hotkey", hk.task_id);
           }
-          if (hk.state === "Released" && cur === "recording") {
-            void stopAndTranscribe();
+          setLiveTranscript("");
+          pushToast("未检测到语音", "default");
+          return;
+        }
+        if (ev.kind === "transcription.completed") {
+          const completed = transcriptionCompletedPayload(ev.payload);
+          if (!completed) {
+            pushToast("Speech recognition failed", "danger");
+            return;
+          }
+          try {
+            const next = await client.workflowReportAsrCompleted({
+              transcriptId: completed.transcriptId,
+              text: completed.asrText,
+              metrics: completed.metrics,
+            });
+            await acceptWorkflowView(next, true);
+            setLiveTranscript("");
+            pushToast("Text ready", "ok");
+            onHistoryChanged();
+          } catch (err) {
+            const diag = buildDiagnostic(err, "WORKFLOW EVENT FAILED");
+            pushToast(diag.title, "danger");
           }
           return;
         }
-
-        // toggle
-        if (hk.state !== "Pressed") return;
-        if (cur === "idle") {
-          if (hk.capture_status !== "ok" || !hk.task_id) {
-            const captureCode = hk.capture_error_code || "E_HOTKEY_EVENT_INCOMPLETE";
-            const hint = hotkeyCaptureHint(captureCode);
-            const detail = compactDetail(
-              [captureCode, hk.capture_error_message || hint]
-                .filter(Boolean)
-                .join(": "),
-            );
-            void logUiEventBestEffort({
-              kind: "diagnostic",
-              code: captureCode,
-              title: hint,
-              detail,
-              actionHint: "CHECK TRACE.JSONL WITH THIS ERROR CODE",
-              screen: "main",
-              tab: "main",
-              triggerSource: "hotkey",
-              tsMs: Date.now(),
-              extra: {
-                hotkeyKind: hk.kind,
-                hotkeyState: hk.state,
-                captureStatus: hk.capture_status || null,
-                hasTaskId: !!hk.task_id,
-                shortcut: hk.shortcut,
-              },
-            });
-            setDiagnosticLine(detail);
-            pushToastRef.current(hint, "danger");
-            void overlaySet(true, "ERROR", hint);
-            timer.setTimeout(() => {
-              void overlaySet(false, "IDLE");
-            }, 1200);
-            return;
-          }
-          void startRecording("hotkey", hk.task_id);
+        if (ev.kind === "rewrite.completed") {
+          pushToast("Text improved", "ok");
+          onHistoryChanged();
+          return;
         }
-        else if (cur === "recording") void stopAndTranscribe();
-        else if (cur === "transcribing") void cancelActiveTask();
+        if (ev.kind === "insertion.completed") {
+          const inserted = insertionPayload(ev.payload);
+          if (inserted?.autoPasteAttempted && !inserted.autoPasteOk) {
+            pushToast("Text could not be pasted", "danger");
+          } else {
+            pushToast(inserted?.autoPasteAttempted ? "Text pasted" : "Text copied", "ok");
+          }
+        }
       });
-      trackUnlisten(unlistenHotkey);
-    })().catch(() => {
-      // ignore
+      trackUnlisten(unlistenUiEvent);
+    })().catch((err) => {
+      const diag = buildDiagnostic(err, "UI EVENT LISTEN FAILED");
+      pushToast(diag.title, "danger");
     });
+
     return () => {
       cancelled = true;
-      const staleRecordingId = backendRecordingIdRef.current;
-      backendRecordingIdRef.current = "";
-      if (staleRecordingId) {
-        void gateway.invoke("abort_backend_recording", { recordingId: staleRecordingId }).catch(() => {});
-      }
-      const staleTaskId = pendingTaskIdRef.current;
-      pendingTaskIdRef.current = null;
-      void abortPendingTaskBestEffort(staleTaskId);
       for (const fn of unlistenFns) {
         try {
           fn();
         } catch {
-          // ignore
         }
       }
     };
-  }, []);
+  }, [acceptWorkflowView, client, onHistoryChanged, pushToast]);
 
-  async function startRecording(source: "ui" | "hotkey" = "ui", taskId: string | null = null) {
-    hotkeySessionRef.current = source === "hotkey";
-    pendingTaskIdRef.current = source === "hotkey" ? taskId : null;
-    setDiagnosticLine("");
+  async function sendWorkflowCommand(command: WorkflowCommand) {
     try {
-      const rid = (await gateway.invoke("start_backend_recording")) as string;
-      backendRecordingIdRef.current = rid;
-      setUi("recording");
-      if (hotkeySessionRef.current) void overlaySet(true, "REC");
+      const next = await client.workflowCommand({ command });
+      await acceptWorkflowView(next, false);
+      if (command === "copyLast") {
+        pushToast("Text copied", "ok");
+      }
     } catch (err) {
-      const staleTaskId = pendingTaskIdRef.current;
-      void abortPendingTaskBestEffort(staleTaskId);
-      setUi("idle");
-      const diag = buildDiagnostic(err, "RECORDING FAILED");
-      logDiagnosticBestEffort(diag, { source: "start_backend_recording" });
-      pushToastRef.current(diag.title, "danger");
-      setDiagnosticLine(toDiagnosticLine(diag));
-      pendingTaskIdRef.current = null;
-      if (hotkeySessionRef.current) {
-        overlayFlash("ERROR", 1200, diag.code);
-        hotkeySessionRef.current = false;
+      const diag = buildDiagnostic(err, commandErrorTitle(command));
+      pushToast(diag.title, "danger");
+      try {
+        const refreshed = await client.workflowSnapshot();
+        await acceptWorkflowView(refreshed, false);
+      } catch (refreshErr) {
+        const refreshDiag = buildDiagnostic(refreshErr, "WORKFLOW STATE FAILED");
+        pushToast(refreshDiag.title, "danger");
       }
     }
   }
 
-  async function stopAndTranscribe() {
-    const rid = backendRecordingIdRef.current;
-    if (!rid) return;
-    setUi("transcribing");
-    let stopResult: StopBackendRecordingResult | null = null;
-    try {
-      if (hotkeySessionRef.current) void overlaySet(true, "TRANSCRIBING");
-      stopResult = (await gateway.invoke("stop_backend_recording", {
-        recordingId: rid,
-      })) as StopBackendRecordingResult;
-    } catch (err) {
-      void gateway.invoke("abort_backend_recording", { recordingId: rid }).catch(() => {});
-      backendRecordingIdRef.current = "";
-      const staleTaskId = pendingTaskIdRef.current;
-      void abortPendingTaskBestEffort(staleTaskId);
-      setUi("idle");
-      pendingTaskIdRef.current = null;
-      const diag = buildDiagnostic(err, "RECORDING FAILED");
-      logDiagnosticBestEffort(diag, { source: "stop_backend_recording" });
-      pushToastRef.current(diag.title, "danger");
-      setDiagnosticLine(toDiagnosticLine(diag));
-      if (hotkeySessionRef.current) {
-        overlayFlash("ERROR", 1200, diag.code);
-        hotkeySessionRef.current = false;
-      }
-      return;
-    }
-
-    if (!stopResult) return;
-    backendRecordingIdRef.current = "";
-    try {
-      const id = (await gateway.invoke("start_task", {
-        req: {
-          triggerSource: hotkeySessionRef.current ? "hotkey" : "ui",
-          recordMode: "recording_asset",
-          recordingAssetId: stopResult.recordingAssetId,
-          taskId: pendingTaskIdRef.current,
-        },
-      })) as string;
-      activeTaskIdRef.current = id;
-      pendingTaskIdRef.current = null;
-    } catch (err) {
-      const staleTaskId = pendingTaskIdRef.current;
-      void abortPendingTaskBestEffort(staleTaskId);
-      setUi("idle");
-      pendingTaskIdRef.current = null;
-      const diag = buildDiagnostic(err, "TRANSCRIBE FAILED");
-      logDiagnosticBestEffort(diag, { source: "start_task" });
-      pushToastRef.current(diag.title, "danger");
-      setDiagnosticLine(toDiagnosticLine(diag));
-      if (hotkeySessionRef.current) {
-        overlayFlash("ERROR", 1200, diag.code);
-        hotkeySessionRef.current = false;
-      }
-    }
-  }
-
-  async function cancelActiveTask() {
-    const id = activeTaskIdRef.current;
-    if (!id) return;
-    setUi("cancelling");
-    try {
-      await gateway.invoke("cancel_task", { taskId: id });
-      pushToastRef.current("CANCELLING...", "default");
-      setDiagnosticLine("");
-      if (hotkeySessionRef.current) void overlaySet(true, "CANCELLING");
-    } catch (err) {
-      setUi("transcribing");
-      const diag = buildDiagnostic(err, "CANCEL FAILED");
-      logDiagnosticBestEffort(diag, { source: "cancel_task", taskId: id });
-      pushToastRef.current(diag.title, "danger");
-      setDiagnosticLine(toDiagnosticLine(diag));
-      if (hotkeySessionRef.current) {
-        overlayFlash("ERROR", 1200, diag.code);
-        hotkeySessionRef.current = false;
-      }
-    }
-  }
-
-  async function onMainButtonClick() {
-    if (ui === "idle") return startRecording("ui");
-    if (ui === "recording") return stopAndTranscribe();
-    if (ui === "transcribing") return cancelActiveTask();
-  }
-
-  async function copyLast() {
-    if (!lastText.trim()) return;
-    try {
-      await clipboard.copyText(lastText);
-      pushToastRef.current("COPIED", "ok");
-    } catch {
-      pushToastRef.current("COPY FAILED", "danger");
-    }
-  }
+  const phase = workflowPhaseName(workflow.phase);
+  const hint = primaryActionLabel(workflow.primaryLabel || "START");
+  const streamText = phase === "recording" || phase === "transcribing" ? liveTranscript : "";
+  const statusLabel = phase === "idle" ? "" : hint;
+  const resultStatusLabel = statusLabelFromPhase(phase);
+  const diagnosticMessage = userMessageFromDiagnostic(workflow.diagnosticCode, workflow.diagnosticLine);
 
   return (
-    <div className="card mainCard">
-      <div className="mainCenter">
+    <div className="pageSurface mainSurface">
+      <div className="voiceDock">
         <button
           type="button"
-          className={`mainButton ${ui === "transcribing" || ui === "cancelling" ? "isBusy" : ""}`}
-          onClick={onMainButtonClick}
-          disabled={ui === "cancelling"}
+          className={`mainButton ${phase === "transcribing" ? "isBusy" : ""}`}
+          onClick={() => void sendWorkflowCommand("primary")}
+          disabled={workflow.primaryDisabled}
           onMouseEnter={() => setHover(true)}
           onMouseLeave={() => setHover(false)}
           onFocus={() => setHover(true)}
@@ -574,45 +303,117 @@ export function MainScreen({
           aria-label={hint}
           title={hint}
         >
-          {ui === "idle" ? (
-            <IconStart size={84} tone="accent" />
-          ) : ui === "recording" ? (
-            <IconStop size={84} tone="accent" />
-          ) : ui === "cancelling" ? (
-            <IconStop size={84} tone="accent" />
+          {phase === "idle" || phase === "transcribed" || phase === "rewritten" || phase === "cancelled" || phase === "failed" ? (
+            <IconStart size={42} tone="accent" />
+          ) : phase === "recording" ? (
+            <IconStop size={42} tone="accent" />
           ) : (
-            <IconTranscribing size={84} tone="accent" />
+            <IconTranscribing size={42} tone="accent" />
           )}
+          <span className="mainButtonText">{hint}</span>
         </button>
 
-        <div className="mainHint" aria-hidden={!hover && ui !== "transcribing"}>
-          {hover || ui === "transcribing" ? hint : ""}
+        <div className="mainHint">{hover ? hint : statusLabel}</div>
+      </div>
+
+      <div className="resultSheet">
+        <div className="resultHeader">
+          <div className="sectionTitle">current transcript</div>
+          <span
+            className={`resultStatusIcon status-${phase}`}
+            aria-label={resultStatusLabel}
+            title={resultStatusLabel}
+          />
         </div>
+
+        <div className="streamCanvas" aria-live="polite">
+          <div className={`streamText ${streamText.trim() ? "" : "isEmpty"}`}>
+            {streamText.trim() || "Start recording to see live transcription here."}
+          </div>
+        </div>
+
         <div
-          className={`mainDiag ${diagnosticLine ? "isVisible" : ""}`}
-          aria-hidden={!diagnosticLine}
+          className={`mainDiag ${workflow.diagnosticLine ? "isVisible" : ""}`}
+          aria-hidden={!workflow.diagnosticLine}
         >
-          {diagnosticLine || ""}
+          {diagnosticMessage || ""}
         </div>
-
-        <button
-          type="button"
-          className="lastLine"
-          onClick={copyLast}
-          disabled={!lastText.trim()}
-          onMouseEnter={() => setLastHover(true)}
-          onMouseLeave={() => setLastHover(false)}
-          title={lastText.trim() ? "COPY" : ""}
-        >
-          <span className="lastMeta">{lastMeta}</span>
-          <span className="lastText">
-            {lastText.trim() ? lastText : "-"}
-          </span>
-          <span className={`lastCopy ${lastHover && lastText.trim() ? "isOn" : ""}`}>
-            COPY
-          </span>
-        </button>
       </div>
     </div>
   );
+}
+
+function insertionPayload(payload: unknown): {
+  autoPasteAttempted: boolean;
+  autoPasteOk: boolean;
+  errorCode?: string | null;
+} | null {
+  if (!payload || typeof payload !== "object") return null;
+  const raw = payload as Record<string, unknown>;
+  return {
+    autoPasteAttempted: raw.autoPasteAttempted === true,
+    autoPasteOk: raw.autoPasteOk === true,
+    errorCode: optionalString(raw.errorCode),
+  };
+}
+
+function transcriptionPartialPayload(payload: unknown): { text: string } | null {
+  if (!payload || typeof payload !== "object") return null;
+  const raw = payload as Record<string, unknown>;
+  return { text: String(raw.text || "") };
+}
+
+function transcriptionCompletedPayload(payload: unknown): {
+  transcriptId: string;
+  asrText: string;
+  metrics: TranscriptionMetrics;
+} | null {
+  if (!payload || typeof payload !== "object") return null;
+  const raw = payload as Record<string, unknown>;
+  const transcriptId = optionalString(raw.transcriptId);
+  const asrText = String(raw.asrText || "");
+  const metrics = metricsPayload(raw.metrics);
+  if (!transcriptId || !asrText.trim() || !metrics) return null;
+  return { transcriptId, asrText, metrics };
+}
+
+function metricsPayload(payload: unknown): TranscriptionMetrics | null {
+  if (!payload || typeof payload !== "object") return null;
+  const raw = payload as Record<string, unknown>;
+  return {
+    rtf: optionalNumber(raw.rtf) || 0,
+    deviceUsed: String(raw.deviceUsed || ""),
+    preprocessMs: optionalNumber(raw.preprocessMs) || 0,
+    asrMs: optionalNumber(raw.asrMs) || 0,
+  };
+}
+
+function optionalString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function optionalNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function isDisplayFailureEvent(kind: string, status: string | null | undefined): boolean {
+  return kind === "transcription.stage" && status === "failed";
+}
+
+function isAsrFailureStage(stage: string | null | undefined): boolean {
+  return stage === "Record" || stage === "Transcribe";
+}
+
+function failureTitleFromStage(stage: string | null | undefined): string {
+  if (stage === "Rewrite") return "Text improvement failed";
+  if (stage === "Insert") return "Text could not be pasted";
+  return "Speech recognition failed";
+}
+
+function commandErrorTitle(command: WorkflowCommand): string {
+  if (command === "rewriteLast") return "Text improvement failed";
+  if (command === "insertLast") return "Text could not be pasted";
+  if (command === "copyLast") return "Copy failed";
+  if (command === "cancel") return "Cancel failed";
+  return "Recording action failed";
 }

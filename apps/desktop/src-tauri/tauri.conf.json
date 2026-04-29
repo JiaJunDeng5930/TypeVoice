@@ -13,8 +13,11 @@
     "windows": [
       {
         "title": "TypeVoice",
-        "width": 800,
-        "height": 600
+        "width": 1310,
+        "height": 879,
+        "minWidth": 1310,
+        "minHeight": 879,
+        "decorations": false
       }
     ],
     "security": {

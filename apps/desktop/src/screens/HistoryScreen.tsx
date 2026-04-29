@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  browserClipboard,
   defaultTauriGateway,
-  type ClipboardPort,
   type TauriGateway,
 } from "../infra/runtimePorts";
 import type { HistoryItem } from "../types";
@@ -11,7 +9,6 @@ type Props = {
   epoch: number;
   pushToast: (msg: string, tone?: "default" | "ok" | "danger") => void;
   gateway?: TauriGateway;
-  clipboard?: ClipboardPort;
 };
 
 const PAGE = 50;
@@ -20,7 +17,6 @@ export function HistoryScreen({
   epoch,
   pushToast,
   gateway = defaultTauriGateway,
-  clipboard = browserClipboard,
 }: Props) {
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -82,48 +78,54 @@ export function HistoryScreen({
     if (remaining < 140) loadMore();
   }
 
-  async function copyItem(h: HistoryItem) {
-    const text = (h.final_text || h.asr_text || "").trim();
-      if (!text) return;
+  async function copyHistoryText(text: string) {
+    const value = text.trim();
+    if (!value) return;
     try {
-      await clipboard.copyText(text);
-      pushToast("COPIED", "ok");
+      await navigator.clipboard.writeText(value);
+      pushToast("Copied", "ok");
     } catch {
-      pushToast("COPY FAILED", "danger");
+      pushToast("Copy failed", "danger");
     }
   }
 
   return (
-    <div className="card">
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <div className="sectionTitle" style={{ margin: 0 }}>
-          HISTORY
-        </div>
-        <div className="muted">{items.length}</div>
+    <div className="pageSurface historySurface">
+      <div className="pageHeader">
+        <div className="sectionTitle">history</div>
+        <div className="muted">{items.length} items</div>
       </div>
 
       <div className="historyScroller" ref={scrollerRef} onScroll={onScroll}>
-        {items.map((h) => (
-          <div key={h.task_id} className="historyRow" tabIndex={0}>
-            <div className="historyTime">
-              {new Date(h.created_at_ms).toLocaleString()}
-            </div>
-            <div className="historyPreview">
-              {(h.final_text || h.asr_text || "").trim() || "-"}
-            </div>
-            <button
-              type="button"
-              className="historyCopy"
-              onClick={() => copyItem(h)}
-              title="COPY"
+        {items.map((h) => {
+          const text = (h.final_text || h.asr_text || "").trim();
+          return (
+            <div
+              key={h.task_id}
+              className="historyRow"
+              role="button"
+              tabIndex={0}
+              title="Copy"
+              onClick={() => void copyHistoryText(text)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  void copyHistoryText(text);
+                }
+              }}
             >
-              COPY
-            </button>
-          </div>
-        ))}
+              <div className="historyTime">
+                {new Date(h.created_at_ms).toLocaleString()}
+              </div>
+              <div className="historyPreview">
+                {text || "-"}
+              </div>
+            </div>
+          );
+        })}
 
         <div className="historyFooter">
-          {loading ? "LOADING..." : hasMore ? "SCROLL" : "END"}
+          {loading ? "Loading..." : hasMore ? "Scroll" : "End"}
         </div>
       </div>
     </div>
