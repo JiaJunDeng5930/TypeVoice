@@ -94,6 +94,46 @@ type SettingsLineProps = {
   children?: ReactNode;
 };
 
+type SliderFieldProps = {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  suffix?: string;
+  onChange: (value: number) => void;
+};
+
+function SliderField({
+  label,
+  value,
+  min,
+  max,
+  step,
+  suffix = "",
+  onChange,
+}: SliderFieldProps) {
+  return (
+    <label className="sliderField">
+      <span>{label}</span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(event) => onChange(Number(event.currentTarget.value))}
+      />
+      <strong>{formatSliderValue(value, suffix)}</strong>
+    </label>
+  );
+}
+
+function formatSliderValue(value: number, suffix: string): string {
+  const display = Number.isInteger(value) ? String(value) : value.toFixed(2);
+  return `${display}${suffix}`;
+}
+
 function SettingsLine({
   title,
   detail,
@@ -133,6 +173,11 @@ function sensitiveSettingDisplay(status: ApiKeyStatus | null): string {
   return source ? `Configured via ${source}` : "Configured";
 }
 
+function clampNumber(value: number | null | undefined, fallback: number, min: number, max: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, value));
+}
+
 export function SettingsScreen({
   settings,
   savePatch,
@@ -167,6 +212,10 @@ export function SettingsScreen({
   const [hotkeysEnabled, setHotkeysEnabled] = useState(true);
   const [hotkeyPrimary, setHotkeyPrimary] = useState("Alt");
   const [hotkeysShowOverlay, setHotkeysShowOverlay] = useState(true);
+  const [overlayBackgroundOpacity, setOverlayBackgroundOpacity] = useState(0.78);
+  const [overlayFontSizePx, setOverlayFontSizePx] = useState(32);
+  const [overlayWidthPx, setOverlayWidthPx] = useState(960);
+  const [overlayHeightPx, setOverlayHeightPx] = useState(160);
   const [contextIncludeHistory, setContextIncludeHistory] = useState(true);
   const [contextIncludeClipboard, setContextIncludeClipboard] = useState(true);
   const [contextIncludePrevWindowMeta, setContextIncludePrevWindowMeta] = useState(true);
@@ -250,6 +299,12 @@ export function SettingsScreen({
     setHotkeysEnabled(settings.hotkeys_enabled);
     setHotkeyPrimary(normalizePrimaryHotkey(settings.hotkey_primary));
     setHotkeysShowOverlay(settings.hotkeys_show_overlay);
+    setOverlayBackgroundOpacity(
+      clampNumber(settings.overlay_background_opacity, 0.78, 0.35, 0.95),
+    );
+    setOverlayFontSizePx(clampNumber(settings.overlay_font_size_px, 32, 18, 56));
+    setOverlayWidthPx(clampNumber(settings.overlay_width_px, 960, 360, 1600));
+    setOverlayHeightPx(clampNumber(settings.overlay_height_px, 160, 72, 360));
 
     setContextIncludeHistory(settings.context_include_history ?? true);
     setContextIncludeClipboard(settings.context_include_clipboard ?? true);
@@ -503,6 +558,10 @@ export function SettingsScreen({
         hotkeys_enabled: hotkeysEnabled,
         hotkey_primary: normalizePrimaryHotkey(hotkeyPrimary),
         hotkeys_show_overlay: hotkeysShowOverlay,
+        overlay_background_opacity: overlayBackgroundOpacity,
+        overlay_font_size_px: Math.round(overlayFontSizePx),
+        overlay_width_px: Math.round(overlayWidthPx),
+        overlay_height_px: Math.round(overlayHeightPx),
       });
       pushToast("SAVED", "ok");
     } catch {
@@ -940,6 +999,41 @@ export function SettingsScreen({
                     label="overlay"
                   />
                 </div>
+                <SliderField
+                  label="Background Depth"
+                  min={0.35}
+                  max={0.95}
+                  step={0.01}
+                  value={overlayBackgroundOpacity}
+                  onChange={setOverlayBackgroundOpacity}
+                />
+                <SliderField
+                  label="Font Size"
+                  min={18}
+                  max={56}
+                  step={1}
+                  value={overlayFontSizePx}
+                  suffix="px"
+                  onChange={setOverlayFontSizePx}
+                />
+                <SliderField
+                  label="Width"
+                  min={360}
+                  max={1600}
+                  step={10}
+                  value={overlayWidthPx}
+                  suffix="px"
+                  onChange={setOverlayWidthPx}
+                />
+                <SliderField
+                  label="Height"
+                  min={72}
+                  max={360}
+                  step={4}
+                  value={overlayHeightPx}
+                  suffix="px"
+                  onChange={setOverlayHeightPx}
+                />
                 <div className="row" style={{ justifyContent: "flex-end" }}>
                   <PixelButton onClick={saveHotkeys} tone="accent">
                     Save

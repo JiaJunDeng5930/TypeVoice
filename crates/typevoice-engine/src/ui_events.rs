@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager};
 
 pub const UI_EVENT_CHANNEL: &str = "ui_event";
 
@@ -349,12 +349,62 @@ fn overlay_enabled() -> bool {
 fn apply_overlay_state(app: &AppHandle, state: OverlayState) {
     if let Some(w) = app.get_webview_window("overlay") {
         if state.visible {
+            let _ = apply_overlay_layout(&w);
             let _ = w.show();
         } else {
             let _ = w.hide();
         }
     }
     let _ = app.emit("tv_overlay_state", state);
+}
+
+fn apply_overlay_layout(w: &tauri::WebviewWindow) -> anyhow::Result<()> {
+    let dir = crate::data_dir::data_dir()?;
+    let s = crate::settings::load_settings_strict(&dir)?;
+    let config = crate::settings::resolve_overlay_config(&s);
+    let width = config.width_px as f64;
+    let height = config.height_px as f64;
+    w.set_size(LogicalSize::new(width, height))?;
+    w.set_position(resolved_overlay_position(w, &config))?;
+    Ok(())
+}
+
+fn resolved_overlay_position(
+    w: &tauri::WebviewWindow,
+    config: &crate::settings::OverlayConfigResolved,
+) -> LogicalPosition<f64> {
+    let width = config.width_px as f64;
+    let height = config.height_px as f64;
+    let Some((area_x, area_y, area_width, area_height)) = overlay_work_area(w) else {
+        return LogicalPosition::new(0.0, 0.0);
+    };
+    let (raw_x, raw_y) = match (config.position_x, config.position_y) {
+        (Some(x), Some(y)) => (x as f64, y as f64),
+        _ => (
+            area_x + (area_width - width) / 2.0,
+            area_y + area_height - height - 96.0,
+        ),
+    };
+    LogicalPosition::new(
+        raw_x.clamp(area_x, area_x + (area_width - width).max(0.0)),
+        raw_y.clamp(area_y, area_y + (area_height - height).max(0.0)),
+    )
+}
+
+fn overlay_work_area(w: &tauri::WebviewWindow) -> Option<(f64, f64, f64, f64)> {
+    let monitor = w
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| w.primary_monitor().ok().flatten())?;
+    let scale = monitor.scale_factor();
+    let area = monitor.work_area();
+    Some((
+        area.position.x as f64 / scale,
+        area.position.y as f64 / scale,
+        area.size.width as f64 / scale,
+        area.size.height as f64 / scale,
+    ))
 }
 
 fn now_ms() -> i64 {

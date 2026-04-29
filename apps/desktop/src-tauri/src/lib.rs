@@ -23,6 +23,7 @@ use settings::SettingsPatch;
 use task_manager::TaskManager;
 use tauri::Emitter;
 use tauri::Manager;
+use tauri::{LogicalPosition, LogicalSize};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct OverlayState {
@@ -35,6 +36,14 @@ struct OverlayState {
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct OverlayResizeRequest {
+    width: f64,
+    height: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct OverlayWorkArea {
+    x: f64,
+    y: f64,
     width: f64,
     height: f64,
 }
@@ -229,6 +238,7 @@ fn overlay_set_state(app: tauri::AppHandle, state: OverlayState) -> Result<(), S
 
     if let Some(w) = app.get_webview_window("overlay") {
         if state.visible {
+            apply_overlay_layout(&w)?;
             let _ = w.show();
         } else {
             let _ = w.hide();
@@ -243,13 +253,99 @@ fn overlay_set_state(app: tauri::AppHandle, state: OverlayState) -> Result<(), S
 
 #[tauri::command]
 fn overlay_resize(app: tauri::AppHandle, req: OverlayResizeRequest) -> Result<(), String> {
-    let width = req.width.clamp(320.0, 640.0);
-    let height = req.height.clamp(96.0, 520.0);
+    let width = req.width.clamp(360.0, 1600.0);
+    let height = req.height.clamp(72.0, 360.0);
     if let Some(w) = app.get_webview_window("overlay") {
-        w.set_size(tauri::LogicalSize::new(width, height))
+        w.set_size(LogicalSize::new(width, height))
             .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+#[tauri::command]
+fn overlay_config() -> Result<settings::OverlayConfigResolved, String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let s = settings::load_settings_strict(&dir).map_err(|e| e.to_string())?;
+    Ok(settings::resolve_overlay_config(&s))
+}
+
+#[tauri::command]
+fn overlay_save_position(app: tauri::AppHandle) -> Result<(), String> {
+    let Some(w) = app.get_webview_window("overlay") else {
+        return Ok(());
+    };
+    let pos = w.outer_position().map_err(|e| e.to_string())?;
+    let scale = overlay_scale_factor(&w);
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let mut s = settings::load_settings_strict(&dir).map_err(|e| e.to_string())?;
+    s.overlay_position_x = Some((pos.x as f64 / scale).round() as i64);
+    s.overlay_position_y = Some((pos.y as f64 / scale).round() as i64);
+    settings::save_settings(&dir, &s).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn apply_overlay_layout(w: &tauri::WebviewWindow) -> Result<(), String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let s = settings::load_settings_strict(&dir).map_err(|e| e.to_string())?;
+    let config = settings::resolve_overlay_config(&s);
+    let width = config.width_px as f64;
+    let height = config.height_px as f64;
+    w.set_size(LogicalSize::new(width, height))
+        .map_err(|e| e.to_string())?;
+    let pos = resolved_overlay_position(w, &config);
+    w.set_position(pos).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn resolved_overlay_position(
+    w: &tauri::WebviewWindow,
+    config: &settings::OverlayConfigResolved,
+) -> LogicalPosition<f64> {
+    let width = config.width_px as f64;
+    let height = config.height_px as f64;
+    let area = overlay_work_area(w).unwrap_or(OverlayWorkArea {
+        x: 0.0,
+        y: 0.0,
+        width,
+        height,
+    });
+    let (raw_x, raw_y) = match (config.position_x, config.position_y) {
+        (Some(x), Some(y)) => (x as f64, y as f64),
+        _ => (
+            area.x + (area.width - width) / 2.0,
+            area.y + area.height - height - 96.0,
+        ),
+    };
+    LogicalPosition::new(
+        raw_x.clamp(area.x, area.x + (area.width - width).max(0.0)),
+        raw_y.clamp(area.y, area.y + (area.height - height).max(0.0)),
+    )
+}
+
+fn overlay_work_area(w: &tauri::WebviewWindow) -> Option<OverlayWorkArea> {
+    let monitor = w
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| w.primary_monitor().ok().flatten())?;
+    let scale = monitor.scale_factor();
+    let area = monitor.work_area();
+    Some(OverlayWorkArea {
+        x: area.position.x as f64 / scale,
+        y: area.position.y as f64 / scale,
+        width: area.size.width as f64 / scale,
+        height: area.size.height as f64 / scale,
+    })
+}
+
+fn overlay_scale_factor(w: &tauri::WebviewWindow) -> f64 {
+    w.current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| w.primary_monitor().ok().flatten())
+        .map(|m| m.scale_factor())
+        .filter(|v| *v > 0.0)
+        .unwrap_or(1.0)
 }
 
 fn cmd_span(
@@ -809,6 +905,12 @@ fn update_settings(
         "hotkeys_enabled": patch.hotkeys_enabled.is_some(),
         "hotkey_primary": patch.hotkey_primary.is_some(),
         "hotkeys_show_overlay": patch.hotkeys_show_overlay.is_some(),
+        "overlay_background_opacity": patch.overlay_background_opacity.is_some(),
+        "overlay_font_size_px": patch.overlay_font_size_px.is_some(),
+        "overlay_width_px": patch.overlay_width_px.is_some(),
+        "overlay_height_px": patch.overlay_height_px.is_some(),
+        "overlay_position_x": patch.overlay_position_x.is_some(),
+        "overlay_position_y": patch.overlay_position_y.is_some(),
         "asr_preprocess_silence_trim_enabled": patch.asr_preprocess_silence_trim_enabled.is_some(),
         "asr_preprocess_silence_threshold_db": patch
             .asr_preprocess_silence_threshold_db
@@ -948,9 +1050,10 @@ pub fn run() {
                 tauri::WebviewUrl::App("index.html".into()),
             )
             .title("TypeVoice Overlay")
-            .inner_size(240.0, 64.0)
+            .inner_size(960.0, 160.0)
             .resizable(false)
             .decorations(false)
+            .transparent(true)
             .always_on_top(true)
             .visible(false)
             .skip_taskbar(true)
@@ -1060,8 +1163,10 @@ pub fn run() {
             update_settings,
             hotkeys::check_hotkey_available,
             runtime_toolchain_status,
+            overlay_config,
             overlay_set_state,
             overlay_resize,
+            overlay_save_position,
             ui_log_event,
         ])
         .run(ctx)

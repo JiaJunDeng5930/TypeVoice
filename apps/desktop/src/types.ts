@@ -164,6 +164,21 @@ export type Settings = {
   hotkeys_enabled?: boolean | null;
   hotkey_primary?: string | null;
   hotkeys_show_overlay?: boolean | null;
+  overlay_background_opacity?: number | null;
+  overlay_font_size_px?: number | null;
+  overlay_width_px?: number | null;
+  overlay_height_px?: number | null;
+  overlay_position_x?: number | null;
+  overlay_position_y?: number | null;
+};
+
+export type OverlayConfig = {
+  background_opacity: number;
+  font_size_px: number;
+  width_px: number;
+  height_px: number;
+  position_x?: number | null;
+  position_y?: number | null;
 };
 
 export type AudioCaptureDevice = {
