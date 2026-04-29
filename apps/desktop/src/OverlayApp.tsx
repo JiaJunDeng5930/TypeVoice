@@ -1,4 +1,6 @@
+import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { createBackendClient } from "./infra/backendClient";
 import { defaultTauriGateway } from "./infra/runtimePorts";
 import {
@@ -14,26 +16,33 @@ import {
   workflowPhaseName,
   workflowViewFromPayload,
 } from "./domain/workflowView";
-import type { Settings, WorkflowView } from "./types";
+import type { OverlayConfig, Settings, WorkflowView } from "./types";
 
 type GlobalHotkeyEvent = {
   action: "primary";
   tsMs?: number;
 };
 
-const OVERLAY_WIDTH = 420;
-const MIN_OVERLAY_HEIGHT = 112;
-const MAX_OVERLAY_HEIGHT = 520;
+const DEFAULT_OVERLAY_CONFIG: OverlayConfig = {
+  background_opacity: 0.78,
+  font_size_px: 32,
+  width_px: 960,
+  height_px: 160,
+  position_x: null,
+  position_y: null,
+};
 
 export default function OverlayApp() {
   const client = useMemo(() => createBackendClient(defaultTauriGateway), []);
   const [workflow, setWorkflow] = useState<WorkflowView>(EMPTY_WORKFLOW_VIEW);
   const [draftText, setDraftText] = useState("");
   const [liveText, setLiveText] = useState("");
-  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [config, setConfig] = useState<OverlayConfig>(DEFAULT_OVERLAY_CONFIG);
   const phaseRef = useRef("idle");
   const draftRef = useRef("");
   const liveRef = useRef("");
+  const dragActiveRef = useRef(false);
+  const savePositionTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     document.body.classList.add("isOverlay");
@@ -62,11 +71,14 @@ export default function OverlayApp() {
     [workflow],
   );
 
+  const subtitleText = displayText.trim() || overlayView.status;
+
   const acceptWorkflowView = useCallback((next: WorkflowView) => {
     const phase = workflowPhaseName(next.phase);
     const seedText = (next.lastText || next.lastAsrText).trim();
     setWorkflow(next);
     if (phase === "recording") {
+      setDraftText("");
       setLiveText("");
     }
     if (
@@ -84,17 +96,53 @@ export default function OverlayApp() {
     acceptWorkflowView(await client.workflowSnapshot());
   }, [acceptWorkflowView, client]);
 
-  const resizeOverlay = useCallback(() => {
-    const root = rootRef.current;
-    if (!root || !overlayView.visible) return;
-    const measured = Math.ceil(root.scrollHeight + 2);
-    const height = Math.max(MIN_OVERLAY_HEIGHT, Math.min(MAX_OVERLAY_HEIGHT, measured));
-    void client.overlayResize({ width: OVERLAY_WIDTH, height });
-  }, [client, overlayView.visible]);
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    void (async () => {
+      const next = await client.overlayConfig();
+      if (!cancelled) setConfig(next);
+      const stop = await defaultTauriGateway.listen<OverlayConfig>(
+        "tv_overlay_config_changed",
+        (updated) => {
+          if (!cancelled) setConfig(updated);
+        },
+      );
+      if (cancelled) {
+        stop();
+      } else {
+        unlisten = stop;
+      }
+    })();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [client]);
 
   useEffect(() => {
-    resizeOverlay();
-  }, [displayText, overlayView.detail, overlayView.status, resizeOverlay]);
+    if (!hasTauriRuntime()) return;
+    let unlisten: (() => void) | null = null;
+    const currentWindow = getCurrentWindow();
+    void (async () => {
+      unlisten = await currentWindow.onMoved(() => {
+        if (!dragActiveRef.current) return;
+        if (savePositionTimerRef.current !== null) {
+          window.clearTimeout(savePositionTimerRef.current);
+        }
+        savePositionTimerRef.current = window.setTimeout(() => {
+          savePositionTimerRef.current = null;
+          void client.overlaySavePosition();
+        }, 180);
+      });
+    })();
+    return () => {
+      if (savePositionTimerRef.current !== null) {
+        window.clearTimeout(savePositionTimerRef.current);
+      }
+      unlisten?.();
+    };
+  }, [client]);
 
   useEffect(() => {
     let cancelled = false;
@@ -227,27 +275,62 @@ export default function OverlayApp() {
     };
   }, [acceptWorkflowView, client, refreshWorkflowSnapshot, runPrimaryFromAlt]);
 
-  if (!overlayView.visible) {
-    return <div ref={rootRef} className="transcriptOverlayRoot isHidden" />;
-  }
+  return (
+    <SubtitleOverlay
+      config={config}
+      text={subtitleText}
+      visible={overlayView.visible}
+      onDragActivity={(active) => {
+        dragActiveRef.current = active;
+      }}
+    />
+  );
+}
+
+type SubtitleOverlayProps = {
+  config: OverlayConfig;
+  text: string;
+  visible: boolean;
+  onDragActivity: (active: boolean) => void;
+};
+
+function SubtitleOverlay({
+  config,
+  text,
+  visible,
+  onDragActivity,
+}: SubtitleOverlayProps) {
+  const style = {
+    "--subtitle-bg-opacity": String(config.background_opacity),
+    "--subtitle-font-size": `${config.font_size_px}px`,
+  } as CSSProperties;
 
   return (
-    <div ref={rootRef} className={`transcriptOverlayRoot tone-${overlayView.tone}`}>
-      <div className="transcriptOverlayTop">
-        <div className="transcriptOverlayBadge">{overlayView.status}</div>
-        {overlayView.detail ? <div className="transcriptOverlayDetail">{overlayView.detail}</div> : null}
+    <div
+      className={`subtitleOverlayRoot ${visible ? "" : "isHidden"}`}
+      data-tauri-drag-region
+      style={style}
+      onPointerDown={() => onDragActivity(true)}
+      onPointerUp={() => onDragActivity(false)}
+      onPointerCancel={() => onDragActivity(false)}
+      onPointerLeave={(event) => {
+        if (event.buttons === 0) onDragActivity(false);
+      }}
+    >
+      <div
+        className="subtitleOverlayText"
+        data-tauri-drag-region
+        role="status"
+        aria-live="polite"
+      >
+        {text}
       </div>
-      <textarea
-        className="transcriptOverlayEditor"
-        value={displayText}
-        spellCheck={false}
-        onChange={(event) => {
-          setDraftText(event.currentTarget.value);
-          setLiveText("");
-        }}
-      />
     </div>
   );
+}
+
+function hasTauriRuntime(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
 function optionalString(value: unknown): string | null {

@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition};
 
 pub const UI_EVENT_CHANNEL: &str = "ui_event";
 
@@ -349,12 +349,74 @@ fn overlay_enabled() -> bool {
 fn apply_overlay_state(app: &AppHandle, state: OverlayState) {
     if let Some(w) = app.get_webview_window("overlay") {
         if state.visible {
+            let _ = apply_overlay_layout(&w);
             let _ = w.show();
         } else {
             let _ = w.hide();
         }
     }
     let _ = app.emit("tv_overlay_state", state);
+}
+
+fn apply_overlay_layout(w: &tauri::WebviewWindow) -> anyhow::Result<()> {
+    let dir = crate::data_dir::data_dir()?;
+    let s = crate::settings::load_settings_strict(&dir)?;
+    let config = crate::settings::resolve_overlay_config(&s);
+    let width = config.width_px as f64;
+    let height = config.height_px as f64;
+    w.set_size(LogicalSize::new(width, height))?;
+    w.set_position(resolved_overlay_position(w, &config))?;
+    Ok(())
+}
+
+fn resolved_overlay_position(
+    w: &tauri::WebviewWindow,
+    config: &crate::settings::OverlayConfigResolved,
+) -> PhysicalPosition<i32> {
+    let pos = crate::settings::resolve_overlay_position(config, &overlay_work_areas(w));
+    PhysicalPosition::new(pos.x.round() as i32, pos.y.round() as i32)
+}
+
+fn overlay_work_areas(w: &tauri::WebviewWindow) -> Vec<crate::settings::OverlayWorkArea> {
+    let mut areas = Vec::new();
+    if let Some(monitor) = w
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| w.primary_monitor().ok().flatten())
+    {
+        push_overlay_work_area(&mut areas, &monitor);
+    }
+    if let Ok(monitors) = w.available_monitors() {
+        for monitor in monitors {
+            push_overlay_work_area(&mut areas, &monitor);
+        }
+    }
+    areas
+}
+
+fn push_overlay_work_area(
+    areas: &mut Vec<crate::settings::OverlayWorkArea>,
+    monitor: &tauri::Monitor,
+) {
+    let scale = monitor.scale_factor();
+    let area = monitor.work_area();
+    let next = crate::settings::OverlayWorkArea {
+        x: area.position.x as f64,
+        y: area.position.y as f64,
+        width: area.size.width as f64,
+        height: area.size.height as f64,
+        scale_factor: scale,
+    };
+    let exists = areas.iter().any(|area| {
+        area.x == next.x
+            && area.y == next.y
+            && area.width == next.width
+            && area.height == next.height
+    });
+    if !exists {
+        areas.push(next);
+    }
 }
 
 fn now_ms() -> i64 {
