@@ -452,7 +452,7 @@ fn select_overlay_work_area(
     };
     if let Some((x, y)) = saved {
         if let Some(area) = work_areas.iter().copied().find(|area| {
-            x >= area.x && x <= area.x + area.width && y >= area.y && y <= area.y + area.height
+            x >= area.x && x < area.x + area.width && y >= area.y && y < area.y + area.height
         }) {
             return Some(area);
         }
@@ -613,7 +613,7 @@ mod tests {
         let config = resolve_overlay_config(&Settings {
             overlay_width_px: Some(400),
             overlay_height_px: Some(120),
-            overlay_position_x: Some(2100),
+            overlay_position_x: Some(1920),
             overlay_position_y: Some(980),
             ..Default::default()
         });
@@ -634,7 +634,7 @@ mod tests {
 
         let pos = resolve_overlay_position(&config, &areas);
 
-        assert_eq!(pos.x, 2100.0);
+        assert_eq!(pos.x, 1920.0);
         assert_eq!(pos.y, 920.0);
     }
 
