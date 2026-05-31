@@ -7,7 +7,8 @@ use tauri::AppHandle;
 use crate::obs::Span;
 use crate::settings::Settings;
 
-pub const GLOBAL_HOTKEY_EVENT: &str = "tv_global_hotkey";
+#[cfg(windows)]
+const GLOBAL_HOTKEY_EVENT: &str = "tv_global_hotkey";
 #[cfg(any(windows, test))]
 const ALT_TAP_MAX_MS: i64 = 350;
 
