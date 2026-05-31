@@ -2,12 +2,13 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 
 use crate::obs::Span;
 use crate::settings::Settings;
 
 pub const GLOBAL_HOTKEY_EVENT: &str = "tv_global_hotkey";
+#[cfg(any(windows, test))]
 const ALT_TAP_MAX_MS: i64 = 350;
 
 #[derive(Debug, Clone)]
@@ -31,6 +32,7 @@ pub struct HotkeyAvailability {
     pub reason_code: Option<String>,
 }
 
+#[cfg(windows)]
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GlobalHotkeyEvent {
@@ -38,11 +40,13 @@ struct GlobalHotkeyEvent {
     ts_ms: i64,
 }
 
+#[cfg(any(windows, test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HotkeyAction {
     Primary,
 }
 
+#[cfg(windows)]
 impl HotkeyAction {
     fn as_str(self) -> &'static str {
         match self {
@@ -58,6 +62,7 @@ enum KeyKind {
     Ctrl,
     Shift,
     Function(u8),
+    #[cfg(any(windows, test))]
     Other,
 }
 
@@ -84,12 +89,14 @@ impl KeyKind {
     }
 }
 
+#[cfg(any(windows, test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum KeyState {
     Down,
     Up,
 }
 
+#[cfg(any(windows, test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct KeySignal {
     key: KeyKind,
@@ -97,6 +104,7 @@ struct KeySignal {
     ts_ms: i64,
 }
 
+#[cfg(any(windows, test))]
 #[derive(Debug, Default)]
 struct HotkeyDetector {
     primary: KeyKind,
@@ -104,6 +112,7 @@ struct HotkeyDetector {
     primary_clean: bool,
 }
 
+#[cfg(any(windows, test))]
 impl HotkeyDetector {
     fn new(primary: KeyKind) -> Self {
         Self {
@@ -250,6 +259,7 @@ impl PlatformKeyboardListener {
     #[cfg(windows)]
     fn start(app: AppHandle, primary: KeyKind) -> anyhow::Result<Self> {
         use std::sync::mpsc;
+        use tauri::Emitter;
         use windows_sys::Win32::System::Threading::GetCurrentThreadId;
         use windows_sys::Win32::UI::WindowsAndMessaging::{
             DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage,
@@ -437,6 +447,7 @@ impl PlatformKeyboardListener {
 static KEY_SIGNAL_SLOT: std::sync::OnceLock<Mutex<Option<std::sync::mpsc::Sender<KeySignal>>>> =
     std::sync::OnceLock::new();
 
+#[cfg(windows)]
 fn now_ms() -> i64 {
     match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
         Ok(dur) => dur.as_millis() as i64,
