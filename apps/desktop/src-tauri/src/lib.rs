@@ -23,6 +23,7 @@ use settings::SettingsPatch;
 use task_manager::TaskManager;
 use tauri::Emitter;
 use tauri::Manager;
+use tauri::{LogicalSize, PhysicalPosition};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct OverlayState {
@@ -229,6 +230,7 @@ fn overlay_set_state(app: tauri::AppHandle, state: OverlayState) -> Result<(), S
 
     if let Some(w) = app.get_webview_window("overlay") {
         if state.visible {
+            apply_overlay_layout(&w)?;
             let _ = w.show();
         } else {
             let _ = w.hide();
@@ -243,13 +245,101 @@ fn overlay_set_state(app: tauri::AppHandle, state: OverlayState) -> Result<(), S
 
 #[tauri::command]
 fn overlay_resize(app: tauri::AppHandle, req: OverlayResizeRequest) -> Result<(), String> {
-    let width = req.width.clamp(320.0, 640.0);
-    let height = req.height.clamp(96.0, 520.0);
+    let width = req.width.clamp(360.0, 1600.0);
+    let height = req.height.clamp(72.0, 360.0);
     if let Some(w) = app.get_webview_window("overlay") {
-        w.set_size(tauri::LogicalSize::new(width, height))
+        w.set_size(LogicalSize::new(width, height))
             .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+#[tauri::command]
+fn overlay_config() -> Result<settings::OverlayConfigResolved, String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let s = settings::load_settings_strict(&dir).map_err(|e| e.to_string())?;
+    Ok(settings::resolve_overlay_config(&s))
+}
+
+#[tauri::command]
+fn overlay_save_position(app: tauri::AppHandle) -> Result<(), String> {
+    let Some(w) = app.get_webview_window("overlay") else {
+        return Ok(());
+    };
+    let pos = w.outer_position().map_err(|e| e.to_string())?;
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let mut s = settings::load_settings_strict(&dir).map_err(|e| e.to_string())?;
+    s.overlay_position_x = Some(pos.x as i64);
+    s.overlay_position_y = Some(pos.y as i64);
+    settings::save_settings(&dir, &s).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn apply_overlay_layout(w: &tauri::WebviewWindow) -> Result<(), String> {
+    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
+    let s = settings::load_settings_strict(&dir).map_err(|e| e.to_string())?;
+    let config = settings::resolve_overlay_config(&s);
+    apply_overlay_layout_with_config(w, &config)
+}
+
+fn apply_overlay_layout_with_config(
+    w: &tauri::WebviewWindow,
+    config: &settings::OverlayConfigResolved,
+) -> Result<(), String> {
+    let width = config.width_px as f64;
+    let height = config.height_px as f64;
+    w.set_size(LogicalSize::new(width, height))
+        .map_err(|e| e.to_string())?;
+    let pos = resolved_overlay_position(w, &config);
+    w.set_position(pos).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn resolved_overlay_position(
+    w: &tauri::WebviewWindow,
+    config: &settings::OverlayConfigResolved,
+) -> PhysicalPosition<i32> {
+    let pos = settings::resolve_overlay_position(config, &overlay_work_areas(w));
+    PhysicalPosition::new(pos.x.round() as i32, pos.y.round() as i32)
+}
+
+fn overlay_work_areas(w: &tauri::WebviewWindow) -> Vec<settings::OverlayWorkArea> {
+    let mut areas = Vec::new();
+    if let Some(monitor) = w
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| w.primary_monitor().ok().flatten())
+    {
+        push_overlay_work_area(&mut areas, &monitor);
+    }
+    if let Ok(monitors) = w.available_monitors() {
+        for monitor in monitors {
+            push_overlay_work_area(&mut areas, &monitor);
+        }
+    }
+    areas
+}
+
+fn push_overlay_work_area(areas: &mut Vec<settings::OverlayWorkArea>, monitor: &tauri::Monitor) {
+    let scale = monitor.scale_factor();
+    let area = monitor.work_area();
+    let next = settings::OverlayWorkArea {
+        x: area.position.x as f64,
+        y: area.position.y as f64,
+        width: area.size.width as f64,
+        height: area.size.height as f64,
+        scale_factor: scale,
+    };
+    let exists = areas.iter().any(|area| {
+        area.x == next.x
+            && area.y == next.y
+            && area.width == next.width
+            && area.height == next.height
+    });
+    if !exists {
+        areas.push(next);
+    }
 }
 
 fn cmd_span(
@@ -809,6 +899,12 @@ fn update_settings(
         "hotkeys_enabled": patch.hotkeys_enabled.is_some(),
         "hotkey_primary": patch.hotkey_primary.is_some(),
         "hotkeys_show_overlay": patch.hotkeys_show_overlay.is_some(),
+        "overlay_background_opacity": patch.overlay_background_opacity.is_some(),
+        "overlay_font_size_px": patch.overlay_font_size_px.is_some(),
+        "overlay_width_px": patch.overlay_width_px.is_some(),
+        "overlay_height_px": patch.overlay_height_px.is_some(),
+        "overlay_position_x": patch.overlay_position_x.is_some(),
+        "overlay_position_y": patch.overlay_position_y.is_some(),
         "asr_preprocess_silence_trim_enabled": patch.asr_preprocess_silence_trim_enabled.is_some(),
         "asr_preprocess_silence_threshold_db": patch
             .asr_preprocess_silence_threshold_db
@@ -881,6 +977,11 @@ fn update_settings(
         span.err_anyhow("settings", "E_CMD_UPDATE_SETTINGS", &e, None);
         return Err(e.to_string());
     }
+    let overlay_config = settings::resolve_overlay_config(&next);
+    if let Some(w) = app.get_webview_window("overlay") {
+        let _ = apply_overlay_layout_with_config(&w, &overlay_config);
+    }
+    let _ = app.emit("tv_overlay_config_changed", overlay_config);
     // Hotkeys are also best-effort; failures are traced and should not break settings.
     hotkeys.apply_from_settings_best_effort(&app, &dir, &next);
     if cfg!(windows) && record_input_changed {
@@ -948,9 +1049,10 @@ pub fn run() {
                 tauri::WebviewUrl::App("index.html".into()),
             )
             .title("TypeVoice Overlay")
-            .inner_size(240.0, 64.0)
+            .inner_size(960.0, 160.0)
             .resizable(false)
             .decorations(false)
+            .transparent(true)
             .always_on_top(true)
             .visible(false)
             .skip_taskbar(true)
@@ -1060,8 +1162,10 @@ pub fn run() {
             update_settings,
             hotkeys::check_hotkey_available,
             runtime_toolchain_status,
+            overlay_config,
             overlay_set_state,
             overlay_resize,
+            overlay_save_position,
             ui_log_event,
         ])
         .run(ctx)

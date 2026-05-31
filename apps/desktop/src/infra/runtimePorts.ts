@@ -41,6 +41,12 @@ let previewSettings: Record<string, unknown> = {
   hotkeys_enabled: true,
   hotkey_primary: "Alt",
   hotkeys_show_overlay: true,
+  overlay_background_opacity: 0.78,
+  overlay_font_size_px: 32,
+  overlay_width_px: 960,
+  overlay_height_px: 160,
+  overlay_position_x: null,
+  overlay_position_y: null,
   context_include_history: true,
   context_include_clipboard: true,
   context_include_prev_window_meta: true,
@@ -153,6 +159,7 @@ const browserPreviewGateway: TauriGateway = {
       case "ui_log_event":
       case "overlay_set_state":
       case "overlay_resize":
+      case "overlay_save_position":
       case "set_llm_api_key":
       case "clear_llm_api_key":
       case "set_remote_asr_api_key":
@@ -172,6 +179,15 @@ const browserPreviewGateway: TauriGateway = {
         return {
           llm_base_url: previewSettings.llm_base_url,
           llm_model: previewSettings.llm_model,
+        } as T;
+      case "overlay_config":
+        return {
+          background_opacity: previewSettings.overlay_background_opacity,
+          font_size_px: previewSettings.overlay_font_size_px,
+          width_px: previewSettings.overlay_width_px,
+          height_px: previewSettings.overlay_height_px,
+          position_x: previewSettings.overlay_position_x,
+          position_y: previewSettings.overlay_position_y,
         } as T;
       case "update_settings": {
         const patch = (args?.patch || {}) as Record<string, unknown>;

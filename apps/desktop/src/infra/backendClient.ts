@@ -12,6 +12,7 @@ import type {
   WorkflowView,
   RewriteResult,
   InsertResult,
+  OverlayConfig,
 } from "../types";
 
 export type BackendClient = {
@@ -34,7 +35,9 @@ export type BackendClient = {
     detail?: string | null;
     ts_ms: number;
   }): Promise<void>;
+  overlayConfig(): Promise<OverlayConfig>;
   overlayResize(req: { width: number; height: number }): Promise<void>;
+  overlaySavePosition(): Promise<void>;
   logUiEvent(req: Record<string, unknown>): Promise<void>;
   runtimeToolchainStatus(): Promise<RuntimeToolchainStatus>;
   historyList(req: { limit: number; beforeMs?: number | null }): Promise<HistoryItem[]>;
@@ -76,8 +79,14 @@ export function createBackendClient(gateway: TauriGateway = defaultTauriGateway)
     overlaySetState(state) {
       return gateway.invoke<void>("overlay_set_state", { state });
     },
+    overlayConfig() {
+      return gateway.invoke<OverlayConfig>("overlay_config");
+    },
     overlayResize(req) {
       return gateway.invoke<void>("overlay_resize", { req });
+    },
+    overlaySavePosition() {
+      return gateway.invoke<void>("overlay_save_position");
     },
     logUiEvent(req) {
       return gateway.invoke<void>("ui_log_event", { req });
