@@ -115,9 +115,9 @@ impl ContextService {
                 win: crate::context_capture_windows::WindowsContext::new(),
                 hotkey_capture_registry: HashMap::new(),
             };
-            return Self {
+            Self {
                 inner: std::sync::Arc::new(std::sync::Mutex::new(inner)),
-            };
+            }
         }
         #[cfg(not(windows))]
         {
@@ -526,5 +526,11 @@ impl ContextService {
         _span_all.ok(None);
 
         snap
+    }
+}
+
+impl Default for ContextService {
+    fn default() -> Self {
+        Self::new()
     }
 }

@@ -479,7 +479,7 @@ impl TranscriptionService {
         let active = ActiveTranscription::new(task_id);
         let stale = {
             let mut g = self.inner.lock().unwrap();
-            std::mem::replace(&mut *g, Some(active.clone()))
+            (*g).replace(active.clone())
         };
         if let Some(stale) = stale {
             cancel_active_transcription(&stale, true);

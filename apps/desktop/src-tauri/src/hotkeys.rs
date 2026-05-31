@@ -51,8 +51,9 @@ impl HotkeyAction {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum KeyKind {
+    #[default]
     Alt,
     Ctrl,
     Shift,
@@ -123,9 +124,7 @@ impl HotkeyDetector {
                     None
                 }
                 KeyState::Up => {
-                    let Some(started_at) = self.primary_down_at_ms.take() else {
-                        return None;
-                    };
+                    let started_at = self.primary_down_at_ms.take()?;
                     let clean = self.primary_clean;
                     self.primary_clean = false;
                     if clean && signal.ts_ms.saturating_sub(started_at) <= ALT_TAP_MAX_MS {
@@ -140,12 +139,6 @@ impl HotkeyDetector {
             self.primary_clean = false;
         }
         None
-    }
-}
-
-impl Default for KeyKind {
-    fn default() -> Self {
-        Self::Alt
     }
 }
 
@@ -464,8 +457,10 @@ mod tests {
 
     #[test]
     fn config_requires_only_enabled_flag() {
-        let mut s = Settings::default();
-        s.hotkeys_enabled = Some(true);
+        let s = Settings {
+            hotkeys_enabled: Some(true),
+            ..Settings::default()
+        };
         let cfg = hotkey_config_from_settings(&s).expect("config");
         assert!(cfg.enabled);
         assert_eq!(cfg.primary, KeyKind::Alt);
@@ -473,9 +468,11 @@ mod tests {
 
     #[test]
     fn config_accepts_single_function_key() {
-        let mut s = Settings::default();
-        s.hotkeys_enabled = Some(true);
-        s.hotkey_primary = Some("F9".to_string());
+        let s = Settings {
+            hotkeys_enabled: Some(true),
+            hotkey_primary: Some("F9".to_string()),
+            ..Settings::default()
+        };
         let cfg = hotkey_config_from_settings(&s).expect("config");
         assert!(cfg.enabled);
         assert_eq!(cfg.primary, KeyKind::Function(9));
@@ -483,9 +480,11 @@ mod tests {
 
     #[test]
     fn config_rejects_combo_key() {
-        let mut s = Settings::default();
-        s.hotkeys_enabled = Some(true);
-        s.hotkey_primary = Some("Ctrl+Alt".to_string());
+        let s = Settings {
+            hotkeys_enabled: Some(true),
+            hotkey_primary: Some("Ctrl+Alt".to_string()),
+            ..Settings::default()
+        };
         assert!(hotkey_config_from_settings(&s).is_err());
     }
 

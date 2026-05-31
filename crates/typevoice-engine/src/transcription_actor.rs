@@ -556,13 +556,15 @@ fn run_doubao_session(
                             } else {
                                 obs::event_err(
                                     &dir,
-                                    Some(&task_id),
-                                    "Transcribe",
-                                    "ASR.doubao_ws_closed",
-                                    "asr",
-                                    "E_DOUBAO_ASR_WS_CLOSED",
+                                    obs::ErrorEvent {
+                                        task_id: Some(&task_id),
+                                        stage: "Transcribe",
+                                        step_id: "ASR.doubao_ws_closed",
+                                        kind: "asr",
+                                        code: "E_DOUBAO_ASR_WS_CLOSED",
+                                        ctx,
+                                    },
                                     "doubao websocket closed before finish",
-                                    ctx,
                                 );
                             }
                         }
@@ -657,13 +659,15 @@ fn run_doubao_session(
         if let Ok(dir) = data_dir::data_dir() {
             obs::event_err_anyhow(
                 &dir,
-                Some(&task_id_for_trace),
-                "Transcribe",
-                "ASR.doubao_session_failed",
-                "asr",
-                "E_DOUBAO_ASR_SESSION_FAILED",
+                obs::ErrorEvent {
+                    task_id: Some(&task_id_for_trace),
+                    stage: "Transcribe",
+                    step_id: "ASR.doubao_session_failed",
+                    kind: "asr",
+                    code: "E_DOUBAO_ASR_SESSION_FAILED",
+                    ctx: Some(serde_json::json!({"provider": "doubao"})),
+                },
                 err,
-                Some(serde_json::json!({"provider": "doubao"})),
             );
         }
     }
@@ -679,8 +683,8 @@ async fn recv_doubao_command(
 }
 
 fn text_delta(previous: &str, current: &str) -> String {
-    if current.starts_with(previous) {
-        return current[previous.len()..].to_string();
+    if let Some(delta) = current.strip_prefix(previous) {
+        return delta.to_string();
     }
     current.to_string()
 }
@@ -708,13 +712,15 @@ fn send_failed(mailbox: &UiEventMailbox, task_id: &str, code: &str, message: imp
     if let Ok(dir) = data_dir::data_dir() {
         obs::event_err(
             &dir,
-            Some(task_id),
-            "Transcribe",
-            "ASR.streaming_failed",
-            "asr",
-            code,
+            obs::ErrorEvent {
+                task_id: Some(task_id),
+                stage: "Transcribe",
+                step_id: "ASR.streaming_failed",
+                kind: "asr",
+                code,
+                ctx: None,
+            },
             &message,
-            None,
         );
     }
     mailbox.send(UiEvent::stage_with_elapsed(

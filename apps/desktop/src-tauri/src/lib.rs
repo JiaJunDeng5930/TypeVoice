@@ -202,13 +202,15 @@ fn ui_log_event(req: UiLogEventRequest) -> Result<(), String> {
 
     crate::obs::event_err(
         &dir,
-        task_id.as_deref(),
-        "UI",
-        step_id,
-        "ui",
-        &final_code,
+        crate::obs::ErrorEvent {
+            task_id: task_id.as_deref(),
+            stage: "UI",
+            step_id,
+            kind: "ui",
+            code: &final_code,
+            ctx: Some(serde_json::Value::Object(ctx)),
+        },
         &final_message,
-        Some(serde_json::Value::Object(ctx)),
     );
     Ok(())
 }
@@ -991,7 +993,7 @@ pub fn run() {
             let mut toolchain_ready = false;
             if let Ok(dir) = data_dir::data_dir() {
                 let runtime = app.state::<RuntimeState>();
-                let st = toolchain::initialize_and_verify(&app.handle(), &dir);
+                let st = toolchain::initialize_and_verify(app.handle(), &dir);
                 toolchain_ready = st.ready;
                 runtime.set_toolchain(st);
 
@@ -1027,7 +1029,7 @@ pub fn run() {
                 match settings::load_settings_strict(&dir) {
                     Ok(s) => {
                         let hk = app.state::<hotkeys::HotkeyManager>();
-                        hk.apply_from_settings_best_effort(&app.handle(), &dir, &s);
+                        hk.apply_from_settings_best_effort(app.handle(), &dir, &s);
                     }
                     Err(e) => {
                         obs::event(

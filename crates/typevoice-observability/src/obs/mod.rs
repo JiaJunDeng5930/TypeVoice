@@ -6,7 +6,7 @@ pub mod startup;
 pub mod trace;
 mod writer;
 
-pub use trace::{event, event_err, event_err_anyhow, Span};
+pub use trace::{event, event_err, event_err_anyhow, ErrorEvent, Span};
 
 pub(crate) fn runtime_data_dir() -> Option<std::path::PathBuf> {
     if let Ok(p) = std::env::var("TYPEVOICE_DATA_DIR") {

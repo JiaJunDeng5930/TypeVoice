@@ -46,12 +46,12 @@ pub async fn auto_paste_text(text: &str) -> Result<(), ExportError> {
 
     #[cfg(windows)]
     {
-        return windows::auto_input_text(text);
+        windows::auto_input_text(text)
     }
 
     #[cfg(target_os = "linux")]
     {
-        return linux::auto_input_text(text).await;
+        linux::auto_input_text(text).await
     }
 
     #[cfg(not(any(windows, target_os = "linux")))]
@@ -66,7 +66,7 @@ pub async fn auto_paste_text(text: &str) -> Result<(), ExportError> {
 pub fn focus_window_best_effort(hwnd: Option<isize>) -> bool {
     #[cfg(windows)]
     {
-        return windows::focus_window_best_effort(hwnd);
+        windows::focus_window_best_effort(hwnd)
     }
 
     #[cfg(not(windows))]

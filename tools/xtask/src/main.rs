@@ -49,7 +49,7 @@ enum Commands {
         #[command(subcommand)]
         command: RunCommand,
     },
-    LlmPromptLab(LlmPromptLabArgs),
+    LlmPromptLab(Box<LlmPromptLabArgs>),
 }
 
 #[derive(Subcommand)]
@@ -256,7 +256,7 @@ fn run() -> Result<()> {
         Commands::Run { command } => match command {
             RunCommand::Latest => run_latest(),
         },
-        Commands::LlmPromptLab(args) => run_llm_prompt_lab(args),
+        Commands::LlmPromptLab(args) => run_llm_prompt_lab(*args),
     }
 }
 
@@ -1164,7 +1164,7 @@ fn start_tauri_dev_and_wait(root: &Path, desktop_dir: &Path, label: &str) -> Res
         "INFO: starting tauri dev with logs redirected to {}",
         log_file.display()
     );
-    let dev_pid = start_tauri_dev_background(&desktop_dir, &log_file)?;
+    let dev_pid = start_tauri_dev_background(desktop_dir, &log_file)?;
 
     println!(
         "INFO: waiting for runtime process to appear: {}",

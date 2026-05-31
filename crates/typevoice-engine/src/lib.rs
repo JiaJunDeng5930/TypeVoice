@@ -38,3 +38,9 @@ impl RuntimeState {
         self.toolchain.lock().unwrap().clone()
     }
 }
+
+impl Default for RuntimeState {
+    fn default() -> Self {
+        Self::new()
+    }
+}

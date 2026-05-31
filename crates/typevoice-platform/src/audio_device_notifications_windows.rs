@@ -52,6 +52,12 @@ impl AudioDeviceNotificationState {
     }
 }
 
+impl Default for AudioDeviceNotificationState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(windows)]
 struct AudioDeviceNotificationGuard {
     stop_tx: std::sync::mpsc::Sender<()>,
@@ -210,43 +216,52 @@ mod imp {
             pwstrdeviceid: &PCWSTR,
             dwnewstate: DEVICE_STATE,
         ) -> windows::core::Result<()> {
+            let endpoint_id = pcwstr_to_string(pwstrdeviceid);
             emit_event(
                 &self.data_dir,
                 &self.cache,
-                "device_state_changed",
-                None,
-                None,
-                pcwstr_to_string(pwstrdeviceid).as_str(),
-                Some(dwnewstate.0),
-                true,
+                DeviceEvent {
+                    event_type: "device_state_changed",
+                    flow: None,
+                    role: None,
+                    endpoint_id: &endpoint_id,
+                    state: Some(dwnewstate.0),
+                    should_refresh: true,
+                },
             );
             Ok(())
         }
 
         fn OnDeviceAdded(&self, pwstrdeviceid: &PCWSTR) -> windows::core::Result<()> {
+            let endpoint_id = pcwstr_to_string(pwstrdeviceid);
             emit_event(
                 &self.data_dir,
                 &self.cache,
-                "device_added",
-                None,
-                None,
-                pcwstr_to_string(pwstrdeviceid).as_str(),
-                None,
-                true,
+                DeviceEvent {
+                    event_type: "device_added",
+                    flow: None,
+                    role: None,
+                    endpoint_id: &endpoint_id,
+                    state: None,
+                    should_refresh: true,
+                },
             );
             Ok(())
         }
 
         fn OnDeviceRemoved(&self, pwstrdeviceid: &PCWSTR) -> windows::core::Result<()> {
+            let endpoint_id = pcwstr_to_string(pwstrdeviceid);
             emit_event(
                 &self.data_dir,
                 &self.cache,
-                "device_removed",
-                None,
-                None,
-                pcwstr_to_string(pwstrdeviceid).as_str(),
-                None,
-                true,
+                DeviceEvent {
+                    event_type: "device_removed",
+                    flow: None,
+                    role: None,
+                    endpoint_id: &endpoint_id,
+                    state: None,
+                    should_refresh: true,
+                },
             );
             Ok(())
         }
@@ -258,15 +273,18 @@ mod imp {
             pwstrdefaultdeviceid: &PCWSTR,
         ) -> windows::core::Result<()> {
             let refresh = flow == eCapture;
+            let endpoint_id = pcwstr_to_string(pwstrdefaultdeviceid);
             emit_event(
                 &self.data_dir,
                 &self.cache,
-                "default_device_changed",
-                Some(flow),
-                Some(role),
-                pcwstr_to_string(pwstrdefaultdeviceid).as_str(),
-                None,
-                refresh,
+                DeviceEvent {
+                    event_type: "default_device_changed",
+                    flow: Some(flow),
+                    role: Some(role),
+                    endpoint_id: &endpoint_id,
+                    state: None,
+                    should_refresh: refresh,
+                },
             );
             Ok(())
         }
@@ -276,15 +294,18 @@ mod imp {
             pwstrdeviceid: &PCWSTR,
             _key: &PROPERTYKEY,
         ) -> windows::core::Result<()> {
+            let endpoint_id = pcwstr_to_string(pwstrdeviceid);
             emit_event(
                 &self.data_dir,
                 &self.cache,
-                "property_value_changed",
-                None,
-                None,
-                pcwstr_to_string(pwstrdeviceid).as_str(),
-                None,
-                true,
+                DeviceEvent {
+                    event_type: "property_value_changed",
+                    flow: None,
+                    role: None,
+                    endpoint_id: &endpoint_id,
+                    state: None,
+                    should_refresh: true,
+                },
             );
             Ok(())
         }
@@ -294,16 +315,16 @@ mod imp {
         unsafe { v.to_string().unwrap_or_default() }
     }
 
-    fn emit_event(
-        data_dir: &Path,
-        cache: &RecordInputCacheState,
-        event_type: &str,
+    struct DeviceEvent<'a> {
+        event_type: &'a str,
         flow: Option<EDataFlow>,
         role: Option<ERole>,
-        endpoint_id: &str,
+        endpoint_id: &'a str,
         state: Option<u32>,
         should_refresh: bool,
-    ) {
+    }
+
+    fn emit_event(data_dir: &Path, cache: &RecordInputCacheState, event: DeviceEvent<'_>) {
         crate::obs::event(
             data_dir,
             None,
@@ -311,23 +332,29 @@ mod imp {
             "APP.audio_device_event",
             "ok",
             Some(json!({
-                "event_type": event_type,
-                "flow": flow.map(flow_label),
-                "role": role.map(role_label),
-                "endpoint_id": endpoint_id,
-                "state": state,
-                "refresh_requested": should_refresh,
+                "event_type": event.event_type,
+                "flow": event.flow.map(flow_label),
+                "role": event.role.map(role_label),
+                "endpoint_id": event.endpoint_id,
+                "state": event.state,
+                "refresh_requested": event.should_refresh,
             })),
         );
 
-        if should_refresh {
+        if event.should_refresh {
             cache.request_refresh(
                 data_dir.to_path_buf(),
                 format!(
                     "device_event:{}:{}:{}",
-                    event_type,
-                    flow.map(flow_label).unwrap_or_else(|| "none".to_string()),
-                    role.map(role_label).unwrap_or_else(|| "none".to_string())
+                    event.event_type,
+                    event
+                        .flow
+                        .map(flow_label)
+                        .unwrap_or_else(|| "none".to_string()),
+                    event
+                        .role
+                        .map(role_label)
+                        .unwrap_or_else(|| "none".to_string())
                 ),
             );
         }
@@ -335,27 +362,25 @@ mod imp {
 
     fn flow_label(flow: EDataFlow) -> String {
         if flow == eCapture {
-            return "capture".to_string();
+            "capture".to_string()
+        } else if flow == eRender {
+            "render".to_string()
+        } else if flow == eAll {
+            "all".to_string()
+        } else {
+            format!("raw_{}", flow.0)
         }
-        if flow == eRender {
-            return "render".to_string();
-        }
-        if flow == eAll {
-            return "all".to_string();
-        }
-        format!("raw_{}", flow.0)
     }
 
     fn role_label(role: ERole) -> String {
         if role == eCommunications {
-            return "communications".to_string();
+            "communications".to_string()
+        } else if role == eConsole {
+            "console".to_string()
+        } else if role == eMultimedia {
+            "multimedia".to_string()
+        } else {
+            format!("raw_{}", role.0)
         }
-        if role == eConsole {
-            return "console".to_string();
-        }
-        if role == eMultimedia {
-            return "multimedia".to_string();
-        }
-        format!("raw_{}", role.0)
     }
 }

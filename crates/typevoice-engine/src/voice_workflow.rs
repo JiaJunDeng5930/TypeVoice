@@ -89,6 +89,15 @@ pub struct WorkflowCommandOutcome {
     pub task: Option<WorkflowTaskRequest>,
 }
 
+pub struct WorkflowCommandDeps<'a> {
+    pub runtime: &'a RuntimeState,
+    pub audio: &'a RecordingRegistry,
+    pub transcriber: &'a TranscriptionService,
+    pub streaming_actor: &'a TranscriptionActor,
+    pub mailbox: &'a UiEventMailbox,
+    pub record_input_cache: &'a RecordInputCacheState,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowView {
@@ -325,45 +334,34 @@ impl VoiceWorkflow {
 
     pub async fn run_command(
         &self,
-        runtime: &RuntimeState,
-        audio: &RecordingRegistry,
-        transcriber: &TranscriptionService,
-        streaming_actor: &TranscriptionActor,
-        mailbox: &UiEventMailbox,
-        record_input_cache: &RecordInputCacheState,
-        task_state: &TaskManager,
+        deps: WorkflowCommandDeps<'_>,
         req: WorkflowCommandRequest,
     ) -> WorkflowResult<WorkflowCommandOutcome> {
         let result = match req.command {
             WorkflowCommand::Primary => {
-                self.run_primary(
-                    runtime,
-                    audio,
-                    transcriber,
-                    streaming_actor,
-                    mailbox,
-                    record_input_cache,
-                    normalize_optional_task_id(req.task_id)?,
-                )
-                .await
+                self.run_primary(&deps, normalize_optional_task_id(req.task_id)?)
+                    .await
             }
-            WorkflowCommand::RewriteLast => self.run_rewrite_last(mailbox, task_state).await,
-            WorkflowCommand::InsertLast => self.run_insert_last(mailbox).await,
+            WorkflowCommand::RewriteLast => self.run_rewrite_last().await,
+            WorkflowCommand::InsertLast => self.run_insert_last().await,
             WorkflowCommand::CopyLast => self.run_copy_last().map(|()| None),
-            WorkflowCommand::Cancel => {
-                self.run_cancel(audio, transcriber, streaming_actor, mailbox)
-            }
+            WorkflowCommand::Cancel => self.run_cancel(
+                deps.audio,
+                deps.transcriber,
+                deps.streaming_actor,
+                deps.mailbox,
+            ),
         };
 
         match result {
             Ok(task) => {
                 let view = self.view();
-                self.emit_state(mailbox);
+                self.emit_state(deps.mailbox);
                 Ok(WorkflowCommandOutcome { view, task })
             }
             Err(err) => {
                 self.remember_error(err.clone());
-                self.emit_state(mailbox);
+                self.emit_state(deps.mailbox);
                 Err(err)
             }
         }
@@ -390,23 +388,18 @@ impl VoiceWorkflow {
 
     async fn run_primary(
         &self,
-        runtime: &RuntimeState,
-        audio: &RecordingRegistry,
-        _transcriber: &TranscriptionService,
-        streaming_actor: &TranscriptionActor,
-        mailbox: &UiEventMailbox,
-        record_input_cache: &RecordInputCacheState,
+        deps: &WorkflowCommandDeps<'_>,
         task_id: Option<String>,
     ) -> WorkflowResult<Option<WorkflowTaskRequest>> {
         let snapshot = self.snapshot();
         match snapshot.phase {
             WorkflowPhase::Idle | WorkflowPhase::Cancelled | WorkflowPhase::Failed => {
                 self.start_record_transcribe(
-                    runtime,
-                    audio,
-                    streaming_actor,
-                    mailbox,
-                    record_input_cache,
+                    deps.runtime,
+                    deps.audio,
+                    deps.streaming_actor,
+                    deps.mailbox,
+                    deps.record_input_cache,
                     task_id,
                 )?;
                 Ok(None)
@@ -416,7 +409,7 @@ impl VoiceWorkflow {
                     WorkflowError::new("E_WORKFLOW_SESSION_MISSING", "recording session missing")
                 })?;
                 if session.streaming_transcription {
-                    self.stop_streaming_record_transcribe(audio, mailbox)?;
+                    self.stop_streaming_record_transcribe(deps.audio, deps.mailbox)?;
                     Ok(None)
                 } else {
                     self.prepare_stop_record_transcribe().map(Some)
@@ -430,11 +423,7 @@ impl VoiceWorkflow {
         }
     }
 
-    async fn run_rewrite_last(
-        &self,
-        _mailbox: &UiEventMailbox,
-        _task_state: &TaskManager,
-    ) -> WorkflowResult<Option<WorkflowTaskRequest>> {
+    async fn run_rewrite_last(&self) -> WorkflowResult<Option<WorkflowTaskRequest>> {
         let current = self.current_action_text()?;
         let req = RewriteTextRequest {
             transcript_id: current.transcript_id.clone(),
@@ -449,10 +438,7 @@ impl VoiceWorkflow {
         }))
     }
 
-    async fn run_insert_last(
-        &self,
-        _mailbox: &UiEventMailbox,
-    ) -> WorkflowResult<Option<WorkflowTaskRequest>> {
+    async fn run_insert_last(&self) -> WorkflowResult<Option<WorkflowTaskRequest>> {
         let current = self.current_action_text()?;
         let req = InsertTextRequest {
             transcript_id: Some(current.transcript_id.clone()),
@@ -2198,16 +2184,18 @@ fn log_workflow_error(task_id: Option<&str>, step_id: &str, err: &WorkflowError)
     if let Ok(dir) = data_dir::data_dir() {
         crate::obs::event_err(
             &dir,
-            task_id,
-            "Workflow",
-            step_id,
-            "workflow",
-            &err.code,
+            crate::obs::ErrorEvent {
+                task_id,
+                stage: "Workflow",
+                step_id,
+                kind: "workflow",
+                code: &err.code,
+                ctx: Some(serde_json::json!({
+                    "raw": err.raw_message(),
+                    "rendered": err.render(),
+                })),
+            },
             &err.message,
-            Some(serde_json::json!({
-                "raw": err.raw_message(),
-                "rendered": err.render(),
-            })),
         );
     }
 }
@@ -2588,15 +2576,13 @@ mod tests {
 
     #[tokio::test]
     async fn rewrite_last_command_starts_rewrite_task() {
-        let (mailbox, _rx) = UiEventMailbox::for_test();
-        let task_state = TaskManager::new();
         let workflow = VoiceWorkflow::new();
         workflow
             .open_transcribed_session_for_test("task-1", "asr text")
             .expect("transcribed");
 
         let task = workflow
-            .run_rewrite_last(&mailbox, &task_state)
+            .run_rewrite_last()
             .await
             .expect("rewrite command is accepted")
             .expect("rewrite task is returned");
@@ -2619,14 +2605,13 @@ mod tests {
 
     #[tokio::test]
     async fn insert_last_command_starts_insert_task() {
-        let (mailbox, _rx) = UiEventMailbox::for_test();
         let workflow = VoiceWorkflow::new();
         workflow
             .open_transcribed_session_for_test("task-1", "asr text")
             .expect("transcribed");
 
         let task = workflow
-            .run_insert_last(&mailbox)
+            .run_insert_last()
             .await
             .expect("insert command is accepted")
             .expect("insert task is returned");
