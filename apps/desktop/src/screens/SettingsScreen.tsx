@@ -84,6 +84,11 @@ type EffectiveSettingsValues = {
   llm_model?: string | null;
 };
 
+type ToastActionMessages = {
+  success: string;
+  failure: string;
+};
+
 type SettingsLineProps = {
   title: string;
   detail?: string;
@@ -389,6 +394,32 @@ export function SettingsScreen({
     }
   }
 
+  async function runToastAction(
+    action: () => Promise<void>,
+    messages: ToastActionMessages,
+  ): Promise<boolean> {
+    try {
+      await action();
+      pushToast(messages.success, "ok");
+      return true;
+    } catch {
+      pushToast(messages.failure, "danger");
+      return false;
+    }
+  }
+
+  async function persistSettingsPatch(
+    patch: Record<string, unknown>,
+    successMessage = "SAVED",
+  ): Promise<boolean> {
+    return runToastAction(
+      async () => {
+        await savePatch(patch);
+      },
+      { success: successMessage, failure: "SAVE FAILED" },
+    );
+  }
+
   async function saveAsr() {
     const provider = asrProvider === "remote" ? "remote" : "doubao";
     const concurrencyNum = Number(remoteAsrConcurrency);
@@ -401,17 +432,14 @@ export function SettingsScreen({
       return;
     }
     const normalizedConcurrency = Math.max(1, Math.min(16, Math.round(concurrencyNum)));
-    try {
-      await savePatch({
-        asr_provider: provider,
-        remote_asr_url: remoteAsrUrl.trim() ? remoteAsrUrl.trim() : null,
-        remote_asr_model: remoteAsrModel.trim() ? remoteAsrModel.trim() : null,
-        remote_asr_concurrency: normalizedConcurrency,
-      });
+    const saved = await persistSettingsPatch({
+      asr_provider: provider,
+      remote_asr_url: remoteAsrUrl.trim() ? remoteAsrUrl.trim() : null,
+      remote_asr_model: remoteAsrModel.trim() ? remoteAsrModel.trim() : null,
+      remote_asr_concurrency: normalizedConcurrency,
+    });
+    if (saved) {
       setRemoteAsrConcurrency(String(normalizedConcurrency));
-      pushToast("SAVED", "ok");
-    } catch {
-      pushToast("SAVE FAILED", "danger");
     }
   }
 
@@ -430,24 +458,21 @@ export function SettingsScreen({
     const selected = audioCaptureDevices.find(
       (v) => v.endpoint_id === recordFixedEndpointId.trim(),
     );
-    try {
-      await savePatch({
-        record_input_strategy: strategy,
-        record_follow_default_role: role,
-        record_fixed_endpoint_id:
-          strategy === "fixed_device" ? recordFixedEndpointId.trim() : null,
-        record_fixed_friendly_name:
-          strategy === "fixed_device"
-            ? (selected?.friendly_name || recordFixedFriendlyName || "").trim() || null
-            : null,
-      });
+    const saved = await persistSettingsPatch({
+      record_input_strategy: strategy,
+      record_follow_default_role: role,
+      record_fixed_endpoint_id:
+        strategy === "fixed_device" ? recordFixedEndpointId.trim() : null,
+      record_fixed_friendly_name:
+        strategy === "fixed_device"
+          ? (selected?.friendly_name || recordFixedFriendlyName || "").trim() || null
+          : null,
+    });
+    if (saved) {
       if (selected) {
         setRecordFixedFriendlyName(selected.friendly_name);
       }
-      pushToast("SAVED", "ok");
       await refreshAudioCaptureDevices();
-    } catch {
-      pushToast("SAVE FAILED", "danger");
     }
   }
 
@@ -467,34 +492,24 @@ export function SettingsScreen({
       pushToast("TRIM MS SHOULD BE >= 0", "danger");
       return;
     }
-    try {
-      await savePatch({
-        asr_preprocess_silence_trim_enabled: asrPreprocessTrimEnabled,
-        asr_preprocess_silence_threshold_db: thresholdDb,
-        asr_preprocess_silence_start_ms: Number.isInteger(trimStartMs)
-          ? trimStartMs
-          : Math.round(trimStartMs),
-        asr_preprocess_silence_end_ms: Number.isInteger(trimEndMs)
-          ? trimEndMs
-          : Math.round(trimEndMs),
-      });
-      pushToast("SAVED", "ok");
-    } catch {
-      pushToast("SAVE FAILED", "danger");
-    }
+    await persistSettingsPatch({
+      asr_preprocess_silence_trim_enabled: asrPreprocessTrimEnabled,
+      asr_preprocess_silence_threshold_db: thresholdDb,
+      asr_preprocess_silence_start_ms: Number.isInteger(trimStartMs)
+        ? trimStartMs
+        : Math.round(trimStartMs),
+      asr_preprocess_silence_end_ms: Number.isInteger(trimEndMs)
+        ? trimEndMs
+        : Math.round(trimEndMs),
+    });
   }
 
   async function saveLlm() {
-    try {
-      await savePatch({
-        llm_base_url: llmBaseUrl.trim() ? llmBaseUrl.trim() : null,
-        llm_model: llmModel.trim() ? llmModel.trim() : null,
-        llm_reasoning_effort: reasoning === "default" ? null : reasoning,
-      });
-      pushToast("SAVED", "ok");
-    } catch {
-      pushToast("SAVE FAILED", "danger");
-    }
+    await persistSettingsPatch({
+      llm_base_url: llmBaseUrl.trim() ? llmBaseUrl.trim() : null,
+      llm_model: llmModel.trim() ? llmModel.trim() : null,
+      llm_reasoning_effort: reasoning === "default" ? null : reasoning,
+    });
   }
 
   async function saveRewrite() {
@@ -502,16 +517,11 @@ export function SettingsScreen({
       pushToast("LLM PROMPT REQUIRED", "danger");
       return;
     }
-    try {
-      await savePatch({
-        rewrite_enabled: rewriteEnabled,
-        llm_prompt: llmPrompt,
-        rewrite_include_glossary: rewriteIncludeGlossary,
-      });
-      pushToast("SAVED", "ok");
-    } catch {
-      pushToast("SAVE FAILED", "danger");
-    }
+    await persistSettingsPatch({
+      rewrite_enabled: rewriteEnabled,
+      llm_prompt: llmPrompt,
+      rewrite_include_glossary: rewriteIncludeGlossary,
+    });
   }
 
   async function saveGlossary() {
@@ -519,54 +529,34 @@ export function SettingsScreen({
       .split("\n")
       .map((x) => x.trim())
       .filter((x) => x.length > 0);
-    try {
-      await savePatch({ rewrite_glossary: items });
-      pushToast("GLOSSARY SAVED", "ok");
-    } catch {
-      pushToast("SAVE FAILED", "danger");
-    }
+    await persistSettingsPatch({ rewrite_glossary: items }, "GLOSSARY SAVED");
   }
 
   async function saveContextConfig() {
-    try {
-      await savePatch({
-        context_include_history: contextIncludeHistory,
-        context_include_clipboard: contextIncludeClipboard,
-        context_include_prev_window_meta: contextIncludePrevWindowMeta,
-        context_include_prev_window_screenshot: contextIncludePrevWindowScreenshot,
-      });
-      pushToast("SAVED", "ok");
-    } catch {
-      pushToast("SAVE FAILED", "danger");
-    }
+    await persistSettingsPatch({
+      context_include_history: contextIncludeHistory,
+      context_include_clipboard: contextIncludeClipboard,
+      context_include_prev_window_meta: contextIncludePrevWindowMeta,
+      context_include_prev_window_screenshot: contextIncludePrevWindowScreenshot,
+    });
   }
 
   async function saveExportConfig() {
-    try {
-      await savePatch({
-        auto_paste_enabled: autoPasteEnabled,
-      });
-      pushToast("SAVED", "ok");
-    } catch {
-      pushToast("SAVE FAILED", "danger");
-    }
+    await persistSettingsPatch({
+      auto_paste_enabled: autoPasteEnabled,
+    });
   }
 
   async function saveHotkeys() {
-    try {
-      await savePatch({
-        hotkeys_enabled: hotkeysEnabled,
-        hotkey_primary: normalizePrimaryHotkey(hotkeyPrimary),
-        hotkeys_show_overlay: hotkeysShowOverlay,
-        overlay_background_opacity: overlayBackgroundOpacity,
-        overlay_font_size_px: Math.round(overlayFontSizePx),
-        overlay_width_px: Math.round(overlayWidthPx),
-        overlay_height_px: Math.round(overlayHeightPx),
-      });
-      pushToast("SAVED", "ok");
-    } catch {
-      pushToast("SAVE FAILED", "danger");
-    }
+    await persistSettingsPatch({
+      hotkeys_enabled: hotkeysEnabled,
+      hotkey_primary: normalizePrimaryHotkey(hotkeyPrimary),
+      hotkeys_show_overlay: hotkeysShowOverlay,
+      overlay_background_opacity: overlayBackgroundOpacity,
+      overlay_font_size_px: Math.round(overlayFontSizePx),
+      overlay_width_px: Math.round(overlayWidthPx),
+      overlay_height_px: Math.round(overlayHeightPx),
+    });
   }
 
   async function setApiKey() {
