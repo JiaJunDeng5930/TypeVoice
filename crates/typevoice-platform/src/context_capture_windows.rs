@@ -1,3 +1,5 @@
+#![cfg(windows)]
+
 use std::ffi::c_void;
 use std::mem::size_of;
 use std::sync::{
