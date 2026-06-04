@@ -72,25 +72,13 @@ struct ChoiceMessage {
     content: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct RewriteContextPolicy {
     pub include_history: bool,
     pub include_clipboard: bool,
     pub include_prev_window_meta: bool,
     pub include_prev_window_screenshot: bool,
     pub include_glossary: bool,
-}
-
-impl Default for RewriteContextPolicy {
-    fn default() -> Self {
-        Self {
-            include_history: false,
-            include_clipboard: false,
-            include_prev_window_meta: false,
-            include_prev_window_screenshot: false,
-            include_glossary: false,
-        }
-    }
 }
 
 fn normalize_base_url(s: &str) -> Result<String> {
@@ -299,7 +287,7 @@ pub async fn check_api_key_live(cfg: &LlmConfig) -> Result<()> {
         .map_err(|e| anyhow!("E_LLM_CHECK_PARSE: response parse failed: {e}; body={body}"))?;
     let content = r
         .choices
-        .get(0)
+        .first()
         .map(|c| c.message.content.trim())
         .unwrap_or_default();
     if content.is_empty() {
@@ -502,7 +490,7 @@ pub async fn rewrite_with_context(
             return Err(ae);
         }
     };
-    let choice0 = match r.choices.get(0) {
+    let choice0 = match r.choices.first() {
         Some(c) => c,
         None => {
             let ae = anyhow!("llm missing choices[0]");

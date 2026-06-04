@@ -2,12 +2,14 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 
 use crate::obs::Span;
 use crate::settings::Settings;
 
-pub const GLOBAL_HOTKEY_EVENT: &str = "tv_global_hotkey";
+#[cfg(windows)]
+const GLOBAL_HOTKEY_EVENT: &str = "tv_global_hotkey";
+#[cfg(any(windows, test))]
 const ALT_TAP_MAX_MS: i64 = 350;
 
 #[derive(Debug, Clone)]
@@ -31,6 +33,7 @@ pub struct HotkeyAvailability {
     pub reason_code: Option<String>,
 }
 
+#[cfg(windows)]
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GlobalHotkeyEvent {
@@ -38,11 +41,13 @@ struct GlobalHotkeyEvent {
     ts_ms: i64,
 }
 
+#[cfg(any(windows, test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HotkeyAction {
     Primary,
 }
 
+#[cfg(windows)]
 impl HotkeyAction {
     fn as_str(self) -> &'static str {
         match self {
@@ -51,12 +56,14 @@ impl HotkeyAction {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum KeyKind {
+    #[default]
     Alt,
     Ctrl,
     Shift,
     Function(u8),
+    #[cfg(any(windows, test))]
     Other,
 }
 
@@ -83,12 +90,14 @@ impl KeyKind {
     }
 }
 
+#[cfg(any(windows, test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum KeyState {
     Down,
     Up,
 }
 
+#[cfg(any(windows, test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct KeySignal {
     key: KeyKind,
@@ -96,6 +105,7 @@ struct KeySignal {
     ts_ms: i64,
 }
 
+#[cfg(any(windows, test))]
 #[derive(Debug, Default)]
 struct HotkeyDetector {
     primary: KeyKind,
@@ -103,6 +113,7 @@ struct HotkeyDetector {
     primary_clean: bool,
 }
 
+#[cfg(any(windows, test))]
 impl HotkeyDetector {
     fn new(primary: KeyKind) -> Self {
         Self {
@@ -123,9 +134,7 @@ impl HotkeyDetector {
                     None
                 }
                 KeyState::Up => {
-                    let Some(started_at) = self.primary_down_at_ms.take() else {
-                        return None;
-                    };
+                    let started_at = self.primary_down_at_ms.take()?;
                     let clean = self.primary_clean;
                     self.primary_clean = false;
                     if clean && signal.ts_ms.saturating_sub(started_at) <= ALT_TAP_MAX_MS {
@@ -140,12 +149,6 @@ impl HotkeyDetector {
             self.primary_clean = false;
         }
         None
-    }
-}
-
-impl Default for KeyKind {
-    fn default() -> Self {
-        Self::Alt
     }
 }
 
@@ -257,6 +260,7 @@ impl PlatformKeyboardListener {
     #[cfg(windows)]
     fn start(app: AppHandle, primary: KeyKind) -> anyhow::Result<Self> {
         use std::sync::mpsc;
+        use tauri::Emitter;
         use windows_sys::Win32::System::Threading::GetCurrentThreadId;
         use windows_sys::Win32::UI::WindowsAndMessaging::{
             DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage,
@@ -444,6 +448,7 @@ impl PlatformKeyboardListener {
 static KEY_SIGNAL_SLOT: std::sync::OnceLock<Mutex<Option<std::sync::mpsc::Sender<KeySignal>>>> =
     std::sync::OnceLock::new();
 
+#[cfg(windows)]
 fn now_ms() -> i64 {
     match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
         Ok(dur) => dur.as_millis() as i64,
@@ -464,8 +469,10 @@ mod tests {
 
     #[test]
     fn config_requires_only_enabled_flag() {
-        let mut s = Settings::default();
-        s.hotkeys_enabled = Some(true);
+        let s = Settings {
+            hotkeys_enabled: Some(true),
+            ..Settings::default()
+        };
         let cfg = hotkey_config_from_settings(&s).expect("config");
         assert!(cfg.enabled);
         assert_eq!(cfg.primary, KeyKind::Alt);
@@ -473,9 +480,11 @@ mod tests {
 
     #[test]
     fn config_accepts_single_function_key() {
-        let mut s = Settings::default();
-        s.hotkeys_enabled = Some(true);
-        s.hotkey_primary = Some("F9".to_string());
+        let s = Settings {
+            hotkeys_enabled: Some(true),
+            hotkey_primary: Some("F9".to_string()),
+            ..Settings::default()
+        };
         let cfg = hotkey_config_from_settings(&s).expect("config");
         assert!(cfg.enabled);
         assert_eq!(cfg.primary, KeyKind::Function(9));
@@ -483,9 +492,11 @@ mod tests {
 
     #[test]
     fn config_rejects_combo_key() {
-        let mut s = Settings::default();
-        s.hotkeys_enabled = Some(true);
-        s.hotkey_primary = Some("Ctrl+Alt".to_string());
+        let s = Settings {
+            hotkeys_enabled: Some(true),
+            hotkey_primary: Some("Ctrl+Alt".to_string()),
+            ..Settings::default()
+        };
         assert!(hotkey_config_from_settings(&s).is_err());
     }
 

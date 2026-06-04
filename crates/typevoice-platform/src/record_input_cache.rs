@@ -172,6 +172,12 @@ impl RecordInputCacheState {
     }
 }
 
+impl Default for RecordInputCacheState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn extract_error_code(message: &str) -> String {
     let first = message.split(':').next().unwrap_or("").trim();
     if first.starts_with("E_") {

@@ -218,8 +218,10 @@ mod tests {
             }),
             screenshot: None,
         };
-        let mut budget = ContextBudget::default();
-        budget.max_total_context_chars = 50;
+        let budget = ContextBudget {
+            max_total_context_chars: 50,
+            ..Default::default()
+        };
         let out = prepare(" TRANSCRIPT ", &snap, &budget);
         assert!(out.user_text.contains("### TRANSCRIPT"));
         assert!(out.user_text.contains("TRANSCRIPT"));

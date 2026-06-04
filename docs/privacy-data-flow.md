@@ -27,3 +27,4 @@
 - 不记录 API Key。
 - 不记录完整音频内容。
 - 错误链路记录 `task_id`、错误码和必要诊断摘要。
+- LLM 请求和响应正文仅在同时开启 `TYPEVOICE_DEBUG_VERBOSE` 与 `TYPEVOICE_DEBUG_INCLUDE_LLM` 时写入调试目录。

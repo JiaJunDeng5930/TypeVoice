@@ -27,6 +27,8 @@ jobs:
       - name: Build desktop frontend
         working-directory: apps/desktop
         run: npm run build
+      - name: Cargo fmt
+        run: cargo fmt --all --check
       - name: Install Linux system dependencies
         run: |
           sudo apt-get update
@@ -39,6 +41,8 @@ jobs:
             patchelf
       - name: Cargo check
         run: cargo check --locked --workspace
+      - name: Cargo clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Cargo test
         run: cargo test --locked --workspace
       - name: Prepare Linux FFmpeg toolchain
@@ -58,6 +62,9 @@ jobs:
       - name: Install
         working-directory: apps/desktop
         run: npm ci
+      - name: Audit
+        working-directory: apps/desktop
+        run: npm audit --audit-level=moderate
       - name: Build
         working-directory: apps/desktop
         run: npm run build

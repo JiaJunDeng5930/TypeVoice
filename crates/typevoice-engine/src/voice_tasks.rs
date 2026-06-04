@@ -237,13 +237,15 @@ fn send_failed(mailbox: &UiEventMailbox, task_id: &str, stage: &str, code: &str,
     if let Ok(dir) = crate::data_dir::data_dir() {
         obs::event_err(
             &dir,
-            Some(task_id),
-            stage,
-            "TASK.failed",
-            "task",
-            code,
+            obs::ErrorEvent {
+                task_id: Some(task_id),
+                stage,
+                step_id: "TASK.failed",
+                kind: "task",
+                code,
+                ctx: None,
+            },
             &message,
-            None,
         );
     }
     mailbox.send(UiEvent::stage_with_elapsed(

@@ -667,8 +667,10 @@ mod tests {
 
     #[test]
     fn hotkey_primary_defaults_and_validates_single_keys() {
-        let mut s = Settings::default();
-        s.hotkeys_enabled = Some(true);
+        let mut s = Settings {
+            hotkeys_enabled: Some(true),
+            ..Default::default()
+        };
         let cfg = resolve_hotkey_config(&s).expect("hotkey config");
         assert_eq!(cfg.primary, "Alt");
 

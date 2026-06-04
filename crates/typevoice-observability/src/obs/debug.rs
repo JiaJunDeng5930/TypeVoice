@@ -40,10 +40,7 @@ pub fn verbose_enabled() -> bool {
 }
 
 pub fn include_llm() -> bool {
-    match std::env::var("TYPEVOICE_DEBUG_INCLUDE_LLM") {
-        Ok(_) => env_bool("TYPEVOICE_DEBUG_INCLUDE_LLM"),
-        Err(_) => true,
-    }
+    env_bool("TYPEVOICE_DEBUG_INCLUDE_LLM")
 }
 
 pub fn include_asr_segments() -> bool {
@@ -250,5 +247,30 @@ pub fn prune_debug_dir_best_effort(data_dir: &Path) {
         if let Err(e) = fs::remove_dir_all(&p) {
             crate::safe_eprintln!("debug_log: remove_dir_all failed: {}: {e}", p.display());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn llm_payload_debugging_requires_explicit_env() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::remove_var("TYPEVOICE_DEBUG_INCLUDE_LLM");
+        assert!(!include_llm());
+
+        std::env::set_var("TYPEVOICE_DEBUG_INCLUDE_LLM", "true");
+        assert!(include_llm());
+
+        std::env::set_var("TYPEVOICE_DEBUG_INCLUDE_LLM", "false");
+        assert!(!include_llm());
+        std::env::remove_var("TYPEVOICE_DEBUG_INCLUDE_LLM");
     }
 }

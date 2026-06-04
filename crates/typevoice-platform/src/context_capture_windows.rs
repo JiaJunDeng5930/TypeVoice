@@ -305,6 +305,12 @@ impl WindowsContext {
     }
 }
 
+impl Default for WindowsContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ExternalSnapshot {
     // HWND is a raw pointer type and is not Send/Sync. Store it as an integer so that
@@ -557,7 +563,7 @@ fn capture_window_png_diagnose(
                 biHeight: -(h as i32),
                 biPlanes: 1,
                 biBitCount: 32,
-                biCompression: BI_RGB as u32,
+                biCompression: BI_RGB,
                 biSizeImage: 0,
                 biXPelsPerMeter: 0,
                 biYPelsPerMeter: 0,
@@ -576,7 +582,7 @@ fn capture_window_png_diagnose(
             mem_dc,
             bmp,
             0,
-            h as u32,
+            h,
             src_bgra.as_mut_ptr() as *mut c_void,
             &mut bi,
             DIB_RGB_COLORS,

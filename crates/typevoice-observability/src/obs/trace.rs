@@ -197,16 +197,26 @@ pub fn event(
     );
 }
 
-pub fn event_err(
-    data_dir: &Path,
-    task_id: Option<&str>,
-    stage: &str,
-    step_id: &str,
-    kind: &str,
-    code: &str,
-    message: &str,
-    ctx: Option<Value>,
-) {
+#[derive(Debug)]
+pub struct ErrorEvent<'a> {
+    pub task_id: Option<&'a str>,
+    pub stage: &'a str,
+    pub step_id: &'a str,
+    pub kind: &'a str,
+    pub code: &'a str,
+    pub ctx: Option<Value>,
+}
+
+pub fn event_err(data_dir: &Path, event: ErrorEvent<'_>, message: &str) {
+    let ErrorEvent {
+        task_id,
+        stage,
+        step_id,
+        kind,
+        code,
+        ctx,
+    } = event;
+
     emit_event(
         data_dir,
         &TraceEvent {
@@ -223,16 +233,16 @@ pub fn event_err(
     );
 }
 
-pub fn event_err_anyhow(
-    data_dir: &Path,
-    task_id: Option<&str>,
-    stage: &str,
-    step_id: &str,
-    kind: &str,
-    code: &str,
-    err: &AnyhowError,
-    ctx: Option<Value>,
-) {
+pub fn event_err_anyhow(data_dir: &Path, event: ErrorEvent<'_>, err: &AnyhowError) {
+    let ErrorEvent {
+        task_id,
+        stage,
+        step_id,
+        kind,
+        code,
+        ctx,
+    } = event;
+
     emit_event(
         data_dir,
         &TraceEvent {
@@ -449,13 +459,15 @@ mod tests {
 
         event_err(
             &dir,
-            Some("task-error"),
-            "TraceTest",
-            "TRACE.event_err",
-            "io",
-            "E_TRACE_TEST",
+            ErrorEvent {
+                task_id: Some("task-error"),
+                stage: "TraceTest",
+                step_id: "TRACE.event_err",
+                kind: "io",
+                code: "E_TRACE_TEST",
+                ctx: None,
+            },
             "read failed: raw detail",
-            None,
         );
 
         assert!(writer::flush(2_000), "trace writer flush timeout");
@@ -492,13 +504,15 @@ mod tests {
 
         event_err_anyhow(
             &dir,
-            Some("task-anyhow"),
-            "TraceTest",
-            "TRACE.event_err_anyhow",
-            "io",
-            "E_TRACE_ANYHOW",
+            ErrorEvent {
+                task_id: Some("task-anyhow"),
+                stage: "TraceTest",
+                step_id: "TRACE.event_err_anyhow",
+                kind: "io",
+                code: "E_TRACE_ANYHOW",
+                ctx: None,
+            },
             &err,
-            None,
         );
 
         assert!(writer::flush(2_000), "trace writer flush timeout");

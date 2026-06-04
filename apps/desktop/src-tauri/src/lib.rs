@@ -9,7 +9,7 @@ pub use typevoice_observability::obs;
 pub use typevoice_platform::context_capture_windows;
 pub use typevoice_platform::{
     audio_device_notifications_windows, audio_devices_windows, context_capture, export, insertion,
-    pipeline, record_input, record_input_cache, subprocess, toolchain,
+    overlay_layout, pipeline, record_input, record_input_cache, subprocess, toolchain,
 };
 pub use typevoice_providers::{doubao_asr, llm, remote_asr};
 pub use typevoice_storage::{data_dir, history, settings};
@@ -23,7 +23,6 @@ use settings::SettingsPatch;
 use task_manager::TaskManager;
 use tauri::Emitter;
 use tauri::Manager;
-use tauri::{LogicalSize, PhysicalPosition};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct OverlayState {
@@ -203,13 +202,15 @@ fn ui_log_event(req: UiLogEventRequest) -> Result<(), String> {
 
     crate::obs::event_err(
         &dir,
-        task_id.as_deref(),
-        "UI",
-        step_id,
-        "ui",
-        &final_code,
+        crate::obs::ErrorEvent {
+            task_id: task_id.as_deref(),
+            stage: "UI",
+            step_id,
+            kind: "ui",
+            code: &final_code,
+            ctx: Some(serde_json::Value::Object(ctx)),
+        },
         &final_message,
-        Some(serde_json::Value::Object(ctx)),
     );
     Ok(())
 }
@@ -230,7 +231,7 @@ fn overlay_set_state(app: tauri::AppHandle, state: OverlayState) -> Result<(), S
 
     if let Some(w) = app.get_webview_window("overlay") {
         if state.visible {
-            apply_overlay_layout(&w)?;
+            overlay_layout::apply_overlay_layout(&w).map_err(|e| e.to_string())?;
             let _ = w.show();
         } else {
             let _ = w.hide();
@@ -245,11 +246,8 @@ fn overlay_set_state(app: tauri::AppHandle, state: OverlayState) -> Result<(), S
 
 #[tauri::command]
 fn overlay_resize(app: tauri::AppHandle, req: OverlayResizeRequest) -> Result<(), String> {
-    let width = req.width.clamp(360.0, 1600.0);
-    let height = req.height.clamp(72.0, 360.0);
     if let Some(w) = app.get_webview_window("overlay") {
-        w.set_size(LogicalSize::new(width, height))
-            .map_err(|e| e.to_string())?;
+        overlay_layout::resize_overlay(&w, req.width, req.height).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -273,73 +271,6 @@ fn overlay_save_position(app: tauri::AppHandle) -> Result<(), String> {
     s.overlay_position_y = Some(pos.y as i64);
     settings::save_settings(&dir, &s).map_err(|e| e.to_string())?;
     Ok(())
-}
-
-fn apply_overlay_layout(w: &tauri::WebviewWindow) -> Result<(), String> {
-    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let s = settings::load_settings_strict(&dir).map_err(|e| e.to_string())?;
-    let config = settings::resolve_overlay_config(&s);
-    apply_overlay_layout_with_config(w, &config)
-}
-
-fn apply_overlay_layout_with_config(
-    w: &tauri::WebviewWindow,
-    config: &settings::OverlayConfigResolved,
-) -> Result<(), String> {
-    let width = config.width_px as f64;
-    let height = config.height_px as f64;
-    w.set_size(LogicalSize::new(width, height))
-        .map_err(|e| e.to_string())?;
-    let pos = resolved_overlay_position(w, &config);
-    w.set_position(pos).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-fn resolved_overlay_position(
-    w: &tauri::WebviewWindow,
-    config: &settings::OverlayConfigResolved,
-) -> PhysicalPosition<i32> {
-    let pos = settings::resolve_overlay_position(config, &overlay_work_areas(w));
-    PhysicalPosition::new(pos.x.round() as i32, pos.y.round() as i32)
-}
-
-fn overlay_work_areas(w: &tauri::WebviewWindow) -> Vec<settings::OverlayWorkArea> {
-    let mut areas = Vec::new();
-    if let Some(monitor) = w
-        .current_monitor()
-        .ok()
-        .flatten()
-        .or_else(|| w.primary_monitor().ok().flatten())
-    {
-        push_overlay_work_area(&mut areas, &monitor);
-    }
-    if let Ok(monitors) = w.available_monitors() {
-        for monitor in monitors {
-            push_overlay_work_area(&mut areas, &monitor);
-        }
-    }
-    areas
-}
-
-fn push_overlay_work_area(areas: &mut Vec<settings::OverlayWorkArea>, monitor: &tauri::Monitor) {
-    let scale = monitor.scale_factor();
-    let area = monitor.work_area();
-    let next = settings::OverlayWorkArea {
-        x: area.position.x as f64,
-        y: area.position.y as f64,
-        width: area.size.width as f64,
-        height: area.size.height as f64,
-        scale_factor: scale,
-    };
-    let exists = areas.iter().any(|area| {
-        area.x == next.x
-            && area.y == next.y
-            && area.width == next.width
-            && area.height == next.height
-    });
-    if !exists {
-        areas.push(next);
-    }
 }
 
 fn cmd_span(
@@ -979,7 +910,7 @@ fn update_settings(
     }
     let overlay_config = settings::resolve_overlay_config(&next);
     if let Some(w) = app.get_webview_window("overlay") {
-        let _ = apply_overlay_layout_with_config(&w, &overlay_config);
+        let _ = overlay_layout::apply_overlay_layout_with_config(&w, &overlay_config);
     }
     let _ = app.emit("tv_overlay_config_changed", overlay_config);
     // Hotkeys are also best-effort; failures are traced and should not break settings.
@@ -1062,7 +993,7 @@ pub fn run() {
             let mut toolchain_ready = false;
             if let Ok(dir) = data_dir::data_dir() {
                 let runtime = app.state::<RuntimeState>();
-                let st = toolchain::initialize_and_verify(&app.handle(), &dir);
+                let st = toolchain::initialize_and_verify(app.handle(), &dir);
                 toolchain_ready = st.ready;
                 runtime.set_toolchain(st);
 
@@ -1098,7 +1029,7 @@ pub fn run() {
                 match settings::load_settings_strict(&dir) {
                     Ok(s) => {
                         let hk = app.state::<hotkeys::HotkeyManager>();
-                        hk.apply_from_settings_best_effort(&app.handle(), &dir, &s);
+                        hk.apply_from_settings_best_effort(app.handle(), &dir, &s);
                     }
                     Err(e) => {
                         obs::event(

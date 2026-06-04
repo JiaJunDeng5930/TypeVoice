@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use crate::audio_capture::RecordingRegistry;
 use crate::insertion::{InsertResult, InsertTextRequest};
@@ -11,7 +11,7 @@ use crate::transcription_actor::TranscriptionActor;
 use crate::ui_events::UiEventMailbox;
 use crate::voice_workflow::{
     VoiceWorkflow, WorkflowApplyEventRequest, WorkflowAsrCompletedRequest, WorkflowAsrEmptyRequest,
-    WorkflowCommandRequest, WorkflowError, WorkflowInsertCompletedRequest,
+    WorkflowCommandDeps, WorkflowCommandRequest, WorkflowError, WorkflowInsertCompletedRequest,
     WorkflowRewriteCompletedRequest, WorkflowTaskFailedRequest, WorkflowTextCommandRequest,
     WorkflowView,
 };
@@ -92,31 +92,32 @@ pub fn workflow_snapshot(workflow: State<'_, VoiceWorkflow>) -> Result<WorkflowV
 #[tauri::command]
 pub async fn workflow_command(
     app: AppHandle,
-    runtime: State<'_, RuntimeState>,
-    workflow: State<'_, VoiceWorkflow>,
-    audio: State<'_, RecordingRegistry>,
-    transcriber: State<'_, TranscriptionService>,
-    streaming_actor: State<'_, TranscriptionActor>,
-    mailbox: State<'_, UiEventMailbox>,
-    record_input_cache: State<'_, RecordInputCacheState>,
-    task_state: State<'_, crate::task_manager::TaskManager>,
     req: WorkflowCommandRequest,
 ) -> Result<WorkflowView, String> {
+    let runtime = app.state::<RuntimeState>();
+    let workflow = app.state::<VoiceWorkflow>();
+    let audio = app.state::<RecordingRegistry>();
+    let transcriber = app.state::<TranscriptionService>();
+    let streaming_actor = app.state::<TranscriptionActor>();
+    let mailbox = app.state::<UiEventMailbox>();
+    let record_input_cache = app.state::<RecordInputCacheState>();
+
     let outcome = workflow
         .run_command(
-            &runtime,
-            &audio,
-            &transcriber,
-            &streaming_actor,
-            &mailbox,
-            &record_input_cache,
-            &task_state,
+            WorkflowCommandDeps {
+                runtime: &runtime,
+                audio: &audio,
+                transcriber: &transcriber,
+                streaming_actor: &streaming_actor,
+                mailbox: &mailbox,
+                record_input_cache: &record_input_cache,
+            },
             req,
         )
         .await
         .map_err(render_workflow_error)?;
     if let Some(task) = outcome.task {
-        crate::voice_tasks::spawn(app, task);
+        crate::voice_tasks::spawn(app.clone(), task);
     }
     Ok(outcome.view)
 }
@@ -344,16 +345,18 @@ fn render_workflow_error(err: WorkflowError) -> String {
     if let Ok(dir) = data_dir::data_dir() {
         crate::obs::event_err(
             &dir,
-            None,
-            "Cmd",
-            "CMD.workflow_error",
-            "workflow",
-            &err.code,
+            crate::obs::ErrorEvent {
+                task_id: None,
+                stage: "Cmd",
+                step_id: "CMD.workflow_error",
+                kind: "workflow",
+                code: &err.code,
+                ctx: Some(serde_json::json!({
+                    "rendered": rendered.clone(),
+                    "raw": err.raw_message(),
+                })),
+            },
             &err.message,
-            Some(serde_json::json!({
-                "rendered": rendered.clone(),
-                "raw": err.raw_message(),
-            })),
         );
     }
     rendered
@@ -364,16 +367,18 @@ fn render_port_error(err: PortError) -> String {
     if let Ok(dir) = data_dir::data_dir() {
         crate::obs::event_err(
             &dir,
-            None,
-            "Cmd",
-            "CMD.port_error",
-            "port",
-            &err.code,
+            crate::obs::ErrorEvent {
+                task_id: None,
+                stage: "Cmd",
+                step_id: "CMD.port_error",
+                kind: "port",
+                code: &err.code,
+                ctx: Some(serde_json::json!({
+                    "rendered": rendered.clone(),
+                    "raw": err.raw_message(),
+                })),
+            },
             &err.message,
-            Some(serde_json::json!({
-                "rendered": rendered.clone(),
-                "raw": err.raw_message(),
-            })),
         );
     }
     rendered
