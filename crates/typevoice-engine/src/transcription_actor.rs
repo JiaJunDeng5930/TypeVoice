@@ -9,6 +9,7 @@ use futures_util::{SinkExt, StreamExt};
 
 use crate::{
     data_dir, doubao_asr, obs,
+    pcm::{pcm_bytes_for_ms, pcm_peak_abs},
     settings::{self, Settings},
     transcription::{TranscriptionMetrics, TranscriptionResult},
     ui_events::{UiEvent, UiEventMailbox, UiEventStatus},
@@ -732,20 +733,6 @@ fn send_failed(mailbox: &UiEventMailbox, task_id: &str, code: &str, message: imp
         Some(code.to_string()),
     ));
     mailbox.send(UiEvent::state_failed(task_id, "Transcribe", code, message));
-}
-
-fn pcm_peak_abs(pcm: &[u8]) -> i32 {
-    pcm.chunks_exact(2)
-        .map(|bytes| i32::from(i16::from_le_bytes([bytes[0], bytes[1]])).abs())
-        .max()
-        .unwrap_or(0)
-}
-
-pub fn pcm_bytes_for_ms(ms: u64) -> usize {
-    let bytes_per_second = doubao_asr::PCM_SAMPLE_RATE as u64
-        * u64::from(doubao_asr::PCM_CHANNELS)
-        * u64::from(doubao_asr::PCM_BITS / 8);
-    ((bytes_per_second * ms) / 1000) as usize
 }
 
 #[cfg(test)]

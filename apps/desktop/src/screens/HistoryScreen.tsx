@@ -1,14 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  defaultTauriGateway,
-  type TauriGateway,
-} from "../infra/runtimePorts";
+import { defaultTauriGateway } from "../infra/runtimePorts";
 import type { HistoryItem } from "../types";
 
 type Props = {
   epoch: number;
   pushToast: (msg: string, tone?: "default" | "ok" | "danger") => void;
-  gateway?: TauriGateway;
 };
 
 const PAGE = 50;
@@ -16,7 +12,6 @@ const PAGE = 50;
 export function HistoryScreen({
   epoch,
   pushToast,
-  gateway = defaultTauriGateway,
 }: Props) {
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -32,7 +27,7 @@ export function HistoryScreen({
     setLoading(true);
     setHasMore(true);
     try {
-      const rows = (await gateway.invoke("history_list", {
+      const rows = (await defaultTauriGateway.invoke("history_list", {
         limit: PAGE,
         beforeMs: null,
       })) as HistoryItem[];
@@ -53,7 +48,7 @@ export function HistoryScreen({
     if (oldestMs == null) return;
     setLoading(true);
     try {
-      const rows = (await gateway.invoke("history_list", {
+      const rows = (await defaultTauriGateway.invoke("history_list", {
         limit: PAGE,
         beforeMs: oldestMs,
       })) as HistoryItem[];

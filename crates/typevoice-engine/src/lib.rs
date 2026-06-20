@@ -10,6 +10,7 @@ pub use typevoice_providers::{doubao_asr, llm, remote_asr};
 pub use typevoice_storage::{data_dir, history, settings};
 
 pub mod audio_capture;
+mod pcm;
 pub mod rewrite;
 pub mod task_manager;
 pub mod transcription;
