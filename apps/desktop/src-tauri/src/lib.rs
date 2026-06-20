@@ -91,21 +91,6 @@ fn sanitize_ui_text(raw: Option<String>, max_chars: usize) -> Option<String> {
     }
 }
 
-fn parse_ui_error_code(raw: &str) -> Option<String> {
-    for token in raw.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
-        if token.starts_with("E_") && token.len() > 2 {
-            return Some(token.to_string());
-        }
-        if token.starts_with("HTTP_")
-            && token.len() > 5
-            && token[5..].chars().all(|c| c.is_ascii_digit())
-        {
-            return Some(token.to_string());
-        }
-    }
-    None
-}
-
 #[tauri::command]
 fn ui_log_event(req: UiLogEventRequest) -> Result<(), String> {
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
@@ -153,12 +138,12 @@ fn ui_log_event(req: UiLogEventRequest) -> Result<(), String> {
     let mut norm_code = sanitize_ui_text(code, 64);
     if norm_code.is_none() {
         if let Some(ref message_text) = norm_message {
-            norm_code = parse_ui_error_code(message_text);
+            norm_code = crate::ports::parse_error_code(message_text);
         }
     }
     if norm_code.is_none() {
         if let Some(ref detail_text) = norm_detail {
-            norm_code = parse_ui_error_code(detail_text);
+            norm_code = crate::ports::parse_error_code(detail_text);
         }
     }
     let final_code = norm_code.unwrap_or_else(|| fallback_code.to_string());
@@ -939,7 +924,6 @@ pub fn run() {
         .manage(record_input_cache::RecordInputCacheState::new())
         .manage(audio_device_notifications_windows::AudioDeviceNotificationState::new())
         .manage(hotkeys::HotkeyManager::new())
-        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
             #[derive(Clone, serde::Serialize)]
             struct Payload {
@@ -965,7 +949,6 @@ pub fn run() {
                 );
             }
         }))
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             obs::startup::mark_best_effort("setup_enter");
             let mailbox = ui_events::UiEventMailbox::new(app.handle().clone());

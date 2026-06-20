@@ -1,4 +1,5 @@
-#[cfg(windows)]
+use std::io::Read;
+
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone)]
@@ -182,12 +183,25 @@ pub fn prepare(asr_text: &str, snap: &ContextSnapshot, budget: &ContextBudget) -
     }
 }
 
-#[cfg(windows)]
 pub fn sha256_hex(bytes: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(bytes);
     let d = h.finalize();
     hex::encode(d)
+}
+
+pub fn sha256_file(path: &std::path::Path) -> std::io::Result<String> {
+    let mut f = std::fs::File::open(path)?;
+    let mut h = Sha256::new();
+    let mut buf = vec![0_u8; 1024 * 1024];
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Ok(hex::encode(h.finalize()))
 }
 
 #[cfg(test)]

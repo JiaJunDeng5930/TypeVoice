@@ -1,7 +1,6 @@
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { createBackendClient } from "./infra/backendClient";
 import { defaultTauriGateway } from "./infra/runtimePorts";
 import {
   appendTranscript,
@@ -16,7 +15,7 @@ import {
   workflowPhaseName,
   workflowViewFromPayload,
 } from "./domain/workflowView";
-import type { OverlayConfig, Settings, WorkflowView } from "./types";
+import type { OverlayConfig, Settings, UiEvent, WorkflowView } from "./types";
 
 type GlobalHotkeyEvent = {
   action: "primary";
@@ -33,7 +32,6 @@ const DEFAULT_OVERLAY_CONFIG: OverlayConfig = {
 };
 
 export default function OverlayApp() {
-  const client = useMemo(() => createBackendClient(defaultTauriGateway), []);
   const [workflow, setWorkflow] = useState<WorkflowView>(EMPTY_WORKFLOW_VIEW);
   const [draftText, setDraftText] = useState("");
   const [liveText, setLiveText] = useState("");
@@ -93,14 +91,14 @@ export default function OverlayApp() {
   }, []);
 
   const refreshWorkflowSnapshot = useCallback(async () => {
-    acceptWorkflowView(await client.workflowSnapshot());
-  }, [acceptWorkflowView, client]);
+    acceptWorkflowView(await defaultTauriGateway.invoke<WorkflowView>("workflow_snapshot"));
+  }, [acceptWorkflowView]);
 
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
     void (async () => {
-      const next = await client.overlayConfig();
+      const next = await defaultTauriGateway.invoke<OverlayConfig>("overlay_config");
       if (!cancelled) setConfig(next);
       const stop = await defaultTauriGateway.listen<OverlayConfig>(
         "tv_overlay_config_changed",
@@ -118,10 +116,9 @@ export default function OverlayApp() {
       cancelled = true;
       unlisten?.();
     };
-  }, [client]);
+  }, []);
 
   useEffect(() => {
-    if (!hasTauriRuntime()) return;
     let unlisten: (() => void) | null = null;
     const currentWindow = getCurrentWindow();
     void (async () => {
@@ -132,7 +129,7 @@ export default function OverlayApp() {
         }
         savePositionTimerRef.current = window.setTimeout(() => {
           savePositionTimerRef.current = null;
-          void client.overlaySavePosition();
+          void defaultTauriGateway.invoke("overlay_save_position");
         }, 180);
       });
     })();
@@ -142,24 +139,26 @@ export default function OverlayApp() {
       }
       unlisten?.();
     };
-  }, [client]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       const settings = (await defaultTauriGateway.invoke("get_settings")) as Settings;
       if (cancelled) return;
-      await client.overlaySetState({
-        visible: settings.hotkeys_show_overlay === true && overlayView.visible,
-        status: overlayView.status,
-        detail: overlayView.detail,
-        ts_ms: Date.now(),
+      await defaultTauriGateway.invoke("overlay_set_state", {
+        state: {
+          visible: settings.hotkeys_show_overlay === true && overlayView.visible,
+          status: overlayView.status,
+          detail: overlayView.detail,
+          ts_ms: Date.now(),
+        },
       });
     })();
     return () => {
       cancelled = true;
     };
-  }, [client, overlayView.detail, overlayView.status, overlayView.visible]);
+  }, [overlayView.detail, overlayView.status, overlayView.visible]);
 
   const runPrimaryFromAlt = useCallback(async () => {
     const phase = phaseRef.current;
@@ -170,11 +169,15 @@ export default function OverlayApp() {
     }
 
     try {
-      acceptWorkflowView(await client.workflowCommand({ command: "primary" }));
+      acceptWorkflowView(
+        await defaultTauriGateway.invoke<WorkflowView>("workflow_command", {
+          req: { command: "primary" },
+        }),
+      );
     } catch {
       await refreshWorkflowSnapshot();
     }
-  }, [acceptWorkflowView, client, refreshWorkflowSnapshot]);
+  }, [acceptWorkflowView, refreshWorkflowSnapshot]);
 
   useEffect(() => {
     void refreshWorkflowSnapshot();
@@ -199,7 +202,7 @@ export default function OverlayApp() {
         }
       }));
 
-      track(await client.listenUiEvent(async (event) => {
+      track(await defaultTauriGateway.listen<UiEvent>("ui_event", async (event) => {
         if (!event || event.kind === "audio.level") return;
 
         if (event.kind === "workflow.state") {
@@ -216,10 +219,12 @@ export default function OverlayApp() {
         if (event.kind === "transcription.completed") {
           const result = textFromTranscriptionCompleted(event);
           if (result.transcriptId && result.asrText.trim() && result.metrics) {
-            const next = await client.workflowReportAsrCompleted({
-              transcriptId: result.transcriptId,
-              text: result.asrText,
-              metrics: result.metrics,
+            const next = await defaultTauriGateway.invoke<WorkflowView>("workflow_report_asr_completed", {
+              req: {
+                transcriptId: result.transcriptId,
+                text: result.asrText,
+                metrics: result.metrics,
+              },
             });
             acceptWorkflowView(next);
           } else {
@@ -233,7 +238,11 @@ export default function OverlayApp() {
         if (event.kind === "transcription.empty") {
           const transcriptId = optionalString(event.taskId);
           if (transcriptId) {
-            acceptWorkflowView(await client.workflowReportAsrEmpty({ transcriptId }));
+            acceptWorkflowView(
+              await defaultTauriGateway.invoke<WorkflowView>("workflow_report_asr_empty", {
+                req: { transcriptId },
+              }),
+            );
           } else {
             await refreshWorkflowSnapshot();
           }
@@ -252,11 +261,15 @@ export default function OverlayApp() {
         if (event.kind === "workflow.task.failed" && isAsrFailureStage(event.stage)) {
           const transcriptId = optionalString(event.taskId);
           if (transcriptId) {
-            acceptWorkflowView(await client.workflowReportAsrFailed({
-              transcriptId,
-              code: optionalString(event.errorCode) || "E_TRANSCRIBE_FAILED",
-              message: event.message,
-            }));
+            acceptWorkflowView(
+              await defaultTauriGateway.invoke<WorkflowView>("workflow_report_asr_failed", {
+                req: {
+                  transcriptId,
+                  code: optionalString(event.errorCode) || "E_TRANSCRIBE_FAILED",
+                  message: event.message,
+                },
+              }),
+            );
           } else {
             await refreshWorkflowSnapshot();
           }
@@ -273,7 +286,7 @@ export default function OverlayApp() {
       cancelled = true;
       for (const fn of unlistenFns) fn();
     };
-  }, [acceptWorkflowView, client, refreshWorkflowSnapshot, runPrimaryFromAlt]);
+  }, [acceptWorkflowView, refreshWorkflowSnapshot, runPrimaryFromAlt]);
 
   return (
     <SubtitleOverlay
@@ -327,10 +340,6 @@ function SubtitleOverlay({
       </div>
     </div>
   );
-}
-
-function hasTauriRuntime(): boolean {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
 function optionalString(value: unknown): string | null {

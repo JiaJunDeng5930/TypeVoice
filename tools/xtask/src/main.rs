@@ -1,7 +1,7 @@
 use std::{
     env,
     fs::{self, File},
-    io::{self, Read, Write},
+    io::{self, Write},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
     time::{Duration, Instant},
@@ -14,9 +14,8 @@ use reqwest::blocking::Client;
 use reqwest::header::USER_AGENT;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use typevoice_core::context_pack::{
-    self, ContextBudget, ContextSnapshot, HistorySnippet, PrevWindowInfo,
+    self, sha256_file, sha256_hex, ContextBudget, ContextSnapshot, HistorySnippet, PrevWindowInfo,
 };
 
 #[derive(Parser)]
@@ -388,22 +387,6 @@ fn download_file(client: &Client, url: &str, target: &Path) -> Result<()> {
     let mut out = File::create(target).with_context(|| format!("create {}", target.display()))?;
     io::copy(&mut response, &mut out).with_context(|| format!("write {}", target.display()))?;
     Ok(())
-}
-
-fn sha256_file(path: &Path) -> Result<String> {
-    let mut f = File::open(path).with_context(|| format!("open {}", path.display()))?;
-    let mut h = Sha256::new();
-    let mut buf = vec![0_u8; 1024 * 1024];
-    loop {
-        let n = f
-            .read(&mut buf)
-            .with_context(|| format!("read {}", path.display()))?;
-        if n == 0 {
-            break;
-        }
-        h.update(&buf[..n]);
-    }
-    Ok(hex::encode(h.finalize()))
 }
 
 fn ensure_dirs() -> Result<()> {
@@ -1637,7 +1620,7 @@ fn run_llm_prompt_lab(args: LlmPromptLabArgs) -> Result<()> {
         "reasoning_effort": if reasoning_effort.is_empty() { Value::Null } else { json!(reasoning_effort) },
     });
     let material_bytes = serde_json::to_vec(&material)?;
-    let short_hash = &sha256_bytes(&material_bytes)[..12];
+    let short_hash = &sha256_hex(&material_bytes)[..12];
 
     let out_dir = if args.out_dir.trim().is_empty() {
         repo_root()?
@@ -1660,8 +1643,8 @@ fn run_llm_prompt_lab(args: LlmPromptLabArgs) -> Result<()> {
         "model": req_body["model"],
         "reasoning_effort": if reasoning_effort.is_empty() { Value::Null } else { json!(reasoning_effort) },
         "inject_mode": inject_mode_name(args.inject_mode),
-        "system_prompt_sha256": sha256_bytes(system_prompt.as_bytes()),
-        "inputs_sha256": sha256_bytes(&material_bytes),
+        "system_prompt_sha256": sha256_hex(system_prompt.as_bytes()),
+        "inputs_sha256": sha256_hex(&material_bytes),
     });
     write_json_pretty(&out_dir.join("meta.json"), &meta)?;
     write_json_pretty(&out_dir.join("request.json"), &req_body)?;
@@ -1949,12 +1932,6 @@ fn clamp_chars(value: &str, max_chars: usize) -> String {
         .filter(|ch| *ch != '\0')
         .take(max_chars)
         .collect()
-}
-
-fn sha256_bytes(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    hex::encode(hasher.finalize())
 }
 
 #[cfg(test)]

@@ -1,9 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   defaultTauriGateway,
-  type TauriGateway,
 } from "../infra/runtimePorts";
-import { createBackendClient, type BackendClient } from "../infra/backendClient";
 import { buildDiagnostic, buildUiEventDiagnostic, userMessageFromDiagnostic } from "../domain/diagnostic";
 import {
   EMPTY_WORKFLOW_VIEW,
@@ -16,6 +14,7 @@ import type {
   RuntimeToolchainStatus,
   Settings,
   TranscriptionMetrics,
+  UiEvent,
   WorkflowCommand,
   WorkflowView,
 } from "../types";
@@ -25,18 +24,13 @@ type Props = {
   settings: Settings | null;
   pushToast: (msg: string, tone?: "default" | "ok" | "danger") => void;
   onHistoryChanged: () => void;
-  gateway?: TauriGateway;
-  backend?: BackendClient;
 };
 
 export function MainScreen({
   settings,
   pushToast,
   onHistoryChanged,
-  gateway = defaultTauriGateway,
-  backend,
 }: Props) {
-  const client = useMemo(() => backend || createBackendClient(gateway), [backend, gateway]);
   const [workflow, setWorkflow] = useState<WorkflowView>(EMPTY_WORKFLOW_VIEW);
   const [hover, setHover] = useState(false);
   const [liveTranscript, setLiveTranscript] = useState("");
@@ -51,22 +45,22 @@ export function MainScreen({
     if (autoInsertStartedRef.current.has(transcriptId)) return;
     autoInsertStartedRef.current.add(transcriptId);
     try {
-      await client.workflowInsert({ text });
-      const refreshed = await client.workflowSnapshot();
+      await defaultTauriGateway.invoke("workflow_insert", { req: { text } });
+      const refreshed = await defaultTauriGateway.invoke<WorkflowView>("workflow_snapshot");
       setWorkflow(refreshed);
       onHistoryChanged();
     } catch (err) {
       const diag = buildDiagnostic(err, "Text could not be pasted");
       pushToast(diag.title, "danger");
       try {
-        const refreshed = await client.workflowSnapshot();
+        const refreshed = await defaultTauriGateway.invoke<WorkflowView>("workflow_snapshot");
         setWorkflow(refreshed);
       } catch (refreshErr) {
         const refreshDiag = buildDiagnostic(refreshErr, "WORKFLOW STATE FAILED");
         pushToast(refreshDiag.title, "danger");
       }
     }
-  }, [client, onHistoryChanged, pushToast]);
+  }, [onHistoryChanged, pushToast]);
 
   const runAutoRewrite = useCallback(async (view: WorkflowView) => {
     const phase = workflowPhaseName(view.phase);
@@ -77,22 +71,22 @@ export function MainScreen({
     if (settings?.rewrite_enabled !== true) return;
     autoRewriteStartedRef.current.add(transcriptId);
     try {
-      await client.workflowRewrite({ text });
-      const refreshed = await client.workflowSnapshot();
+      await defaultTauriGateway.invoke("workflow_rewrite", { req: { text } });
+      const refreshed = await defaultTauriGateway.invoke<WorkflowView>("workflow_snapshot");
       setWorkflow(refreshed);
       await runAutoInsert(refreshed);
     } catch (err) {
       const diag = buildDiagnostic(err, "Text improvement failed");
       pushToast(diag.title, "danger");
       try {
-        const refreshed = await client.workflowSnapshot();
+        const refreshed = await defaultTauriGateway.invoke<WorkflowView>("workflow_snapshot");
         setWorkflow(refreshed);
       } catch (refreshErr) {
         const refreshDiag = buildDiagnostic(refreshErr, "WORKFLOW STATE FAILED");
         pushToast(refreshDiag.title, "danger");
       }
     }
-  }, [client, pushToast, runAutoInsert, settings?.rewrite_enabled]);
+  }, [pushToast, runAutoInsert, settings?.rewrite_enabled]);
 
   const acceptWorkflowView = useCallback(async (next: WorkflowView, autoContinue: boolean) => {
     setWorkflow(next);
@@ -114,23 +108,23 @@ export function MainScreen({
 
   useEffect(() => {
     (async () => {
-      const view = await client.workflowSnapshot();
+      const view = await defaultTauriGateway.invoke<WorkflowView>("workflow_snapshot");
       await acceptWorkflowView(view, false);
     })().catch((err) => {
       const diag = buildDiagnostic(err, "WORKFLOW STATE FAILED");
       pushToast(diag.title, "danger");
     });
-  }, [acceptWorkflowView, client, pushToast]);
+  }, [acceptWorkflowView, pushToast]);
 
   useEffect(() => {
     (async () => {
       try {
-        const runtime = await client.runtimeToolchainStatus() as RuntimeToolchainStatus;
+        const runtime = await defaultTauriGateway.invoke<RuntimeToolchainStatus>("runtime_toolchain_status");
         if (!runtime.ready) pushToast("Local audio tools need repair", "danger");
       } catch {
       }
     })();
-  }, [client, pushToast]);
+  }, [pushToast]);
 
   useEffect(() => {
     let cancelled = false;
@@ -147,7 +141,7 @@ export function MainScreen({
     };
 
     (async () => {
-      const unlistenUiEvent = await client.listenUiEvent(async (ev) => {
+      const unlistenUiEvent = await defaultTauriGateway.listen<UiEvent>("ui_event", async (ev) => {
         if (!ev || ev.kind === "audio.level") return;
         if (ev.kind === "transcription.partial") {
           const partial = transcriptionPartialPayload(ev.payload);
@@ -168,10 +162,12 @@ export function MainScreen({
             const transcriptId = optionalString(ev.taskId);
             if (transcriptId) {
               try {
-                const next = await client.workflowReportAsrFailed({
-                  transcriptId,
-                  code: optionalString(ev.errorCode) || "E_TRANSCRIBE_FAILED",
-                  message: ev.message,
+                const next = await defaultTauriGateway.invoke<WorkflowView>("workflow_report_asr_failed", {
+                  req: {
+                    transcriptId,
+                    code: optionalString(ev.errorCode) || "E_TRANSCRIBE_FAILED",
+                    message: ev.message,
+                  },
                 });
                 await acceptWorkflowView(next, false);
               } catch (err) {
@@ -196,7 +192,9 @@ export function MainScreen({
           const transcriptId = optionalString(ev.taskId);
           if (transcriptId) {
             try {
-              const next = await client.workflowReportAsrEmpty({ transcriptId });
+              const next = await defaultTauriGateway.invoke<WorkflowView>("workflow_report_asr_empty", {
+                req: { transcriptId },
+              });
               await acceptWorkflowView(next, false);
             } catch (err) {
               const diag = buildDiagnostic(err, "WORKFLOW EVENT FAILED");
@@ -215,10 +213,12 @@ export function MainScreen({
             return;
           }
           try {
-            const next = await client.workflowReportAsrCompleted({
-              transcriptId: completed.transcriptId,
-              text: completed.asrText,
-              metrics: completed.metrics,
+            const next = await defaultTauriGateway.invoke<WorkflowView>("workflow_report_asr_completed", {
+              req: {
+                transcriptId: completed.transcriptId,
+                text: completed.asrText,
+                metrics: completed.metrics,
+              },
             });
             await acceptWorkflowView(next, true);
             setLiveTranscript("");
@@ -259,11 +259,11 @@ export function MainScreen({
         }
       }
     };
-  }, [acceptWorkflowView, client, onHistoryChanged, pushToast]);
+  }, [acceptWorkflowView, onHistoryChanged, pushToast]);
 
   async function sendWorkflowCommand(command: WorkflowCommand) {
     try {
-      const next = await client.workflowCommand({ command });
+      const next = await defaultTauriGateway.invoke<WorkflowView>("workflow_command", { req: { command } });
       await acceptWorkflowView(next, false);
       if (command === "copyLast") {
         pushToast("Text copied", "ok");
@@ -272,7 +272,7 @@ export function MainScreen({
       const diag = buildDiagnostic(err, commandErrorTitle(command));
       pushToast(diag.title, "danger");
       try {
-        const refreshed = await client.workflowSnapshot();
+        const refreshed = await defaultTauriGateway.invoke<WorkflowView>("workflow_snapshot");
         await acceptWorkflowView(refreshed, false);
       } catch (refreshErr) {
         const refreshDiag = buildDiagnostic(refreshErr, "WORKFLOW STATE FAILED");

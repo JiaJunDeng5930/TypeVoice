@@ -5,10 +5,9 @@ use std::{
     time::UNIX_EPOCH,
 };
 
-use sha2::{Digest, Sha256};
-
 use super::{metrics, schema};
 use crate::obs::schema::MetricsRecord;
+use typevoice_core::context_pack::sha256_hex;
 
 const DEFAULT_MAX_PAYLOAD_BYTES: usize = 2_000_000; // 2MB
 const DEFAULT_MAX_TASKS: usize = 50;
@@ -80,12 +79,6 @@ pub struct PayloadInfo {
     pub bytes_written: usize,
     pub truncated: bool,
     pub sha256: String,
-}
-
-fn sha256_hex(b: &[u8]) -> String {
-    let mut h = Sha256::new();
-    h.update(b);
-    format!("{:x}", h.finalize())
 }
 
 fn truncate_with_suffix(mut b: Vec<u8>, max_bytes: usize, suffix: &[u8]) -> (Vec<u8>, bool) {

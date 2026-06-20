@@ -10,6 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::pcm::pcm_peak_abs;
 use crate::record_input_cache::RecordInputCacheState;
 use crate::subprocess::CommandNoConsoleExt;
 use crate::transcription_actor::{StreamingSessionConfig, TranscriptionActor};
@@ -750,13 +751,6 @@ impl Default for RecordingRegistry {
     fn default() -> Self {
         Self::new()
     }
-}
-
-fn pcm_peak_abs(pcm: &[u8]) -> i32 {
-    pcm.chunks_exact(2)
-        .map(|bytes| i32::from(i16::from_le_bytes([bytes[0], bytes[1]])).abs())
-        .max()
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

@@ -5,7 +5,6 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use tauri::{path::BaseDirectory, AppHandle, Manager};
 
 use crate::obs;
@@ -340,12 +339,8 @@ fn verify_sha256(path: &Path, expected: &str, tool_name: &str) -> Result<()> {
 }
 
 fn sha256_file(path: &Path) -> Result<String> {
-    let bytes =
-        std::fs::read(path).with_context(|| format!("read file failed: {}", path.display()))?;
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    let out = hasher.finalize();
-    Ok(hex::encode(out))
+    crate::context_pack::sha256_file(path)
+        .with_context(|| format!("read file failed: {}", path.display()))
 }
 
 fn verify_version(bin: &Path, expected_version: &str, tool_name: &str) -> Result<()> {

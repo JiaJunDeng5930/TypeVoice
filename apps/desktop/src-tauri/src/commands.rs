@@ -384,14 +384,6 @@ fn render_port_error(err: PortError) -> String {
     rendered
 }
 
-#[allow(dead_code)]
-fn command_span(step_id: &str) {
-    if let Ok(dir) = data_dir::data_dir() {
-        let span = crate::obs::Span::start(&dir, None, "Cmd", step_id, None);
-        span.ok(None);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { defaultTauriGateway, type TauriGateway } from "../infra/runtimePorts";
+import { defaultTauriGateway } from "../infra/runtimePorts";
 import type {
   ApiCheckResult,
   ApiKeyStatus,
@@ -19,7 +19,6 @@ type Props = {
   savePatch: (patch: Record<string, unknown>) => Promise<void>;
   pushToast: (msg: string, tone?: "default" | "ok" | "danger") => void;
   onHistoryCleared: () => void;
-  gateway?: TauriGateway;
 };
 
 const REASONING: PixelSelectOption[] = [
@@ -188,7 +187,6 @@ export function SettingsScreen({
   savePatch,
   pushToast,
   onHistoryCleared,
-  gateway = defaultTauriGateway,
 }: Props) {
   const [asrProvider, setAsrProvider] = useState("doubao");
   const [remoteAsrUrl, setRemoteAsrUrl] = useState("https://api.server/transcribe");
@@ -324,7 +322,7 @@ export function SettingsScreen({
     (async () => {
       await refreshSensitiveSettingStatuses();
       try {
-        const effective = (await gateway.invoke(
+        const effective = (await defaultTauriGateway.invoke(
           "effective_settings_values",
         )) as EffectiveSettingsValues;
         if (!settings.llm_base_url?.trim() && effective.llm_base_url?.trim()) {
@@ -367,7 +365,7 @@ export function SettingsScreen({
 
   async function refreshAudioCaptureDevices() {
     try {
-      const rows = (await gateway.invoke(
+      const rows = (await defaultTauriGateway.invoke(
         "list_audio_capture_devices",
       )) as AudioCaptureDevice[];
       setAudioCaptureDevices(rows);
@@ -383,9 +381,9 @@ export function SettingsScreen({
   async function refreshSensitiveSettingStatuses() {
     try {
       const [llmStatus, remoteStatus, doubaoStatus] = await Promise.all([
-        gateway.invoke("llm_api_key_status") as Promise<ApiKeyStatus>,
-        gateway.invoke("remote_asr_api_key_status") as Promise<ApiKeyStatus>,
-        gateway.invoke("doubao_asr_credentials_status") as Promise<ApiKeyStatus>,
+        defaultTauriGateway.invoke("llm_api_key_status") as Promise<ApiKeyStatus>,
+        defaultTauriGateway.invoke("remote_asr_api_key_status") as Promise<ApiKeyStatus>,
+        defaultTauriGateway.invoke("doubao_asr_credentials_status") as Promise<ApiKeyStatus>,
       ]);
       setLlmKeyStatus(llmStatus);
       setRemoteAsrKeyStatus(remoteStatus);
@@ -563,7 +561,7 @@ export function SettingsScreen({
     const k = keyDraft.trim();
     if (!k) return;
     try {
-      await gateway.invoke("set_llm_api_key", { apiKey: k });
+      await defaultTauriGateway.invoke("set_llm_api_key", { apiKey: k });
       setKeyDraft("");
       await refreshSensitiveSettingStatuses();
       pushToast("KEY SAVED", "ok");
@@ -574,7 +572,7 @@ export function SettingsScreen({
 
   async function clearApiKey() {
     try {
-      await gateway.invoke("clear_llm_api_key");
+      await defaultTauriGateway.invoke("clear_llm_api_key");
       setLlmKeyStatus(null);
       await refreshSensitiveSettingStatuses();
       pushToast("KEY CLEARED", "ok");
@@ -587,7 +585,7 @@ export function SettingsScreen({
     if (llmCheckPending) return;
     setLlmCheckPending(true);
     try {
-      const result = (await gateway.invoke("check_llm_api_key", {
+      const result = (await defaultTauriGateway.invoke("check_llm_api_key", {
         baseUrl: llmBaseUrl,
         model: llmModel,
         reasoningEffort: reasoning,
@@ -604,7 +602,7 @@ export function SettingsScreen({
     const k = remoteAsrKeyDraft.trim();
     if (!k) return;
     try {
-      await gateway.invoke("set_remote_asr_api_key", { apiKey: k });
+      await defaultTauriGateway.invoke("set_remote_asr_api_key", { apiKey: k });
       setRemoteAsrKeyDraft("");
       await refreshSensitiveSettingStatuses();
       pushToast("REMOTE KEY SAVED", "ok");
@@ -615,7 +613,7 @@ export function SettingsScreen({
 
   async function clearRemoteAsrApiKey() {
     try {
-      await gateway.invoke("clear_remote_asr_api_key");
+      await defaultTauriGateway.invoke("clear_remote_asr_api_key");
       setRemoteAsrKeyStatus(null);
       await refreshSensitiveSettingStatuses();
       pushToast("REMOTE KEY CLEARED", "ok");
@@ -628,7 +626,7 @@ export function SettingsScreen({
     if (remoteAsrCheckPending) return;
     setRemoteAsrCheckPending(true);
     try {
-      const result = (await gateway.invoke("check_remote_asr_api_key", {
+      const result = (await defaultTauriGateway.invoke("check_remote_asr_api_key", {
         url: remoteAsrUrl,
         model: remoteAsrModel,
       })) as ApiCheckResult;
@@ -645,7 +643,7 @@ export function SettingsScreen({
     const accessKey = doubaoAccessKeyDraft.trim();
     if (!appKey || !accessKey) return;
     try {
-      await gateway.invoke("set_doubao_asr_credentials", { appKey, accessKey });
+      await defaultTauriGateway.invoke("set_doubao_asr_credentials", { appKey, accessKey });
       setDoubaoAppKeyDraft("");
       setDoubaoAccessKeyDraft("");
       await refreshSensitiveSettingStatuses();
@@ -657,7 +655,7 @@ export function SettingsScreen({
 
   async function clearDoubaoAsrCredentials() {
     try {
-      await gateway.invoke("clear_doubao_asr_credentials");
+      await defaultTauriGateway.invoke("clear_doubao_asr_credentials");
       setDoubaoCredentialsStatus(null);
       await refreshSensitiveSettingStatuses();
       pushToast("DOUBAO KEY CLEARED", "ok");
@@ -670,7 +668,7 @@ export function SettingsScreen({
     if (doubaoCheckPending) return;
     setDoubaoCheckPending(true);
     try {
-      const result = (await gateway.invoke("check_doubao_asr_credentials")) as ApiCheckResult;
+      const result = (await defaultTauriGateway.invoke("check_doubao_asr_credentials")) as ApiCheckResult;
       pushToast(result.message, result.ok ? "ok" : "danger");
     } catch {
       pushToast("Doubao ASR API check failed. Try again after checking the settings.", "danger");
@@ -681,7 +679,7 @@ export function SettingsScreen({
 
   async function clearHistory() {
     try {
-      await gateway.invoke("history_clear");
+      await defaultTauriGateway.invoke("history_clear");
       pushToast("HISTORY CLEARED", "ok");
       onHistoryCleared();
     } catch {
