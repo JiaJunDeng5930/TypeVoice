@@ -1,6 +1,6 @@
-# Speak. Don't type.
-
 # TypeVoice
+
+<p><small>Speak. Don't type.</small></p>
 
 [![Platform](https://img.shields.io/badge/platform-Windows-blue)](#安装)
 [![GitHub Release](https://img.shields.io/github/v/release/JiaJunDeng5930/TypeVoice?include_prereleases&label=release)](https://github.com/JiaJunDeng5930/TypeVoice/releases)
