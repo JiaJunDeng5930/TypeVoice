@@ -17,6 +17,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "package": "tauri build",
     "preview": "vite preview",
     "tauri": "tauri"
   },
