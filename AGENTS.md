@@ -2,11 +2,11 @@
 
 你当前的环境是 WSL2，host 为 Win11
 
-Windows Rust 工具链位于 D 盘：
+Windows Rust 工具链通过 PATH 调用：
 
-- WSL 路径：`/mnt/d/Rust/.cargo/bin/cargo.exe`
-- Windows 路径：`D:\Rust\.cargo\bin\cargo.exe`
-- 若当前 shell 找不到 `cargo`，在 WSL 中使用 `/mnt/d/Rust/.cargo/bin/cargo.exe` 执行 Rust 命令；在 PowerShell 中使用 `D:\Rust\.cargo\bin\cargo.exe`。
+- PowerShell：`cargo`
+- WSL：`cargo.exe`
+- 若当前 shell 找不到 Rust 工具链，打开 Windows repo root 的 PowerShell 执行 Rust 命令。
 
 # Repository Guidelines
 
@@ -42,7 +42,8 @@ Local-only artifacts (gitignored): `fixtures/` (audio), `models/` (downloaded mo
 - 同步 Windows 工作区到最新源码后按文档一键网关编译并启动链路：
   - `cargo xtask gate windows`
 - 若在 WSL 下触发 Windows 命令，使用：
-  - `/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Set-Location D:\\Projects\\TypeVoice; cargo xtask gate windows"`
+  - `WIN_REPO="$(wslpath -w "$PWD")"`
+  - `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Set-Location -LiteralPath '${WIN_REPO}'; cargo xtask gate windows"`
 
 ## 文档命令零偏移禁制令（最高优先级）
 

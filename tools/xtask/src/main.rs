@@ -786,10 +786,10 @@ fn verify_ffmpeg_upstream_release(
         &gpg,
         &[
             "--homedir",
-            &path_to_string(&gnupg_home)?,
+            "gnupg",
             "--batch",
             "--import",
-            &path_to_string(&key_path)?,
+            "ffmpeg-devel.asc",
         ],
         &[],
     )
@@ -800,12 +800,12 @@ fn verify_ffmpeg_upstream_release(
         &gpg,
         &[
             "--homedir",
-            &path_to_string(&gnupg_home)?,
+            "gnupg",
             "--status-fd=1",
             "--batch",
             "--verify",
-            &path_to_string(&source_sig_path)?,
-            &path_to_string(&source_path)?,
+            "ffmpeg-release.tar.xz.asc",
+            "ffmpeg-release.tar.xz",
         ],
     )
     .context("run gpg signature verification")?;
@@ -847,10 +847,6 @@ fn require_non_empty(value: &str, field: &str) -> Result<()> {
 
 fn resolve_gpg_command() -> String {
     if cfg!(windows) {
-        let common = PathBuf::from(r"D:\Program Files\GnuPG\bin\gpg.exe");
-        if common.is_file() {
-            return common.display().to_string();
-        }
         "gpg.exe".to_string()
     } else {
         "gpg".to_string()

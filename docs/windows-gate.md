@@ -11,7 +11,6 @@ For the detailed WSL and Windows workflow, see:
 Run in a Windows PowerShell terminal from the Windows repo root:
 
 ```powershell
-Set-Location D:\Projects\TypeVoice
 cargo xtask gate windows
 ```
 
@@ -30,7 +29,6 @@ This command:
 For day-to-day launch and debug:
 
 ```powershell
-Set-Location D:\Projects\TypeVoice
 cargo xtask run latest
 ```
 
@@ -41,7 +39,6 @@ This command stops stale TypeVoice desktop processes tied to the repo, installs 
 If you only need to check whether the Windows Rust backend compiles:
 
 ```powershell
-Set-Location D:\Projects\TypeVoice
 cargo xtask gate windows-compile
 ```
 
@@ -50,7 +47,6 @@ cargo xtask gate windows-compile
 To prepare both bundled toolchains:
 
 ```powershell
-Set-Location D:\Projects\TypeVoice
 cargo xtask toolchain ffmpeg --platform all
 ```
 

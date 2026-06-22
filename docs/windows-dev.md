@@ -9,14 +9,14 @@ Use this command whenever you want to launch the Windows runtime from the latest
 From Windows PowerShell:
 
 ```powershell
-Set-Location D:\Projects\TypeVoice
 cargo xtask run latest
 ```
 
 From WSL, invoke the same Windows runtime command:
 
 ```bash
-/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Set-Location D:\Projects\TypeVoice; cargo xtask run latest"
+WIN_REPO="$(wslpath -w "$PWD")"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Set-Location -LiteralPath '${WIN_REPO}'; cargo xtask run latest"
 ```
 
 This command:
@@ -30,7 +30,7 @@ This command:
 If the command fails, read:
 
 ```bash
-tail -n 120 /mnt/d/Projects/TypeVoice/tmp/typevoice-logs/tauri-latest-run.txt
+tail -n 120 tmp/typevoice-logs/tauri-latest-run.txt
 ```
 
 ## 1. Mental Model
@@ -46,7 +46,7 @@ Tauri dev must run with the Windows toolchain to launch a real Windows `typevoic
 
 Recommended Windows-side working copy:
 
-- Windows repo: `D:\Projects\TypeVoice`
+- Any Windows NTFS path checked out as the repo root.
 
 Avoid running Windows builds from a UNC path such as `\\wsl.localhost\...`.
 
@@ -55,21 +55,18 @@ Avoid running Windows builds from a UNC path such as `\\wsl.localhost\...`.
 Run the full local gate from Windows PowerShell:
 
 ```powershell
-Set-Location D:\Projects\TypeVoice
 cargo xtask gate windows
 ```
 
 Run only the Windows compile gate:
 
 ```powershell
-Set-Location D:\Projects\TypeVoice
 cargo xtask gate windows-compile
 ```
 
 Prepare the FFmpeg toolchain explicitly:
 
 ```powershell
-Set-Location D:\Projects\TypeVoice
 cargo xtask toolchain ffmpeg --platform all
 ```
 
@@ -78,7 +75,7 @@ cargo xtask toolchain ffmpeg --platform all
 The direct command remains available for focused debugging:
 
 ```powershell
-Set-Location D:\Projects\TypeVoice\apps\desktop
+Set-Location apps\desktop
 $env:RUST_BACKTRACE = "1"
 $env:RUST_LOG = "debug"
 npm run tauri dev
@@ -97,7 +94,7 @@ Get-Process -Name typevoice-desktop -ErrorAction SilentlyContinue |
 From WSL:
 
 ```bash
-/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Get-Process -Name typevoice-desktop -ErrorAction SilentlyContinue | Select-Object -First 1 | Format-List -Property Id,StartTime,Responding"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Get-Process -Name typevoice-desktop -ErrorAction SilentlyContinue | Select-Object -First 1 | Format-List -Property Id,StartTime,Responding"
 ```
 
 ## 6. Stop All Dev Processes
@@ -113,7 +110,7 @@ taskkill /IM node.exe /F
 
 ### UNC paths
 
-Run Windows gate commands from `D:\Projects\TypeVoice`.
+Run Windows gate commands from the Windows repo root on an NTFS path.
 
 ### WSL behavior differs from Windows behavior
 

@@ -38,7 +38,7 @@ cargo xtask llm-prompt-lab \
   --transcript "现在进行第一条测试，用于验证效果。" \
   --history-file tmp/history.txt \
   --clipboard-file tmp/clipboard.txt \
-  --prev-process "C:\\Windows\\explorer.exe"
+  --prev-process "explorer.exe"
 ```
 
 对比模式（拆成两条 user message：第一条只给 transcript，第二条只给 context，并带“不要复述上下文”的固定前缀）：
@@ -53,7 +53,7 @@ cargo xtask llm-prompt-lab \
   --transcript "现在进行第一条测试，用于验证效果。" \
   --history-file tmp/history.txt \
   --clipboard-file tmp/clipboard.txt \
-  --prev-process "C:\\Windows\\explorer.exe"
+  --prev-process "explorer.exe"
 ```
 
 `tmp/history.txt` 约定：每行一条历史记录文本（脚本会做截断与拼接）。
