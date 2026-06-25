@@ -142,6 +142,11 @@ pub fn cleanup_audio_artifacts(input_audio: &Path, wav_path: &Path, data_dir: &P
     cleanup_audio_artifacts_with_keep(input_audio, wav_path, data_dir, keep_audio)
 }
 
+pub fn cleanup_input_audio_artifact(input_audio: &Path, data_dir: &Path) -> Result<()> {
+    let keep_audio = std::env::var("TYPEVOICE_KEEP_AUDIO").ok().as_deref() == Some("1");
+    cleanup_input_audio_artifact_with_keep(input_audio, data_dir, keep_audio)
+}
+
 fn cleanup_audio_artifacts_with_keep(
     input_audio: &Path,
     wav_path: &Path,
@@ -153,6 +158,17 @@ fn cleanup_audio_artifacts_with_keep(
     }
 
     let _ = std::fs::remove_file(wav_path);
+    cleanup_input_audio_artifact_with_keep(input_audio, data_dir, false)
+}
+
+fn cleanup_input_audio_artifact_with_keep(
+    input_audio: &Path,
+    data_dir: &Path,
+    keep_audio: bool,
+) -> Result<()> {
+    if keep_audio {
+        return Ok(());
+    }
     if managed_audio_artifact(input_audio, data_dir) {
         let _ = std::fs::remove_file(input_audio);
     }
@@ -326,5 +342,21 @@ mod tests {
 
         assert!(!input_audio.exists());
         assert!(!wav_path.exists());
+    }
+
+    #[test]
+    fn cleanup_input_audio_artifact_removes_recorded_audio() {
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let input_audio = data_dir
+            .path()
+            .join("recordings")
+            .join("recording-task.wav");
+        std::fs::create_dir_all(input_audio.parent().unwrap()).expect("recordings dir");
+        std::fs::write(&input_audio, b"recording").expect("recording");
+
+        cleanup_input_audio_artifact_with_keep(&input_audio, data_dir.path(), false)
+            .expect("cleanup");
+
+        assert!(!input_audio.exists());
     }
 }
