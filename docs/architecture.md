@@ -86,7 +86,6 @@ Provider：
 状态机调用：
 
 - `record_transcribe_stop() -> TranscriptionResult`
-- `transcribe_fixture(req) -> TranscriptionResult`
 
 ### 2.5 rewrite
 

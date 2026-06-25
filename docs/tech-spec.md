@@ -56,7 +56,6 @@ Frontend
 - `record_transcribe_cancel() -> void`
 - `rewrite_text(req) -> RewriteResult`
 - `insert_text(req) -> InsertResult`
-- `transcribe_fixture(req) -> TranscriptionResult`
 
 语义：
 
@@ -64,7 +63,6 @@ Frontend
 - 改写由用户单独触发。
 - 插入由用户单独触发。
 - 复制最近结果由用户单独触发。
-- fixtures 转录走统一转录模块。
 - 命令层只调用 `voice_workflow` 接受用户意图，并把返回的异步任务交给 `voice_tasks`。
 - 前端显示使用 `WorkflowView`，其中包含当前阶段、会话 ID、最近结果文本、诊断文本和按钮可用性。
 - 前端转发状态型异步事件时调用 `workflow_apply_event`。

@@ -96,13 +96,6 @@ impl TranscriptionResult {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TranscribeFixtureRequest {
-    pub fixture_name: String,
-    pub task_id: Option<String>,
-}
-
 #[derive(Debug, Clone)]
 pub struct TranscriptionInput {
     pub task_id: Option<String>,
@@ -155,21 +148,6 @@ impl TranscriptionService {
         };
         cancel_active_transcription(&active, false);
         Ok(())
-    }
-
-    pub async fn transcribe_fixture(
-        &self,
-        req: TranscribeFixtureRequest,
-    ) -> PortResult<TranscriptionResult> {
-        let input_path = pipeline::fixture_path(&req.fixture_name)
-            .map_err(|e| PortError::from_message("E_FIXTURE_NOT_FOUND", e.to_string()))?;
-        self.transcribe_audio(TranscriptionInput {
-            task_id: req.task_id,
-            input_path,
-            record_elapsed_ms: 0,
-            record_label: "Record (fixture)".to_string(),
-        })
-        .await
     }
 
     pub async fn transcribe_audio(
@@ -239,7 +217,7 @@ impl TranscriptionService {
             None,
             None,
         );
-        let wav_path = pipeline::preprocess_to_temp_wav(&task_id, &input.input_path)
+        let wav_path = pipeline::preprocess_to_temp_wav(data_dir, &task_id)
             .map_err(|e| PortError::from_message("E_PREPROCESS_FAILED", e.to_string()))?;
         let preprocess_ms = match self
             .run_preprocess(
@@ -253,7 +231,7 @@ impl TranscriptionService {
         {
             Ok(ms) => ms,
             Err(e) => {
-                let _ = pipeline::cleanup_audio_artifacts(&input.input_path, &wav_path);
+                let _ = pipeline::cleanup_audio_artifacts(&input.input_path, &wav_path, data_dir);
                 emit_stage_metric(
                     data_dir,
                     &task_id,
@@ -295,7 +273,7 @@ impl TranscriptionService {
         {
             Ok(v) => v,
             Err(e) => {
-                let _ = pipeline::cleanup_audio_artifacts(&input.input_path, &wav_path);
+                let _ = pipeline::cleanup_audio_artifacts(&input.input_path, &wav_path, data_dir);
                 emit_stage_metric(
                     data_dir,
                     &task_id,
@@ -312,7 +290,7 @@ impl TranscriptionService {
                 return Err(e);
             }
         };
-        let _ = pipeline::cleanup_audio_artifacts(&input.input_path, &wav_path);
+        let _ = pipeline::cleanup_audio_artifacts(&input.input_path, &wav_path, data_dir);
         emit_stage_metric(
             data_dir,
             &task_id,

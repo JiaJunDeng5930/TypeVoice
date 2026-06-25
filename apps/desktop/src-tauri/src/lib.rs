@@ -975,6 +975,7 @@ pub fn run() {
 
             let mut toolchain_ready = false;
             if let Ok(dir) = data_dir::data_dir() {
+                settings::ensure_settings(&dir)?;
                 let runtime = app.state::<RuntimeState>();
                 let st = toolchain::initialize_and_verify(app.handle(), &dir);
                 toolchain_ready = st.ready;
@@ -1052,7 +1053,6 @@ pub fn run() {
             commands::workflow_report_insert_completed,
             commands::workflow_report_insert_failed,
             commands::overlay_insert_text,
-            commands::transcribe_fixture,
             abort_pending_task,
             set_llm_api_key,
             clear_llm_api_key,

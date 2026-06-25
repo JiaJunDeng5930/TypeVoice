@@ -17,7 +17,7 @@ pub const DEFAULT_OVERLAY_FONT_SIZE_PX: u64 = 32;
 pub const DEFAULT_OVERLAY_WIDTH_PX: u64 = 960;
 pub const DEFAULT_OVERLAY_HEIGHT_PX: u64 = 160;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub asr_provider: Option<String>, // doubao|remote
     pub remote_asr_url: Option<String>,
@@ -68,6 +68,54 @@ pub struct Settings {
     pub overlay_height_px: Option<u64>,
     pub overlay_position_x: Option<i64>,
     pub overlay_position_y: Option<i64>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            asr_provider: Some(DEFAULT_ASR_PROVIDER.to_string()),
+            remote_asr_url: Some(DEFAULT_REMOTE_ASR_URL.to_string()),
+            remote_asr_model: None,
+            remote_asr_concurrency: Some(DEFAULT_REMOTE_ASR_CONCURRENCY as u64),
+            asr_preprocess_silence_trim_enabled: Some(false),
+            asr_preprocess_silence_threshold_db: Some(-50.0),
+            asr_preprocess_silence_start_ms: Some(300),
+            asr_preprocess_silence_end_ms: Some(300),
+            llm_base_url: None,
+            llm_model: None,
+            llm_reasoning_effort: None,
+            llm_prompt: None,
+            record_input_spec: None,
+            record_input_strategy: Some("follow_default".to_string()),
+            record_follow_default_role: Some("communications".to_string()),
+            record_fixed_endpoint_id: None,
+            record_fixed_friendly_name: None,
+            record_last_working_endpoint_id: None,
+            record_last_working_friendly_name: None,
+            record_last_working_dshow_spec: None,
+            record_last_working_ts_ms: None,
+            rewrite_enabled: Some(false),
+            rewrite_glossary: Some(Vec::new()),
+            auto_paste_enabled: Some(true),
+            context_include_prev_window_meta: Some(true),
+            context_include_history: Some(true),
+            context_history_n: Some(3),
+            context_history_window_ms: Some(30 * 60 * 1000),
+            context_include_clipboard: Some(true),
+            context_include_prev_window_screenshot: Some(true),
+            rewrite_include_glossary: Some(true),
+            llm_supports_vision: Some(true),
+            hotkeys_enabled: Some(true),
+            hotkey_primary: Some("Alt".to_string()),
+            hotkeys_show_overlay: Some(true),
+            overlay_background_opacity: Some(DEFAULT_OVERLAY_BACKGROUND_OPACITY),
+            overlay_font_size_px: Some(DEFAULT_OVERLAY_FONT_SIZE_PX),
+            overlay_width_px: Some(DEFAULT_OVERLAY_WIDTH_PX),
+            overlay_height_px: Some(DEFAULT_OVERLAY_HEIGHT_PX),
+            overlay_position_x: None,
+            overlay_position_y: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -257,6 +305,16 @@ pub fn load_settings_strict(data_dir: &Path) -> Result<Settings> {
     let s = fs::read_to_string(&p).context("read settings.json failed")?;
     let v: Settings = serde_json::from_str(&s).context("parse settings.json failed")?;
     Ok(v)
+}
+
+pub fn ensure_settings(data_dir: &Path) -> Result<Settings> {
+    let p = settings_path(data_dir);
+    if p.exists() {
+        return load_settings_strict(data_dir);
+    }
+    let settings = Settings::default();
+    save_settings(data_dir, &settings)?;
+    Ok(settings)
 }
 
 pub fn resolve_auto_paste_enabled(s: &Settings) -> bool {
