@@ -4908,7 +4908,7 @@ checksum = "40ce102ab67701b8526c123c1bab5cbe42d7040ccfd0f64af1a385808d2f43de"
 
 [[package]]
 name = "typevoice-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hex",
  "serde",
@@ -4917,7 +4917,7 @@ dependencies = [
 
 [[package]]
 name = "typevoice-desktop"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "serde",
@@ -4937,7 +4937,7 @@ dependencies = [
 
 [[package]]
 name = "typevoice-engine"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "flate2",
@@ -4959,7 +4959,7 @@ dependencies = [
 
 [[package]]
 name = "typevoice-observability"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "serde",
@@ -4970,7 +4970,7 @@ dependencies = [
 
 [[package]]
 name = "typevoice-platform"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "arboard",
@@ -4993,7 +4993,7 @@ dependencies = [
 
 [[package]]
 name = "typevoice-providers"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -5014,7 +5014,7 @@ dependencies = [
 
 [[package]]
 name = "typevoice-storage"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "rusqlite",
@@ -6206,7 +6206,7 @@ checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
 
 [[package]]
 name = "xtask"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",

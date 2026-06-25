@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-06-25
+
+### Fixed
+- Fixed installed app runtime data paths so settings, history, traces, and recordings use the local app data directory.
+- Added first-run settings initialization with usable defaults.
+- Removed production fixture transcription entrypoints and moved audio preprocessing artifacts under app data.
+- Fixed recording cleanup for file and streaming transcription paths.
+
 ## [0.1.0] - 2026-06-23
 
 ### Added
