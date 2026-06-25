@@ -139,17 +139,28 @@ pub fn preprocess_to_temp_wav(data_dir: &Path, task_id: &str) -> Result<std::pat
 pub fn cleanup_audio_artifacts(input_audio: &Path, wav_path: &Path, data_dir: &Path) -> Result<()> {
     // Default: do not persist audio artifacts.
     let keep_audio = std::env::var("TYPEVOICE_KEEP_AUDIO").ok().as_deref() == Some("1");
+    cleanup_audio_artifacts_with_keep(input_audio, wav_path, data_dir, keep_audio)
+}
+
+fn cleanup_audio_artifacts_with_keep(
+    input_audio: &Path,
+    wav_path: &Path,
+    data_dir: &Path,
+    keep_audio: bool,
+) -> Result<()> {
     if keep_audio {
         return Ok(());
     }
 
     let _ = std::fs::remove_file(wav_path);
-    // Only delete the original input if it's inside our temp dir.
-    let tmp = data_dir.join("preprocess");
-    if input_audio.starts_with(&tmp) {
+    if managed_audio_artifact(input_audio, data_dir) {
         let _ = std::fs::remove_file(input_audio);
     }
     Ok(())
+}
+
+fn managed_audio_artifact(path: &Path, data_dir: &Path) -> bool {
+    path.starts_with(data_dir.join("preprocess")) || path.starts_with(data_dir.join("recordings"))
 }
 
 pub fn preprocess_ffmpeg_cancellable(
@@ -295,5 +306,25 @@ mod tests {
             "pcm_s16le"
         );
         assert_eq!(args.last().map(String::as_str), Some("out.wav"));
+    }
+
+    #[test]
+    fn cleanup_removes_recorded_input_audio() {
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let input_audio = data_dir
+            .path()
+            .join("recordings")
+            .join("recording-task.wav");
+        let wav_path = data_dir.path().join("preprocess").join("task.wav");
+        std::fs::create_dir_all(input_audio.parent().unwrap()).expect("recordings dir");
+        std::fs::create_dir_all(wav_path.parent().unwrap()).expect("preprocess dir");
+        std::fs::write(&input_audio, b"recording").expect("recording");
+        std::fs::write(&wav_path, b"preprocessed").expect("preprocessed");
+
+        cleanup_audio_artifacts_with_keep(&input_audio, &wav_path, data_dir.path(), false)
+            .expect("cleanup");
+
+        assert!(!input_audio.exists());
+        assert!(!wav_path.exists());
     }
 }
