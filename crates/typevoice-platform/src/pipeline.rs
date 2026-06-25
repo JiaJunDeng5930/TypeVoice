@@ -1,6 +1,6 @@
 use std::{
     io::Read,
-    path::{Path, PathBuf},
+    path::Path,
     process::{Command, Stdio},
     time::Instant,
 };
@@ -37,19 +37,6 @@ impl Default for PreprocessConfig {
             silence_trim_end_ms: 300,
         }
     }
-}
-
-fn repo_root() -> Result<PathBuf> {
-    if let Ok(p) = std::env::var("TYPEVOICE_REPO_ROOT") {
-        return Ok(PathBuf::from(p));
-    }
-    // CARGO_MANIFEST_DIR = .../TypeVoice/crates/typevoice-platform
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let root = dir
-        .ancestors()
-        .nth(2)
-        .ok_or_else(|| anyhow!("failed to locate repo root from CARGO_MANIFEST_DIR"))?;
-    Ok(root.to_path_buf())
 }
 
 fn resolve_tool_path(env_key: &str, candidate_file: &str) -> Result<String> {
@@ -143,40 +130,22 @@ fn build_ffmpeg_preprocess_args(
     Ok(args)
 }
 
-pub fn fixture_path(name: &str) -> Result<PathBuf> {
-    let root = repo_root()?;
-    Ok(root.join("fixtures").join(name))
-}
-
-pub fn save_bytes_file(task_id: &str, bytes: &[u8], ext: &str) -> Result<PathBuf> {
-    let root = repo_root()?;
-    let tmp = root.join("tmp").join("desktop");
-    std::fs::create_dir_all(&tmp).ok();
-    let ext = ext.trim_start_matches('.').to_ascii_lowercase();
-    let input = tmp.join(format!("{task_id}.{ext}"));
-    std::fs::write(&input, bytes).context("failed to write recording file")?;
-    Ok(input)
-}
-
-pub fn preprocess_to_temp_wav(task_id: &str, _input_audio: &Path) -> Result<PathBuf> {
-    let root = repo_root()?;
-    let tmp = root.join("tmp").join("desktop");
-    std::fs::create_dir_all(&tmp).ok();
+pub fn preprocess_to_temp_wav(data_dir: &Path, task_id: &str) -> Result<std::path::PathBuf> {
+    let tmp = data_dir.join("preprocess");
+    std::fs::create_dir_all(&tmp).context("create preprocess temp dir failed")?;
     Ok(tmp.join(format!("{task_id}.wav")))
 }
 
-pub fn cleanup_audio_artifacts(input_audio: &Path, wav_path: &Path) -> Result<()> {
+pub fn cleanup_audio_artifacts(input_audio: &Path, wav_path: &Path, data_dir: &Path) -> Result<()> {
     // Default: do not persist audio artifacts.
     let keep_audio = std::env::var("TYPEVOICE_KEEP_AUDIO").ok().as_deref() == Some("1");
     if keep_audio {
         return Ok(());
     }
 
-    let root = repo_root()?;
-    let tmp = root.join("tmp").join("desktop");
-
     let _ = std::fs::remove_file(wav_path);
     // Only delete the original input if it's inside our temp dir.
+    let tmp = data_dir.join("preprocess");
     if input_audio.starts_with(&tmp) {
         let _ = std::fs::remove_file(input_audio);
     }

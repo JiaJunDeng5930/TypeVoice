@@ -6,7 +6,7 @@ use crate::insertion::{InsertResult, InsertTextRequest};
 use crate::ports::PortError;
 use crate::record_input_cache::RecordInputCacheState;
 use crate::rewrite::{RewriteResult, RewriteTextRequest};
-use crate::transcription::{TranscribeFixtureRequest, TranscriptionResult, TranscriptionService};
+use crate::transcription::{TranscriptionResult, TranscriptionService};
 use crate::transcription_actor::TranscriptionActor;
 use crate::ui_events::UiEventMailbox;
 use crate::voice_workflow::{
@@ -38,7 +38,6 @@ pub fn command_names() -> &'static [&'static str] {
         "workflow_report_insert_completed",
         "workflow_report_insert_failed",
         "overlay_insert_text",
-        "transcribe_fixture",
     ]
 }
 
@@ -267,20 +266,6 @@ pub fn record_transcribe_cancel(
 }
 
 #[tauri::command]
-pub async fn transcribe_fixture(
-    runtime: State<'_, RuntimeState>,
-    workflow: State<'_, VoiceWorkflow>,
-    transcriber: State<'_, TranscriptionService>,
-    mailbox: State<'_, UiEventMailbox>,
-    req: TranscribeFixtureRequest,
-) -> Result<TranscriptionResult, String> {
-    workflow
-        .transcribe_fixture(&runtime, &transcriber, &mailbox, req)
-        .await
-        .map_err(render_workflow_error)
-}
-
-#[tauri::command]
 pub async fn rewrite_text(
     workflow: State<'_, VoiceWorkflow>,
     mailbox: State<'_, UiEventMailbox>,
@@ -389,7 +374,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_command_names_exclude_removed_pipeline_entrypoints() {
+    fn command_names_include_runtime_entrypoints() {
         let names = command_names();
 
         assert!(names.contains(&"record_transcribe_start"));
@@ -405,8 +390,5 @@ mod tests {
         assert!(names.contains(&"workflow_report_asr_failed"));
         assert!(names.contains(&"workflow_rewrite"));
         assert!(names.contains(&"workflow_insert"));
-        assert!(names.contains(&"transcribe_fixture"));
-        assert!(!names.contains(&"start_task"));
-        assert!(!names.contains(&"export_text"));
     }
 }

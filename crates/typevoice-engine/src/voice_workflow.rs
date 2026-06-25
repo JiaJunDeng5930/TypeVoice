@@ -11,8 +11,7 @@ use crate::record_input_cache::RecordInputCacheState;
 use crate::rewrite::{RewriteResult, RewriteTextRequest};
 use crate::task_manager::TaskManager;
 use crate::transcription::{
-    TranscribeFixtureRequest, TranscriptionInput, TranscriptionMetrics, TranscriptionResult,
-    TranscriptionService,
+    TranscriptionInput, TranscriptionMetrics, TranscriptionResult, TranscriptionService,
 };
 use crate::transcription_actor::{StreamingProviderKind, TranscriptionActor};
 use crate::ui_events::{UiEvent, UiEventMailbox, UiEventStatus};
@@ -858,65 +857,6 @@ impl VoiceWorkflow {
         }
     }
 
-    pub async fn transcribe_fixture(
-        &self,
-        runtime: &RuntimeState,
-        transcriber: &TranscriptionService,
-        mailbox: &UiEventMailbox,
-        req: TranscribeFixtureRequest,
-    ) -> WorkflowResult<TranscriptionResult> {
-        ensure_runtime_ready(runtime)?;
-        let task_id = req
-            .task_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        self.reserve_transcribing(&task_id)?;
-        self.emit_state(mailbox);
-        mailbox.send(UiEvent::stage(
-            &task_id,
-            "Transcribe",
-            UiEventStatus::Started,
-            "fixture",
-        ));
-        let result = match transcriber
-            .transcribe_fixture(TranscribeFixtureRequest {
-                fixture_name: req.fixture_name,
-                task_id: Some(task_id.clone()),
-            })
-            .await
-        {
-            Ok(result) => result,
-            Err(err) => {
-                let workflow_err = WorkflowError::from_port(err);
-                self.mark_failed(workflow_err.clone());
-                mailbox.send(UiEvent::stage_with_elapsed(
-                    &task_id,
-                    "Transcribe",
-                    UiEventStatus::Failed,
-                    workflow_err.message.clone(),
-                    None,
-                    Some(workflow_err.code.clone()),
-                ));
-                return Err(workflow_err);
-            }
-        };
-        self.complete_transcription(result.clone())?;
-        self.persist_transcription_result(&result)?;
-        self.emit_state(mailbox);
-        mailbox.send(UiEvent::stage_with_elapsed(
-            &result.transcript_id,
-            "Transcribe",
-            UiEventStatus::Completed,
-            "ok",
-            Some(result.metrics.asr_ms),
-            None,
-        ));
-        Ok(result)
-    }
-
     pub async fn rewrite_text(
         &self,
         mailbox: &UiEventMailbox,
@@ -1509,28 +1449,6 @@ impl VoiceWorkflow {
         Ok(())
     }
 
-    fn reserve_transcribing(&self, transcript_id: &str) -> WorkflowResult<()> {
-        let mut state = self.state.lock().unwrap();
-        if !matches!(
-            state.phase,
-            WorkflowPhase::Idle | WorkflowPhase::Cancelled | WorkflowPhase::Failed
-        ) {
-            return Err(primary_phase_error(state.phase));
-        }
-        state.phase = WorkflowPhase::Transcribing;
-        state.session = Some(WorkflowSession {
-            session_id: transcript_id.to_string(),
-            recording_session_id: String::new(),
-            streaming_transcription: true,
-        });
-        state.transcription = None;
-        state.rewrite = None;
-        state.last_created_at_ms = None;
-        state.insert_previous_phase = None;
-        state.last_error = None;
-        Ok(())
-    }
-
     fn attach_recording_session(
         &self,
         transcript_id: &str,
@@ -1604,6 +1522,7 @@ impl VoiceWorkflow {
         Ok(session)
     }
 
+    #[cfg(test)]
     fn complete_transcription(&self, result: TranscriptionResult) -> WorkflowResult<()> {
         let mut state = self.state.lock().unwrap();
         if state.phase != WorkflowPhase::Transcribing {
