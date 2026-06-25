@@ -305,6 +305,16 @@ impl VoiceWorkflow {
         Ok(self.view())
     }
 
+    pub fn current_session_uses_streaming_transcription(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap()
+            .session
+            .as_ref()
+            .map(|session| session.streaming_transcription)
+            .unwrap_or(false)
+    }
+
     pub fn apply_event(
         &self,
         mailbox: &UiEventMailbox,
@@ -2204,6 +2214,21 @@ mod tests {
         assert!(!view.primary_disabled);
         assert_eq!(view.task_id.as_deref(), Some("task-1"));
         assert_eq!(view.recording_session_id.as_deref(), Some("recording-1"));
+    }
+
+    #[test]
+    fn current_session_reports_streaming_transcription_flag() {
+        let workflow = VoiceWorkflow::new();
+
+        workflow
+            .open_recording_for_test("task-1", "recording-1")
+            .expect("recording starts");
+        assert!(workflow.current_session_uses_streaming_transcription());
+
+        workflow
+            .attach_recording_session("task-1", "recording-1", false)
+            .expect("session flag updates");
+        assert!(!workflow.current_session_uses_streaming_transcription());
     }
 
     #[test]

@@ -246,6 +246,13 @@ pub async fn record_transcribe_stop(
     transcriber: State<'_, TranscriptionService>,
     mailbox: State<'_, UiEventMailbox>,
 ) -> Result<Option<TranscriptionResult>, String> {
+    if workflow.current_session_uses_streaming_transcription() {
+        workflow
+            .stop_streaming_record_transcribe(&audio, &mailbox)
+            .map_err(render_workflow_error)?;
+        return Ok(None);
+    }
+
     workflow
         .stop_record_transcribe(&runtime, &audio, &transcriber, &mailbox)
         .await
