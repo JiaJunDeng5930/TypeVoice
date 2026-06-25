@@ -307,14 +307,13 @@ pub fn load_settings_strict(data_dir: &Path) -> Result<Settings> {
     Ok(v)
 }
 
-pub fn ensure_settings(data_dir: &Path) -> Result<Settings> {
+pub fn ensure_settings(data_dir: &Path) -> Result<()> {
     let p = settings_path(data_dir);
     if p.exists() {
-        return load_settings_strict(data_dir);
+        return Ok(());
     }
     let settings = Settings::default();
-    save_settings(data_dir, &settings)?;
-    Ok(settings)
+    save_settings(data_dir, &settings)
 }
 
 pub fn resolve_auto_paste_enabled(s: &Settings) -> bool {
