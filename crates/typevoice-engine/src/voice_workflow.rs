@@ -15,7 +15,7 @@ use crate::transcription::{
 };
 use crate::transcription_actor::{StreamingProviderKind, TranscriptionActor};
 use crate::ui_events::{UiEvent, UiEventMailbox, UiEventStatus};
-use crate::{data_dir, export, history, insertion, rewrite, RuntimeState};
+use crate::{data_dir, export, history, insertion, pipeline, rewrite, RuntimeState};
 
 pub type WorkflowResult<T> = Result<T, WorkflowError>;
 
@@ -582,6 +582,9 @@ impl VoiceWorkflow {
             }
         };
         let consumed = audio.take_asset(&asset.asset_id).unwrap_or(asset);
+        if let Ok(dir) = data_dir::data_dir() {
+            let _ = pipeline::cleanup_input_audio_artifact(&consumed.output_path, &dir);
+        }
         mailbox.send(UiEvent::stage_with_elapsed(
             &session.session_id,
             "Record",
