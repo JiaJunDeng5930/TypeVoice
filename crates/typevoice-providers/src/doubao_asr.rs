@@ -184,6 +184,7 @@ pub fn build_full_client_request_frame() -> Result<Vec<u8>> {
         "request": {
             "model_name": "bigmodel",
             "enable_nonstream": true,
+            "ssd_version": "200",
             "enable_itn": true,
             "enable_punc": true,
             "show_utterances": true,
@@ -356,6 +357,7 @@ mod tests {
         let value: Value = serde_json::from_slice(&payload).expect("payload parses");
 
         assert_eq!(value["request"]["enable_nonstream"].as_bool(), Some(true));
+        assert_eq!(value["request"]["ssd_version"].as_str(), Some("200"));
         assert!(value["request"].get("result_type").is_none());
     }
 }
