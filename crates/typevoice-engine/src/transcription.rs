@@ -217,8 +217,16 @@ impl TranscriptionService {
             None,
             None,
         );
-        let wav_path = pipeline::preprocess_to_temp_wav(data_dir, &task_id)
-            .map_err(|e| PortError::from_message("E_PREPROCESS_FAILED", e.to_string()))?;
+        let wav_path = match pipeline::preprocess_to_temp_wav(data_dir, &task_id) {
+            Ok(path) => path,
+            Err(e) => {
+                let _ = pipeline::cleanup_input_audio_artifact(&input.input_path, data_dir);
+                return Err(PortError::from_message(
+                    "E_PREPROCESS_FAILED",
+                    e.to_string(),
+                ));
+            }
+        };
         let preprocess_ms = match self
             .run_preprocess(
                 data_dir,
