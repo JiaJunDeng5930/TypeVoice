@@ -32,7 +32,6 @@ export function MainScreen({
   onHistoryChanged,
 }: Props) {
   const [workflow, setWorkflow] = useState<WorkflowView>(EMPTY_WORKFLOW_VIEW);
-  const [hover, setHover] = useState(false);
   const [liveTranscript, setLiveTranscript] = useState("");
   const autoRewriteStartedRef = useRef<Set<string>>(new Set());
   const autoInsertStartedRef = useRef<Set<string>>(new Set());
@@ -284,7 +283,7 @@ export function MainScreen({
   const phase = workflowPhaseName(workflow.phase);
   const hint = primaryActionLabel(workflow.primaryLabel || "START");
   const streamText = phase === "recording" || phase === "transcribing" ? liveTranscript : "";
-  const statusLabel = phase === "idle" ? "" : hint;
+  const statusLabel = phase === "idle" ? "" : statusLabelFromPhase(phase);
   const resultStatusLabel = statusLabelFromPhase(phase);
   const diagnosticMessage = userMessageFromDiagnostic(workflow.diagnosticCode, workflow.diagnosticLine);
 
@@ -296,10 +295,6 @@ export function MainScreen({
           className={`mainButton ${phase === "transcribing" ? "isBusy" : ""}`}
           onClick={() => void sendWorkflowCommand("primary")}
           disabled={workflow.primaryDisabled}
-          onMouseEnter={() => setHover(true)}
-          onMouseLeave={() => setHover(false)}
-          onFocus={() => setHover(true)}
-          onBlur={() => setHover(false)}
           aria-label={hint}
           title={hint}
         >
@@ -310,10 +305,9 @@ export function MainScreen({
           ) : (
             <IconTranscribing size={42} tone="accent" />
           )}
-          <span className="mainButtonText">{hint}</span>
         </button>
 
-        <div className="mainHint">{hover ? hint : statusLabel}</div>
+        <div className="mainHint">{statusLabel}</div>
       </div>
 
       <div className="resultSheet">

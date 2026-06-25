@@ -183,10 +183,10 @@ pub fn build_full_client_request_frame() -> Result<Vec<u8>> {
         },
         "request": {
             "model_name": "bigmodel",
+            "enable_nonstream": true,
             "enable_itn": true,
             "enable_punc": true,
             "show_utterances": true,
-            "result_type": "full",
         },
     });
     let compressed = gzip(serde_json::to_string(&payload)?.as_bytes())?;
@@ -346,5 +346,16 @@ mod tests {
 
         assert!(parsed.is_last);
         assert_eq!(extract_text(&parsed.value).as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn full_client_request_uses_async_nonstream_scheme() {
+        let frame = build_full_client_request_frame().expect("request frame");
+        let payload_size = u32::from_be_bytes(frame[8..12].try_into().unwrap()) as usize;
+        let payload = gunzip(&frame[12..12 + payload_size]).expect("payload decompresses");
+        let value: Value = serde_json::from_slice(&payload).expect("payload parses");
+
+        assert_eq!(value["request"]["enable_nonstream"].as_bool(), Some(true));
+        assert!(value["request"].get("result_type").is_none());
     }
 }

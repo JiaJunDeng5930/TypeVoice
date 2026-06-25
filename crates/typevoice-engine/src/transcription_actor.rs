@@ -458,8 +458,7 @@ fn run_doubao_session(
             .await
             .context("send doubao init frame failed")?;
 
-        let mut full_text = String::new();
-        let mut last_text = String::new();
+        let mut final_text = String::new();
         let mut finishing = false;
         let mut finish_deadline: Option<tokio::time::Instant> = None;
         let mut stats = DoubaoSessionStats::default();
@@ -531,8 +530,7 @@ fn run_doubao_session(
                         if let Ok(dir) = data_dir::data_dir() {
                             let ctx = Some(serde_json::json!({
                                 "finishing": finishing,
-                                "full_text_chars": full_text.chars().count(),
-                                "last_text_chars": last_text.chars().count(),
+                                "final_text_chars": final_text.chars().count(),
                                 "x_tt_logid": logid.as_deref(),
                                 "sent_frames": stats.sent_frames,
                                 "sent_empty_frames": stats.sent_empty_frames,
@@ -601,10 +599,13 @@ fn run_doubao_session(
                         );
                     }
                     if let Some(text) = text {
-                        if let Some(delta) =
-                            append_doubao_text_delta(&mut full_text, &mut last_text, text)
-                        {
-                            mailbox.send(UiEvent::partial(&task_id, &delta, full_text.as_str(), 0));
+                        if let Some(display_text) = replace_doubao_text(&mut final_text, text) {
+                            mailbox.send(UiEvent::partial(
+                                &task_id,
+                                display_text.as_str(),
+                                display_text.as_str(),
+                                0,
+                            ));
                         }
                     }
                     if payload.is_last {
@@ -612,12 +613,6 @@ fn run_doubao_session(
                     }
                 }
             }
-            if finishing && last_text.trim().is_empty() {
-                continue;
-            }
-        }
-        if full_text.trim().is_empty() && !last_text.trim().is_empty() {
-            full_text = last_text.clone();
         }
         if let Ok(dir) = data_dir::data_dir() {
             obs::event(
@@ -628,8 +623,7 @@ fn run_doubao_session(
                 "ok",
                 Some(serde_json::json!({
                     "finishing": finishing,
-                    "full_text_chars": full_text.chars().count(),
-                    "last_text_chars": last_text.chars().count(),
+                    "final_text_chars": final_text.chars().count(),
                     "x_tt_logid": logid.as_deref(),
                     "sent_frames": stats.sent_frames,
                     "sent_empty_frames": stats.sent_empty_frames,
@@ -654,7 +648,7 @@ fn run_doubao_session(
                 Some(serde_json::json!({"x_tt_logid": logid})),
             );
         }
-        Ok(full_text)
+        Ok(final_text)
     });
     if let Err(err) = &result {
         if let Ok(dir) = data_dir::data_dir() {
@@ -683,29 +677,16 @@ async fn recv_doubao_command(
         .ok_or_else(|| anyhow!("doubao command channel closed"))
 }
 
-fn text_delta(previous: &str, current: &str) -> String {
-    if let Some(delta) = current.strip_prefix(previous) {
-        return delta.to_string();
-    }
-    current.to_string()
-}
-
 fn should_send_doubao_audio_frame(pcm: &[u8], is_last: bool) -> bool {
     !pcm.is_empty() || is_last
 }
 
-fn append_doubao_text_delta(
-    full_text: &mut String,
-    last_text: &mut String,
-    text: String,
-) -> Option<String> {
-    let delta = text_delta(last_text, &text);
-    *last_text = text;
-    if delta.trim().is_empty() {
+fn replace_doubao_text(current: &mut String, text: String) -> Option<String> {
+    if text.trim().is_empty() || *current == text {
         return None;
     }
-    full_text.push_str(&delta);
-    Some(delta)
+    *current = text;
+    Some(current.clone())
 }
 
 fn send_failed(mailbox: &UiEventMailbox, task_id: &str, code: &str, message: impl Into<String>) {
@@ -750,12 +731,6 @@ mod tests {
     }
 
     #[test]
-    fn text_delta_returns_append_only_suffix() {
-        assert_eq!(text_delta("你好", "你好世界"), "世界");
-        assert_eq!(text_delta("旧", "新文本"), "新文本");
-    }
-
-    #[test]
     fn final_empty_doubao_chunk_is_sent() {
         assert!(should_send_doubao_audio_frame(&[], true));
         assert!(should_send_doubao_audio_frame(&[1, 2], false));
@@ -763,17 +738,18 @@ mod tests {
     }
 
     #[test]
-    fn append_doubao_delta_preserves_leading_whitespace() {
-        let mut full_text = "hello".to_string();
-        let mut last_text = "hello".to_string();
+    fn replace_doubao_text_uses_latest_complete_text() {
+        let mut current = "旧文本".to_string();
 
-        let delta =
-            append_doubao_text_delta(&mut full_text, &mut last_text, "hello world".to_string())
-                .expect("delta contains text");
+        let next =
+            replace_doubao_text(&mut current, "新文本".to_string()).expect("new text is published");
 
-        assert_eq!(delta, " world");
-        assert_eq!(full_text, "hello world");
-        assert_eq!(last_text, "hello world");
+        assert_eq!(next, "新文本");
+        assert_eq!(current, "新文本");
+        assert_eq!(
+            replace_doubao_text(&mut current, "新文本".to_string()),
+            None
+        );
     }
 
     #[test]
