@@ -330,13 +330,6 @@ button {
   opacity: 0.58;
 }
 
-.mainButtonText {
-  color: var(--accent);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0;
-}
-
 .mainHint {
   color: var(--muted);
   font-size: 10px;
