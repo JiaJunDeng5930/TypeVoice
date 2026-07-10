@@ -13,10 +13,10 @@
     "windows": [
       {
         "title": "TypeVoice",
-        "width": 1310,
-        "height": 879,
-        "minWidth": 1310,
-        "minHeight": 879,
+        "width": 520,
+        "height": 360,
+        "minWidth": 480,
+        "minHeight": 340,
         "decorations": false
       }
     ],

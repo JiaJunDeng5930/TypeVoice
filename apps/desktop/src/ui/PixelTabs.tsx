@@ -15,18 +15,18 @@ const tabs: Array<{
 }> = [
   {
     key: "main",
-    label: "Studio",
-    icon: (active) => <IconNavMic size={22} tone={active ? "accent" : "muted"} filled={active} />,
+    label: "Record",
+    icon: (active) => <IconNavMic size={17} tone={active ? "accent" : "muted"} filled={active} />,
   },
   {
     key: "history",
     label: "History",
-    icon: (active) => <IconBookOpen size={22} tone={active ? "accent" : "muted"} filled={active} />,
+    icon: (active) => <IconBookOpen size={17} tone={active ? "accent" : "muted"} filled={active} />,
   },
   {
     key: "settings",
     label: "Settings",
-    icon: (active) => <IconGear size={22} tone={active ? "accent" : "muted"} filled={active} />,
+    icon: (active) => <IconGear size={17} tone={active ? "accent" : "muted"} filled={active} />,
   },
 ];
 

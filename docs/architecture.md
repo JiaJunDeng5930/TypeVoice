@@ -122,19 +122,18 @@ Provider：
 
 ## 3. 前端交互
 
-Studio 只发送用户意图：
+Record 页只发送用户意图：
 
-- 主按钮发送 `primary`，由 `voice_workflow` 按当前阶段决定开始、停止或取消。
-- 录音或转录阶段的取消按钮发送 `cancel`。
+- 单一按钮在空闲与录音阶段发送 `primary`，在转录阶段发送 `cancel`，其余处理阶段保持禁用。
 - 转录完成后，前端按设置调用 `workflow_rewrite` 和 `workflow_insert` 继续处理。
 
-Studio 显示来自 `WorkflowView` 的阶段、按钮文案、禁用状态和诊断文本。字幕窗显示当前会话文本，History 显示已保存文本并提供复制操作。
+Record 页通过单一按钮显示来自 `WorkflowView` 的阶段、按钮文案、禁用状态和诊断文本。字幕窗显示当前会话文本，History 显示已保存文本并提供复制操作。
 
 前端事件处理：
 
 - `displayOnly` 事件只更新界面过程显示。
 - `stateChanging` 事件调用 `workflow_apply_event`。
-- `workflow_apply_event` 返回的 `WorkflowView` 是 Studio 与字幕窗的流程状态来源。
+- `workflow_apply_event` 返回的 `WorkflowView` 是 Record 页与字幕窗的流程状态来源。
 
 ## 4. 数据契约
 

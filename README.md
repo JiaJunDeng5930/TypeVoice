@@ -10,7 +10,7 @@ TypeVoice 是一款语音输入法：说话输入中文，自动转写成文本�
 
 ![TypeVoice main interface](./docs/assets/readme-main.png)
 
-Studio 负责录音控制与状态反馈，字幕悬浮窗显示当前会话文字，History 提供历史文本复制。
+Record 页负责录音控制与状态反馈，字幕悬浮窗显示当前会话文字，History 提供历史文本复制。
 
 ## 它能做什么
 
@@ -63,7 +63,7 @@ target/release/bundle/
 
 ## 使用方式
 
-1. 点击 Studio 的 `Start`，或按设置的全局快捷键。
+1. 点击 Record 页的 `Start`，或按设置的全局快捷键。
 2. 说话，并在字幕悬浮窗查看实时文字。
 3. 再次点击主按钮或按快捷键结束录音。
 4. 字幕悬浮窗继续显示 ASR 与 LLM 的处理结果。
