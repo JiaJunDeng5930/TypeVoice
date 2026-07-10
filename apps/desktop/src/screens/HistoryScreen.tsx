@@ -88,11 +88,7 @@ export function HistoryScreen({
   return (
     <div className="pageSurface historySurface">
       <header className="pageHeader historyHeader">
-        <div>
-          <div className="pageEyebrow">Library</div>
-          <h1 className="pageTitle">History</h1>
-          <p className="pageDescription">Select a transcript to copy it.</p>
-        </div>
+        <h1 className="pageTitle">History</h1>
         <div className="itemCount" aria-label={`${items.length} saved items`}>
           <strong>{items.length}</strong>
           <span>saved</span>

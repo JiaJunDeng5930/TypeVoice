@@ -148,21 +148,10 @@ export default function App() {
           </button>
         </div>
       </header>
-      <div className="layout appShell">
-        <aside className="sideRail">
-          <div className="brand">
-            <div className="brandMark" aria-hidden="true">
-              <span />
-              <span />
-              <span />
-            </div>
-            <div>
-              <div className="brandTitle">TypeVoice</div>
-              <div className="brandSub">Desktop dictation</div>
-            </div>
-          </div>
+      <div className="appShell">
+        <div className="appNav">
           <PixelTabs active={tab} onChange={setTab} />
-        </aside>
+        </div>
 
         <main className="contentStage">
           <div className="screenSlot" hidden={tab !== "main"}>

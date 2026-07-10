@@ -6,7 +6,6 @@ import { buildDiagnostic, buildUiEventDiagnostic, userMessageFromDiagnostic } fr
 import {
   EMPTY_WORKFLOW_VIEW,
   primaryActionLabel,
-  statusLabelFromPhase,
   workflowPhaseName,
   workflowViewFromPayload,
 } from "../domain/workflowView";
@@ -270,114 +269,40 @@ export function MainScreen({
 
   const phase = workflowPhaseName(workflow.phase);
   const hint = primaryActionLabel(workflow.primaryLabel || "START");
-  const statusLabel = statusLabelFromPhase(phase);
-  const stageDescription = phase === "recording"
-    ? "Live text is shown in the subtitle overlay."
-    : phase === "transcribing"
-      ? "Finishing the transcription in the subtitle overlay."
-      : phase === "rewriting"
-        ? "Improving the text before delivery."
-        : phase === "inserting"
-          ? "Sending the text to your previous app."
-          : phase === "transcribed" || phase === "rewritten"
-            ? "The completed text is available in the subtitle overlay."
-            : phase === "failed"
-              ? "Review the session error below."
-              : "Transcribed text will appear in the subtitle overlay.";
-  const hotkey = settings?.hotkeys_enabled === false ? "" : settings?.hotkey_primary?.trim() || "";
-  const actionDetail = phase === "recording"
-    ? "Finish this recording"
-    : phase === "transcribing"
-      ? "Turning voice into text"
-      : "Begin a new transcription";
+  const buttonCommand: WorkflowCommand = phase === "transcribing" ? "cancel" : "primary";
+  const buttonLabel = phase === "transcribing" ? "Cancel" : phase === "failed" ? "Retry" : hint;
+  const buttonDisabled = phase === "transcribing" ? false : workflow.primaryDisabled;
   const diagnosticMessage = userMessageFromDiagnostic(workflow.diagnosticCode, workflow.diagnosticLine);
 
   return (
-    <div className="pageSurface mainSurface">
-      <header className="studioHeader">
-        <div>
-          <div className="pageEyebrow">Workspace</div>
-          <h1 className="pageTitle">Studio</h1>
-          <p className="pageDescription">Control recording and subtitle output.</p>
-        </div>
-        <div className={`statusPill status-${phase}`} role="status">
-          <span aria-hidden="true" />
-          {statusLabel}
-        </div>
-      </header>
-
-      <section className={`workflowStage status-${phase}`} aria-live="polite">
-        <div className="workflowFocus">
-          <div className="workflowSignal" aria-hidden="true">
-            <span />
-            <span />
-            <span />
-            <span />
-            <span />
-          </div>
-          <div className="workflowState">
-            <div className="pageEyebrow">Session</div>
-            <h2>{statusLabel}</h2>
-            <p>{stageDescription}</p>
-          </div>
-          <div
-            className={`mainDiag ${workflow.diagnosticLine || workflow.diagnosticCode ? "isVisible" : ""}`}
-            aria-hidden={!workflow.diagnosticLine && !workflow.diagnosticCode}
-          >
-            {workflow.diagnosticCode ? <span>{workflow.diagnosticCode}</span> : null}
-            {diagnosticMessage || ""}
-          </div>
-        </div>
-
-        <dl className="sessionFacts">
-          <div>
-            <dt>Subtitle overlay</dt>
-            <dd>{settings ? (settings.hotkeys_show_overlay === false ? "Off" : "On") : "—"}</dd>
-          </div>
-          <div>
-            <dt>Rewrite</dt>
-            <dd>{settings ? (settings.rewrite_enabled === true ? "On" : "Off") : "—"}</dd>
-          </div>
-          <div>
-            <dt>Delivery</dt>
-            <dd>{settings ? (settings.auto_paste_enabled === false ? "Clipboard" : "Auto paste") : "—"}</dd>
-          </div>
-        </dl>
-      </section>
-
-      <div className="controlDock">
-        <button
-          type="button"
-          className="mainButton"
-          onClick={() => void sendWorkflowCommand("primary")}
-          disabled={workflow.primaryDisabled}
-          aria-label={hint}
-          title={hint}
-        >
+    <div className="pageSurface mainSurface" aria-live="polite">
+      <button
+        type="button"
+        className={`mainButton status-${phase}`}
+        onClick={() => void sendWorkflowCommand(buttonCommand)}
+        disabled={buttonDisabled}
+        aria-label={buttonLabel}
+        aria-busy={phase === "transcribing" || phase === "rewriting" || phase === "inserting"}
+        title={buttonLabel}
+      >
+        <span className="mainButtonIcon" aria-hidden="true">
           {phase === "idle" || phase === "transcribed" || phase === "rewritten" || phase === "cancelled" || phase === "failed" ? (
-            <IconStart size={24} tone="accent" />
+            <IconStart size={28} tone="accent" />
           ) : phase === "recording" ? (
-            <IconStop size={24} tone="accent" />
+            <IconStop size={28} tone="accent" />
           ) : (
-            <IconTranscribing size={24} tone="accent" />
+            <IconTranscribing size={28} tone="accent" />
           )}
-        </button>
-        <div className="captureMeta">
-          <strong>{hint}</strong>
-          <span>{actionDetail}</span>
+        </span>
+        <strong>{buttonLabel}</strong>
+      </button>
+
+      {workflow.diagnosticLine || workflow.diagnosticCode ? (
+        <div className="mainDiag isVisible" role="alert">
+          {workflow.diagnosticCode ? <span>{workflow.diagnosticCode}</span> : null}
+          {diagnosticMessage || ""}
         </div>
-        {phase === "recording" || phase === "transcribing" ? (
-          <button
-            type="button"
-            className="quietAction"
-            onClick={() => void sendWorkflowCommand("cancel")}
-          >
-            Cancel
-          </button>
-        ) : hotkey ? (
-          <div className="dockShortcut"><span>{hotkey}</span> shortcut</div>
-        ) : null}
-      </div>
+      ) : null}
     </div>
   );
 }

@@ -710,12 +710,8 @@ export function SettingsScreen({
   return (
     <div className="pageSurface settingsSurface">
       <header className="pageHeader settingsHeader">
-        <div>
-          <div className="pageEyebrow">Preferences</div>
-          <h1 className="pageTitle">Settings</h1>
-          <p className="pageDescription">Configure recording, rewrite, shortcuts, and output.</p>
-        </div>
-        <div className="settingsHeaderNote">Each section saves independently</div>
+        <h1 className="pageTitle">Settings</h1>
+        <div className="settingsHeaderNote">Changes save by section</div>
       </header>
       <div className="settingsGrid">
         <div className="settingsColumn">

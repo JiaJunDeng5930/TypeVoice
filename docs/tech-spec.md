@@ -64,7 +64,7 @@ Frontend
 - 插入由用户单独触发。
 - 复制最近结果由用户单独触发。
 - 命令层只调用 `voice_workflow` 接受用户意图，并把返回的异步任务交给 `voice_tasks`。
-- Studio 使用 `WorkflowView` 的当前阶段、会话 ID、诊断文本和按钮可用性；字幕窗使用其中的最近结果文本；History 从历史存储读取已完成文本。
+- Record 页的单一按钮使用 `WorkflowView` 的当前阶段、诊断文本和按钮可用性；字幕窗使用其中的最近结果文本；History 从历史存储读取已完成文本。
 - 前端转发状态型异步事件时调用 `workflow_apply_event`。
 
 核心状态：
