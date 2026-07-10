@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { defaultTauriGateway } from "../infra/runtimePorts";
 import type { HistoryItem } from "../types";
+import { IconBookOpen } from "../ui/icons";
 
 type Props = {
   epoch: number;
@@ -86,40 +87,53 @@ export function HistoryScreen({
 
   return (
     <div className="pageSurface historySurface">
-      <div className="pageHeader">
-        <div className="sectionTitle">history</div>
-        <div className="muted">{items.length} items</div>
-      </div>
+      <header className="pageHeader historyHeader">
+        <div>
+          <div className="pageEyebrow">Library</div>
+          <h1 className="pageTitle">History</h1>
+          <p className="pageDescription">Select a transcript to copy it.</p>
+        </div>
+        <div className="itemCount" aria-label={`${items.length} saved items`}>
+          <strong>{items.length}</strong>
+          <span>saved</span>
+        </div>
+      </header>
 
       <div className="historyScroller" ref={scrollerRef} onScroll={onScroll}>
+        {!loading && items.length === 0 ? (
+          <div className="historyEmpty">
+            <div className="historyEmptyIcon" aria-hidden="true">
+              <IconBookOpen size={28} tone="muted" />
+            </div>
+            <strong>No transcripts yet</strong>
+            <span>Completed recordings will appear here.</span>
+          </div>
+        ) : null}
+
         {items.map((h) => {
           const text = (h.final_text || h.asr_text || "").trim();
+          const created = new Date(h.created_at_ms);
           return (
-            <div
+            <button
+              type="button"
               key={h.task_id}
               className="historyRow"
-              role="button"
-              tabIndex={0}
-              title="Copy"
+              title="Copy to clipboard"
               onClick={() => void copyHistoryText(text)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  void copyHistoryText(text);
-                }
-              }}
             >
-              <div className="historyTime">
-                {new Date(h.created_at_ms).toLocaleString()}
-              </div>
+              <time className="historyTime" dateTime={created.toISOString()}>
+                <strong>{created.toLocaleDateString(undefined, { month: "short", day: "numeric" })}</strong>
+                <span>{created.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</span>
+              </time>
               <div className="historyPreview">
-                {text || "-"}
+                {text || "Empty transcript"}
               </div>
-            </div>
+              <span className="historyCopyCue" aria-hidden="true">Copy ↗</span>
+            </button>
           );
         })}
 
-        <div className="historyFooter">
+        <div className={`historyFooter ${items.length === 0 ? "isEmpty" : ""}`}>
           {loading ? "Loading..." : hasMore ? "Scroll" : "End"}
         </div>
       </div>

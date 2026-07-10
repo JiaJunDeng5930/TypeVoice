@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 
 type Props = {
   open: boolean;
@@ -9,20 +9,40 @@ type Props = {
 };
 
 export function PixelDialog({ open, title, children, onClose, actions }: Props) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (open && !dialog.open) dialog.showModal();
+    return () => {
+      if (dialog.open) dialog.close();
+    };
+  }, [open]);
+
   if (!open) return null;
   return (
-    <div className="pxDialogBackdrop" role="dialog" aria-modal="true">
-      <div className="pxDialog">
-        <div className="pxDialogTop">
-          <div className="pxDialogTitle">{title}</div>
-          <button type="button" className="pxDialogX" onClick={onClose} aria-label="close">
-            X
-          </button>
-        </div>
-        <div className="pxDialogBody">{children}</div>
-        <div className="pxDialogActions">{actions}</div>
+    <dialog
+      ref={dialogRef}
+      className="pxDialog"
+      aria-label={title}
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div className="pxDialogTop">
+        <div className="pxDialogTitle">{title}</div>
+        <button type="button" className="pxDialogX" onClick={onClose} aria-label="Close dialog">
+          ×
+        </button>
       </div>
-    </div>
+      <div className="pxDialogBody">{children}</div>
+      <div className="pxDialogActions">{actions}</div>
+    </dialog>
   );
 }
 

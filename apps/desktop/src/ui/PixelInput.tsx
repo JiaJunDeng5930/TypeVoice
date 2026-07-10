@@ -19,6 +19,7 @@ export function PixelInput({
       value={value}
       onChange={(e) => onChange(e.currentTarget.value)}
       placeholder={placeholder}
+      aria-label={placeholder}
       disabled={disabled}
       readOnly={readOnly}
       spellCheck={false}
@@ -49,6 +50,7 @@ export function PixelTextarea({
       value={value}
       onChange={(e) => onChange(e.currentTarget.value)}
       placeholder={placeholder}
+      aria-label={placeholder}
       disabled={disabled}
       rows={rows}
       spellCheck={false}

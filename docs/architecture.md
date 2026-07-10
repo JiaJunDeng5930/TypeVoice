@@ -122,20 +122,19 @@ Provider：
 
 ## 3. 前端交互
 
-主屏幕只发送用户意图：
+Studio 只发送用户意图：
 
 - 主按钮发送 `primary`，由 `voice_workflow` 按当前阶段决定开始、停止或取消。
-- `REWRITE` 发送 `rewriteLast`，由 `voice_workflow` 选择最近一次 ASR 文本。
-- `INSERT` 发送 `insertLast`，由 `voice_workflow` 选择当前最终文本。
-- 点击最近结果文本发送 `copyLast`，由 `voice_workflow` 执行复制。
+- 录音或转录阶段的取消按钮发送 `cancel`。
+- 转录完成后，前端按设置调用 `workflow_rewrite` 和 `workflow_insert` 继续处理。
 
-前端显示来自 `WorkflowView` 的按钮文案、禁用状态、最近结果和诊断文本。
+Studio 显示来自 `WorkflowView` 的阶段、按钮文案、禁用状态和诊断文本。字幕窗显示当前会话文本，History 显示已保存文本并提供复制操作。
 
 前端事件处理：
 
 - `displayOnly` 事件只更新界面过程显示。
 - `stateChanging` 事件调用 `workflow_apply_event`。
-- `workflow_apply_event` 返回的 `WorkflowView` 是主界面状态来源。
+- `workflow_apply_event` 返回的 `WorkflowView` 是 Studio 与字幕窗的流程状态来源。
 
 ## 4. 数据契约
 
