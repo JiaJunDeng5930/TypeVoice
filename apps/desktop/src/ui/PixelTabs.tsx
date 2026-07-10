@@ -15,44 +15,43 @@ const tabs: Array<{
 }> = [
   {
     key: "main",
-    label: "Main",
-    icon: (active) => <IconNavMic size={34} tone={active ? "accent" : "muted"} filled={active} />,
+    label: "Studio",
+    icon: (active) => <IconNavMic size={22} tone={active ? "accent" : "muted"} filled={active} />,
   },
   {
     key: "history",
     label: "History",
-    icon: (active) => <IconBookOpen size={34} tone={active ? "accent" : "muted"} filled={active} />,
+    icon: (active) => <IconBookOpen size={22} tone={active ? "accent" : "muted"} filled={active} />,
   },
   {
     key: "settings",
     label: "Settings",
-    icon: (active) => <IconGear size={34} tone={active ? "accent" : "muted"} filled={active} />,
+    icon: (active) => <IconGear size={22} tone={active ? "accent" : "muted"} filled={active} />,
   },
 ];
 
 export function PixelTabs({ active, onChange }: Props) {
   return (
-    <div className="pxTabs" role="tablist" aria-label="pages">
+    <nav className="pxTabs" aria-label="Primary navigation">
       {tabs.map((tab) => {
         const selected = active === tab.key;
         return (
           <button
             key={tab.key}
             type="button"
-            role="tab"
             aria-label={tab.label}
             title={tab.label}
-            aria-selected={selected}
+            aria-current={selected ? "page" : undefined}
             className={`pxTab ${selected ? "isActive" : ""}`}
             onClick={() => onChange(tab.key)}
           >
-            {tab.icon(selected)}
+            <span className="pxTabIcon">{tab.icon(selected)}</span>
+            <span className="pxTabLabel">{tab.label}</span>
           </button>
         );
       })}
-    </div>
+    </nav>
   );
 }
 
 export type { TabKey };
-

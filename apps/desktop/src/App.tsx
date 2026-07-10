@@ -99,7 +99,10 @@ export default function App() {
           );
         }}
       >
-        <div className="windowTitle" data-tauri-drag-region>TypeVoice</div>
+        <div className="windowTitle" data-tauri-drag-region>
+          <span className="windowTitleDot" aria-hidden="true" />
+          TypeVoice
+        </div>
         <div className="windowControls" onDoubleClick={(event) => event.stopPropagation()}>
           <button
             type="button"
@@ -148,31 +151,38 @@ export default function App() {
       <div className="layout appShell">
         <aside className="sideRail">
           <div className="brand">
-            <div className="brandTitle">TYPEVOICE</div>
+            <div className="brandMark" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </div>
+            <div>
+              <div className="brandTitle">TypeVoice</div>
+              <div className="brandSub">Desktop dictation</div>
+            </div>
           </div>
           <PixelTabs active={tab} onChange={setTab} />
-          <div />
         </aside>
 
         <main className="contentStage">
-          <div style={{ display: tab === "main" ? "block" : "none" }}>
+          <div className="screenSlot" hidden={tab !== "main"}>
             <MainScreen
               settings={settings}
               pushToast={pushToast}
               onHistoryChanged={onHistoryChanged}
             />
           </div>
-          <div style={{ display: tab === "history" ? "block" : "none" }}>
+          <div className="screenSlot" hidden={tab !== "history"}>
             <HistoryScreen epoch={epoch} pushToast={pushToast} />
           </div>
-          <div style={{ display: tab === "settings" ? "block" : "none" }}>
+          <div className="screenSlot" hidden={tab !== "settings"}>
             <SettingsScreen
               settings={settings}
               savePatch={savePatch}
               pushToast={pushToast}
               onHistoryCleared={onHistoryChanged}
             />
-            {settingsError ? <div className="muted">{settingsError}</div> : null}
+            {settingsError ? <div className="settingsLoadError">{settingsError}</div> : null}
           </div>
         </main>
       </div>

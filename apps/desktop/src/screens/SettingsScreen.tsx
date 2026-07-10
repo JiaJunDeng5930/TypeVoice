@@ -12,7 +12,6 @@ import { PixelDialog } from "../ui/PixelDialog";
 import { PixelInput, PixelTextarea } from "../ui/PixelInput";
 import { PixelSelect, type PixelSelectOption } from "../ui/PixelSelect";
 import { PixelToggle } from "../ui/PixelToggle";
-import { IconGear } from "../ui/icons";
 
 type Props = {
   settings: Settings | null;
@@ -151,18 +150,18 @@ function SettingsLine({
   return (
     <div className={`settingsLineBlock ${expanded ? "isExpanded" : ""}`}>
       <div className="settingsLine">
-        <div className="settingsLineText">
-          <div className="settingsLineTitle">{title}</div>
-          {detail ? <div className="settingsLineDetail">{detail}</div> : null}
-        </div>
         <button
           type="button"
-          className="settingsGear"
+          className="settingsLineSummary"
           aria-label={`${title} settings`}
           aria-expanded={expanded}
           onClick={() => onTogglePanel(panel)}
         >
-          <IconGear size={22} tone={expanded ? "accent" : "muted"} filled={expanded} />
+          <span className="settingsLineText">
+            <span className="settingsLineTitle">{title}</span>
+            {detail ? <span className="settingsLineDetail">{detail}</span> : null}
+          </span>
+          <span className="settingsChevron" aria-hidden="true" />
         </button>
         {control ? <div className="settingsLineControl">{control}</div> : null}
       </div>
@@ -710,196 +709,212 @@ export function SettingsScreen({
 
   return (
     <div className="pageSurface settingsSurface">
-      <div className="pageHeader settingsHeader">
-        <div className="sectionTitle">settings</div>
-        <div className="ok">Saved</div>
-      </div>
+      <header className="pageHeader settingsHeader">
+        <div>
+          <div className="pageEyebrow">Preferences</div>
+          <h1 className="pageTitle">Settings</h1>
+          <p className="pageDescription">Configure recording, rewrite, shortcuts, and output.</p>
+        </div>
+        <div className="settingsHeaderNote">Each section saves independently</div>
+      </header>
       <div className="settingsGrid">
         <div className="settingsColumn">
           <div className="card">
-          <SettingsLine
-            title="Speech recognition"
-            detail={asrStatusText}
-            panel="asr"
-            expandedPanels={expandedSettingsPanels}
-            onTogglePanel={toggleSettingsPanel}
-            control={<PixelSelect value={asrProvider} onChange={setAsrProvider} options={ASR_PROVIDERS} />}
-          >
-            <div className="stack">
-              {asrProvider === "doubao" ? (
-                <>
-                  <PixelInput
-                    value={doubaoAppKeyDraft || doubaoCredentialsDisplay}
-                    onChange={setDoubaoAppKeyDraft}
-                    placeholder="App Key not configured"
-                    readOnly={!doubaoAppKeyDraft && !!doubaoCredentialsDisplay}
-                  />
-                  <PixelInput
-                    value={doubaoAccessKeyDraft || doubaoCredentialsDisplay}
-                    onChange={setDoubaoAccessKeyDraft}
-                    placeholder="Access Key not configured"
-                    readOnly={!doubaoAccessKeyDraft && !!doubaoCredentialsDisplay}
-                  />
-                  <div className="row" style={{ justifyContent: "flex-end" }}>
-                    <PixelButton
-                      onClick={setDoubaoAsrCredentials}
-                      tone="accent"
-                      disabled={!doubaoAppKeyDraft.trim() || !doubaoAccessKeyDraft.trim()}
-                    >
-                      Save key
-                    </PixelButton>
-                    <PixelButton onClick={clearDoubaoAsrCredentials} tone="danger">
-                      Clear key
-                    </PixelButton>
-                    <PixelButton onClick={checkDoubaoAsrCredentials} disabled={doubaoCheckPending}>
-                      {doubaoCheckPending ? "Checking" : "Check key"}
-                    </PixelButton>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <PixelInput
-                    value={remoteAsrUrl}
-                    onChange={setRemoteAsrUrl}
-                    placeholder="remote ASR URL (e.g. https://api.server/transcribe)"
-                  />
-                  <PixelInput
-                    value={remoteAsrModel}
-                    onChange={setRemoteAsrModel}
-                    placeholder="remote model name (optional)"
-                  />
-                  <PixelInput
-                    value={remoteAsrConcurrency}
-                    onChange={setRemoteAsrConcurrency}
-                    placeholder="remote slicing concurrency (1-16)"
-                  />
-                  <PixelInput
-                    value={remoteAsrKeyDraft || remoteAsrKeyDisplay}
-                    onChange={setRemoteAsrKeyDraft}
-                    placeholder="Remote ASR key not configured"
-                    readOnly={!remoteAsrKeyDraft && !!remoteAsrKeyDisplay}
-                  />
-                  <div className="row" style={{ justifyContent: "flex-end" }}>
-                    <PixelButton
-                      onClick={setRemoteAsrApiKey}
-                      tone="accent"
-                      disabled={!remoteAsrKeyDraft.trim()}
-                    >
-                      Save key
-                    </PixelButton>
-                    <PixelButton onClick={clearRemoteAsrApiKey} tone="danger">
-                      Clear key
-                    </PixelButton>
-                    <PixelButton onClick={checkRemoteAsrApiKey} disabled={remoteAsrCheckPending}>
-                      {remoteAsrCheckPending ? "Checking" : "Check key"}
-                    </PixelButton>
-                  </div>
-                </>
-              )}
-              <div className="row" style={{ justifyContent: "flex-end" }}>
-                <PixelButton onClick={saveAsr} tone="accent">
-                  Save
-                </PixelButton>
-              </div>
-            </div>
-          </SettingsLine>
-
-          <SettingsLine
-            title="Recording input"
-            detail={recordFixedFriendlyName || "Capture source"}
-            panel="recording"
-            expandedPanels={expandedSettingsPanels}
-            onTogglePanel={toggleSettingsPanel}
-            control={
-              <PixelSelect
-                value={recordInputStrategy}
-                onChange={setRecordInputStrategy}
-                options={RECORD_INPUT_STRATEGIES}
-              />
-            }
-          >
-            <div className="stack">
-              {recordInputStrategy === "follow_default" ? (
+            <div className="settingsGroupTitle">Voice &amp; input</div>
+            <SettingsLine
+              title="Speech recognition"
+              detail={asrStatusText}
+              panel="asr"
+              expandedPanels={expandedSettingsPanels}
+              onTogglePanel={toggleSettingsPanel}
+              control={
                 <PixelSelect
-                  value={recordFollowDefaultRole}
-                  onChange={setRecordFollowDefaultRole}
-                  options={RECORD_DEFAULT_ROLES}
+                  value={asrProvider}
+                  onChange={setAsrProvider}
+                  options={ASR_PROVIDERS}
+                  ariaLabel="Speech recognition provider"
                 />
-              ) : null}
-              {recordInputStrategy === "fixed_device" ? (
-                <>
-                  <PixelSelect
-                    value={recordFixedEndpointId}
-                    onChange={setRecordFixedEndpointId}
-                    options={captureDeviceOptions}
-                    placeholder="select fixed capture endpoint"
-                  />
-                  {recordFixedFriendlyName ? (
-                    <div className="muted">fixed: {recordFixedFriendlyName}</div>
-                  ) : null}
-                </>
-              ) : null}
-              {audioCaptureDevices.length === 0 ? (
-                <div className="muted">No active capture endpoints detected.</div>
-              ) : null}
-              <div className="row" style={{ justifyContent: "flex-end" }}>
-                <PixelButton onClick={refreshAudioCaptureDevices}>Refresh</PixelButton>
-                <PixelButton onClick={saveRecordingInput} tone="accent">
-                  Save
-                </PixelButton>
+              }
+            >
+              <div className="stack">
+                {asrProvider === "doubao" ? (
+                  <>
+                    <PixelInput
+                      value={doubaoAppKeyDraft || doubaoCredentialsDisplay}
+                      onChange={setDoubaoAppKeyDraft}
+                      placeholder="App Key not configured"
+                      readOnly={!doubaoAppKeyDraft && !!doubaoCredentialsDisplay}
+                    />
+                    <PixelInput
+                      value={doubaoAccessKeyDraft || doubaoCredentialsDisplay}
+                      onChange={setDoubaoAccessKeyDraft}
+                      placeholder="Access Key not configured"
+                      readOnly={!doubaoAccessKeyDraft && !!doubaoCredentialsDisplay}
+                    />
+                    <div className="row" style={{ justifyContent: "flex-end" }}>
+                      <PixelButton
+                        onClick={setDoubaoAsrCredentials}
+                        tone="accent"
+                        disabled={!doubaoAppKeyDraft.trim() || !doubaoAccessKeyDraft.trim()}
+                      >
+                        Save key
+                      </PixelButton>
+                      <PixelButton onClick={clearDoubaoAsrCredentials} tone="danger">
+                        Clear key
+                      </PixelButton>
+                      <PixelButton onClick={checkDoubaoAsrCredentials} disabled={doubaoCheckPending}>
+                        {doubaoCheckPending ? "Checking" : "Check key"}
+                      </PixelButton>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <PixelInput
+                      value={remoteAsrUrl}
+                      onChange={setRemoteAsrUrl}
+                      placeholder="remote ASR URL (e.g. https://api.server/transcribe)"
+                    />
+                    <PixelInput
+                      value={remoteAsrModel}
+                      onChange={setRemoteAsrModel}
+                      placeholder="remote model name (optional)"
+                    />
+                    <PixelInput
+                      value={remoteAsrConcurrency}
+                      onChange={setRemoteAsrConcurrency}
+                      placeholder="remote slicing concurrency (1-16)"
+                    />
+                    <PixelInput
+                      value={remoteAsrKeyDraft || remoteAsrKeyDisplay}
+                      onChange={setRemoteAsrKeyDraft}
+                      placeholder="Remote ASR key not configured"
+                      readOnly={!remoteAsrKeyDraft && !!remoteAsrKeyDisplay}
+                    />
+                    <div className="row" style={{ justifyContent: "flex-end" }}>
+                      <PixelButton
+                        onClick={setRemoteAsrApiKey}
+                        tone="accent"
+                        disabled={!remoteAsrKeyDraft.trim()}
+                      >
+                        Save key
+                      </PixelButton>
+                      <PixelButton onClick={clearRemoteAsrApiKey} tone="danger">
+                        Clear key
+                      </PixelButton>
+                      <PixelButton onClick={checkRemoteAsrApiKey} disabled={remoteAsrCheckPending}>
+                        {remoteAsrCheckPending ? "Checking" : "Check key"}
+                      </PixelButton>
+                    </div>
+                  </>
+                )}
+                <div className="row" style={{ justifyContent: "flex-end" }}>
+                  <PixelButton onClick={saveAsr} tone="accent">
+                    Save
+                  </PixelButton>
+                </div>
               </div>
-            </div>
-          </SettingsLine>
+            </SettingsLine>
 
-          <SettingsLine
-            title="Silence trim"
-            detail={asrPreprocessTrimEnabled ? "On" : "Off"}
-            panel="preprocess"
-            expandedPanels={expandedSettingsPanels}
-            onTogglePanel={toggleSettingsPanel}
-            control={
-              <PixelToggle
-                value={asrPreprocessTrimEnabled}
-                onChange={setAsrPreprocessTrimEnabled}
-                label="silence trim"
-              />
-            }
-          >
-            <div className="stack">
-              <div className="settingsField">
-                <div className="muted">阈值（dB）</div>
-                <PixelInput
-                  value={asrPreprocessThresholdDb}
-                  onChange={setAsrPreprocessThresholdDb}
-                  placeholder="-50"
+            <SettingsLine
+              title="Recording input"
+              detail={recordFixedFriendlyName || "Capture source"}
+              panel="recording"
+              expandedPanels={expandedSettingsPanels}
+              onTogglePanel={toggleSettingsPanel}
+              control={
+                <PixelSelect
+                  value={recordInputStrategy}
+                  onChange={setRecordInputStrategy}
+                  options={RECORD_INPUT_STRATEGIES}
+                  ariaLabel="Recording input strategy"
                 />
+              }
+            >
+              <div className="stack">
+                {recordInputStrategy === "follow_default" ? (
+                  <PixelSelect
+                    value={recordFollowDefaultRole}
+                    onChange={setRecordFollowDefaultRole}
+                    options={RECORD_DEFAULT_ROLES}
+                    ariaLabel="System default recording role"
+                  />
+                ) : null}
+                {recordInputStrategy === "fixed_device" ? (
+                  <>
+                    <PixelSelect
+                      value={recordFixedEndpointId}
+                      onChange={setRecordFixedEndpointId}
+                      options={captureDeviceOptions}
+                      placeholder="select fixed capture endpoint"
+                      ariaLabel="Fixed recording device"
+                    />
+                    {recordFixedFriendlyName ? (
+                      <div className="muted">fixed: {recordFixedFriendlyName}</div>
+                    ) : null}
+                  </>
+                ) : null}
+                {audioCaptureDevices.length === 0 ? (
+                  <div className="muted">No active capture endpoints detected.</div>
+                ) : null}
+                <div className="row" style={{ justifyContent: "flex-end" }}>
+                  <PixelButton onClick={refreshAudioCaptureDevices}>Refresh</PixelButton>
+                  <PixelButton onClick={saveRecordingInput} tone="accent">
+                    Save
+                  </PixelButton>
+                </div>
               </div>
-              <div className="settingsField">
-                <div className="muted">前段静音 (ms)</div>
-                <PixelInput
-                  value={asrPreprocessStartMs}
-                  onChange={setAsrPreprocessStartMs}
-                  placeholder="300"
+            </SettingsLine>
+
+            <SettingsLine
+              title="Silence trim"
+              detail={asrPreprocessTrimEnabled ? "On" : "Off"}
+              panel="preprocess"
+              expandedPanels={expandedSettingsPanels}
+              onTogglePanel={toggleSettingsPanel}
+              control={
+                <PixelToggle
+                  value={asrPreprocessTrimEnabled}
+                  onChange={setAsrPreprocessTrimEnabled}
+                  label="silence trim"
                 />
+              }
+            >
+              <div className="stack">
+                <div className="settingsField">
+                  <div className="muted">阈值（dB）</div>
+                  <PixelInput
+                    value={asrPreprocessThresholdDb}
+                    onChange={setAsrPreprocessThresholdDb}
+                    placeholder="-50"
+                  />
+                </div>
+                <div className="settingsField">
+                  <div className="muted">前段静音 (ms)</div>
+                  <PixelInput
+                    value={asrPreprocessStartMs}
+                    onChange={setAsrPreprocessStartMs}
+                    placeholder="300"
+                  />
+                </div>
+                <div className="settingsField">
+                  <div className="muted">末段静音 (ms)</div>
+                  <PixelInput
+                    value={asrPreprocessEndMs}
+                    onChange={setAsrPreprocessEndMs}
+                    placeholder="300"
+                  />
+                </div>
+                <div className="row" style={{ justifyContent: "flex-end" }}>
+                  <PixelButton onClick={savePreprocessConfig} tone="accent">
+                    Save
+                  </PixelButton>
+                </div>
               </div>
-              <div className="settingsField">
-                <div className="muted">末段静音 (ms)</div>
-                <PixelInput
-                  value={asrPreprocessEndMs}
-                  onChange={setAsrPreprocessEndMs}
-                  placeholder="300"
-                />
-              </div>
-              <div className="row" style={{ justifyContent: "flex-end" }}>
-                <PixelButton onClick={savePreprocessConfig} tone="accent">
-                  Save
-                </PixelButton>
-              </div>
-            </div>
-          </SettingsLine>
+            </SettingsLine>
           </div>
 
           <div className="card">
+            <div className="settingsGroupTitle">Writing</div>
             <SettingsLine
               title="Rewrite"
               detail={rewriteEnabled ? "On" : "Off"}
@@ -922,9 +937,6 @@ export function SettingsScreen({
                 </div>
               </div>
             </SettingsLine>
-          </div>
-
-          <div className="card">
             <SettingsLine
               title="Glossary"
               detail="One term per line"
@@ -959,6 +971,7 @@ export function SettingsScreen({
           </div>
 
           <div className="card">
+            <div className="settingsGroupTitle">Shortcuts &amp; overlay</div>
             <SettingsLine
               title="Hotkeys"
               detail={hotkeysEnabled ? "On" : "Off"}
@@ -977,6 +990,7 @@ export function SettingsScreen({
                     value={hotkeyPrimary}
                     onChange={setHotkeyPrimary}
                     options={PRIMARY_HOTKEYS}
+                    ariaLabel="Primary hotkey"
                   />
                 </div>
                 <div className="settingsInlineToggle">
@@ -1034,13 +1048,21 @@ export function SettingsScreen({
 
         <div className="settingsColumn">
           <div className="card">
+            <div className="settingsGroupTitle">Intelligence</div>
             <SettingsLine
               title="Language model"
               detail={llmModel.trim() || "Model settings"}
               panel="llm"
               expandedPanels={expandedSettingsPanels}
               onTogglePanel={toggleSettingsPanel}
-              control={<PixelSelect value={reasoning} onChange={setReasoning} options={REASONING} />}
+              control={
+                <PixelSelect
+                  value={reasoning}
+                  onChange={setReasoning}
+                  options={REASONING}
+                  ariaLabel="Reasoning effort"
+                />
+              }
             >
               <div className="stack">
                 <PixelInput
@@ -1056,9 +1078,6 @@ export function SettingsScreen({
                 </div>
               </div>
             </SettingsLine>
-          </div>
-
-          <div className="card">
             <SettingsLine
               title="API key"
               detail="Stored in keyring or environment"
@@ -1086,9 +1105,6 @@ export function SettingsScreen({
                 </div>
               </div>
             </SettingsLine>
-          </div>
-
-          <div className="card">
             <SettingsLine
               title="Improvement context"
               detail="Inputs available to rewriting"
@@ -1139,6 +1155,7 @@ export function SettingsScreen({
           </div>
 
           <div className="card">
+            <div className="settingsGroupTitle">Delivery &amp; data</div>
             <SettingsLine
               title="Export"
               detail={autoPasteEnabled ? "Auto paste on" : "Auto paste off"}
@@ -1162,9 +1179,6 @@ export function SettingsScreen({
                 </div>
               </div>
             </SettingsLine>
-          </div>
-
-          <div className="card">
             <SettingsLine
               title="History"
               detail="Stored dictation records"
