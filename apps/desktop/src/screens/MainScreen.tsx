@@ -138,7 +138,11 @@ export function MainScreen({
 
     (async () => {
       const unlistenUiEvent = await defaultTauriGateway.listen<UiEvent>("ui_event", async (ev) => {
-        if (!ev || ev.kind === "audio.level" || ev.kind === "transcription.partial") return;
+        if (!ev || ev.kind === "audio.level") return;
+        if (ev.kind === "transcription.partial") {
+          // Current-session text belongs exclusively to the optional subtitle overlay.
+          return;
+        }
         if (ev.kind === "workflow.state") {
           const next = workflowViewFromPayload(ev.payload);
           if (next) {

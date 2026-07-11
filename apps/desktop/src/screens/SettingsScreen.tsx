@@ -990,11 +990,11 @@ export function SettingsScreen({
                   />
                 </div>
                 <div className="settingsInlineToggle">
-                  <span>Overlay</span>
+                  <span>Current-session subtitles</span>
                   <PixelToggle
                     value={hotkeysShowOverlay}
                     onChange={setHotkeysShowOverlay}
-                    label="overlay"
+                    label="current-session subtitles"
                   />
                 </div>
                 <SliderField
