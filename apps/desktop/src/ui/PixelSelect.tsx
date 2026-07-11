@@ -17,6 +17,8 @@ export function PixelSelect({
   ariaLabel,
   disabled,
 }: Props) {
+  const selectedOptionMissing = Boolean(value) && !options.some((option) => option.value === value);
+
   return (
     <select
       className="pxSelectBtn"
@@ -25,7 +27,11 @@ export function PixelSelect({
       disabled={disabled}
       aria-label={ariaLabel || placeholder}
     >
-      {placeholder && !value ? (
+      {selectedOptionMissing ? (
+        <option value={value} disabled>
+          {`Unavailable: ${value}`}
+        </option>
+      ) : placeholder && !value ? (
         <option value="" disabled>
           {placeholder}
         </option>
