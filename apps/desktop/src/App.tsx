@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { defaultTauriGateway } from "./infra/runtimePorts";
 import type { Settings } from "./types";
@@ -18,14 +18,19 @@ function uid() {
 
 export default function App() {
   const [tab, setTab] = useState<TabKey>("main");
+  const tabRef = useRef<TabKey>(tab);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [isMaximized, setIsMaximized] = useState(false);
   const [epoch, setEpoch] = useState(0);
 
   const pushToast = useCallback((message: string, tone: ToastTone = "default") => {
     const id = uid();
-    setToasts((prev) => [{ id, message, tone }, ...prev].slice(0, 3));
+    setToasts((prev) => {
+      if (prev.some((toast) => toast.message === message && toast.tone === tone)) return prev;
+      return [{ id, message, tone }, ...prev].slice(0, 3);
+    });
     if (tone === "danger") {
       void defaultTauriGateway
         .invoke("ui_log_event", {
@@ -34,8 +39,8 @@ export default function App() {
             code: "E_UI_TOAST_DANGER",
             message,
             tone,
-            tab,
-            screen: tab,
+            tab: tabRef.current,
+            screen: tabRef.current,
             tsMs: Date.now(),
             extra: { toastId: id },
           },
@@ -44,13 +49,14 @@ export default function App() {
           // ignore ui logging failure
         });
     }
-  }, [tab]);
+  }, []);
 
   const dismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
   const reloadSettings = useCallback(async () => {
+    setSettingsError(null);
     try {
       const s = (await defaultTauriGateway.invoke("get_settings")) as Settings;
       setSettings(s);
@@ -64,6 +70,48 @@ export default function App() {
   useEffect(() => {
     reloadSettings();
   }, [reloadSettings]);
+
+  useEffect(() => {
+    tabRef.current = tab;
+  }, [tab]);
+
+  useEffect(() => {
+    let appWindow: ReturnType<typeof getCurrentWindow>;
+    try {
+      appWindow = getCurrentWindow();
+    } catch {
+      return;
+    }
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+
+    const refreshMaximized = () => {
+      void appWindow
+        .isMaximized()
+        .then((value) => {
+          if (!disposed) setIsMaximized(value);
+        })
+        .catch(() => {
+          // Window state only affects the control label.
+        });
+    };
+
+    refreshMaximized();
+    void appWindow
+      .onResized(refreshMaximized)
+      .then((stopListening) => {
+        if (disposed) stopListening();
+        else unlisten = stopListening;
+      })
+      .catch(() => {
+        // Keep the default label if resize events are unavailable.
+      });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 
   const savePatch = useCallback(
     async (patch: Record<string, unknown>) => {
@@ -121,8 +169,8 @@ export default function App() {
           <button
             type="button"
             className="windowControl windowControlMaximize"
-            aria-label="Maximize"
-            title="Maximize"
+            aria-label={isMaximized ? "Restore" : "Maximize"}
+            title={isMaximized ? "Restore" : "Maximize"}
             onClick={() => {
               runWindowCommand(
                 () => getCurrentWindow().toggleMaximize(),
@@ -167,11 +215,12 @@ export default function App() {
           <div className="screenSlot" hidden={tab !== "settings"}>
             <SettingsScreen
               settings={settings}
+              settingsError={settingsError}
               savePatch={savePatch}
               pushToast={pushToast}
               onHistoryCleared={onHistoryChanged}
+              onRetrySettings={reloadSettings}
             />
-            {settingsError ? <div className="settingsLoadError">{settingsError}</div> : null}
           </div>
         </main>
       </div>

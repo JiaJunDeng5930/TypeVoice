@@ -292,6 +292,7 @@ export default function OverlayApp() {
     <SubtitleOverlay
       config={config}
       text={subtitleText}
+      status={overlayView.status}
       visible={overlayView.visible}
       onDragActivity={(active) => {
         dragActiveRef.current = active;
@@ -303,6 +304,7 @@ export default function OverlayApp() {
 type SubtitleOverlayProps = {
   config: OverlayConfig;
   text: string;
+  status: string;
   visible: boolean;
   onDragActivity: (active: boolean) => void;
 };
@@ -310,6 +312,7 @@ type SubtitleOverlayProps = {
 function SubtitleOverlay({
   config,
   text,
+  status,
   visible,
   onDragActivity,
 }: SubtitleOverlayProps) {
@@ -333,10 +336,11 @@ function SubtitleOverlay({
       <div
         className="subtitleOverlayText"
         data-tauri-drag-region
-        role="status"
-        aria-live="polite"
       >
         {text}
+      </div>
+      <div className="srOnly" role="status" aria-live="polite">
+        {status}
       </div>
     </div>
   );

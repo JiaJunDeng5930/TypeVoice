@@ -22,7 +22,7 @@ export function PixelToastHost({ toasts, onDismiss }: Props) {
   }, [toasts, onDismiss]);
 
   return (
-    <div className="pxToastHost" aria-live="polite" aria-relevant="additions">
+    <div className="pxToastHost">
       {toasts.slice(0, 2).map((t) => (
         <div
           key={t.id}

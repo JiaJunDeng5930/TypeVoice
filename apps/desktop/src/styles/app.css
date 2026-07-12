@@ -5,7 +5,6 @@
   --surface: #ffffff;
   --ink: #202124;
   --muted: #6f7074;
-  --soft: #9b9ca0;
   --border: #deded9;
   --border-strong: #c9c9c3;
   --accent: #ef5b3d;
@@ -13,8 +12,7 @@
   --accent-soft: #fde2dc;
   --danger: #b43d35;
   --danger-soft: #f8e2df;
-  --shadow: rgba(25, 26, 29, 0.09);
-  --focus: rgba(239, 91, 61, 0.25);
+  --focus: var(--accent-deep);
   --font-ui: "Segoe UI Variable Text", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Segoe UI Variable Display", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -118,7 +116,6 @@ summary {
   height: 6px;
   border-radius: 50%;
   background: var(--accent);
-  box-shadow: 0 0 0 4px rgba(227, 92, 63, 0.12);
 }
 
 .windowControls {
@@ -345,7 +342,6 @@ summary {
   cursor: pointer;
   box-shadow: 0 8px 24px rgba(30, 31, 34, 0.1);
   transition:
-    transform 220ms var(--ease-out),
     box-shadow 220ms var(--ease-out),
     background 220ms var(--ease-out),
     border-color 220ms var(--ease-out);
@@ -365,11 +361,16 @@ summary {
 
 .mainButton:hover:not(:disabled),
 .mainButton:focus-visible:not(:disabled) {
-  transform: translateY(-2px);
   box-shadow:
     0 12px 30px rgba(30, 31, 34, 0.14),
     0 0 0 4px rgba(239, 91, 61, 0.16);
   outline: none;
+}
+
+.mainButton:focus-visible:not(:disabled) {
+  box-shadow:
+    0 12px 30px rgba(30, 31, 34, 0.14),
+    0 0 0 4px var(--focus);
 }
 
 .mainButton:active:not(:disabled) {
@@ -382,7 +383,7 @@ summary {
 
 .mainButton.status-recording {
   border-color: var(--accent);
-  background: var(--accent);
+  background: var(--accent-deep);
   color: #fff;
   box-shadow: 0 0 0 10px rgba(239, 91, 61, 0.1), 0 10px 28px rgba(207, 67, 42, 0.28);
   animation: recordPulse 1.4s ease-in-out infinite;
@@ -398,8 +399,8 @@ summary {
 
 .mainButton.status-transcribed,
 .mainButton.status-rewritten {
-  border-color: #4c8c66;
-  background: #4c8c66;
+  border-color: #356f4d;
+  background: #356f4d;
   color: #fff;
 }
 
@@ -481,8 +482,7 @@ summary {
 
 .itemCount span {
   color: var(--muted);
-  font-size: 9px;
-  text-transform: uppercase;
+  font-size: 10px;
 }
 
 .historyScroller {
@@ -506,16 +506,12 @@ summary {
   padding: 10px 6px;
   cursor: pointer;
   text-align: left;
-  transition:
-    background 160ms ease,
-    padding 180ms var(--ease-out);
+  transition: background 160ms ease;
 }
 
 .historyRow:hover,
 .historyRow:focus-visible {
   background: #fff;
-  padding-left: 16px;
-  padding-right: 16px;
   outline: none;
 }
 
@@ -548,18 +544,15 @@ summary {
 
 .historyCopyCue {
   justify-self: end;
-  color: var(--soft);
+  color: var(--muted);
   font-size: 9px;
   font-weight: 650;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  transition: color 150ms ease, transform 180ms var(--ease-out);
+  transition: color 150ms ease;
 }
 
 .historyRow:hover .historyCopyCue,
 .historyRow:focus-visible .historyCopyCue {
   color: var(--accent-deep);
-  transform: translate(2px, -2px);
 }
 
 .historyEmpty {
@@ -594,17 +587,19 @@ summary {
   font-size: 11px;
 }
 
-.historyFooter {
-  padding: 18px 8px 4px;
-  color: var(--soft);
-  font-size: 9px;
-  letter-spacing: 0.08em;
-  text-align: right;
-  text-transform: uppercase;
+.historyError strong {
+  color: var(--danger);
 }
 
-.historyFooter.isEmpty {
-  display: none;
+.historyRetry {
+  margin-top: 6px;
+}
+
+.historyFooter {
+  padding: 18px 8px 4px;
+  color: var(--muted);
+  font-size: 10px;
+  text-align: right;
 }
 
 .settingsSurface {
@@ -613,6 +608,12 @@ summary {
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
   background: var(--paper);
+}
+
+.settingsSurface > .card {
+  align-self: start;
+  margin: 14px 20px;
+  padding: 4px 14px 14px;
 }
 
 .settingsHeader {
@@ -648,12 +649,12 @@ summary {
 }
 
 .settingsGroupTitle {
+  margin: 0;
   padding: 12px 2px 8px;
   color: var(--accent-deep);
-  font-size: 9px;
-  font-weight: 750;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
 
 .settingsLineBlock {
@@ -666,6 +667,11 @@ summary {
   grid-template-columns: minmax(0, 1fr) minmax(142px, 205px);
   gap: 14px;
   align-items: center;
+}
+
+.settingsLineHeading {
+  min-width: 0;
+  margin: 0;
 }
 
 .settingsLineSummary {
@@ -853,24 +859,18 @@ summary {
   transition:
     border-color 150ms ease,
     color 150ms ease,
-    background 150ms ease,
-    transform 150ms var(--ease-out);
+    background 150ms ease;
 }
 
 .pxBtn:hover:not(:disabled),
 .pxBtn:focus-visible:not(:disabled) {
   border-color: rgba(227, 92, 63, 0.55);
   color: var(--accent-deep);
-  transform: translateY(-1px);
   outline: none;
 }
 
 .pxBtn:focus-visible {
   box-shadow: 0 0 0 3px var(--focus);
-}
-
-.pxBtn:active:not(:disabled) {
-  transform: translateY(0);
 }
 
 .pxBtn:disabled {
@@ -879,8 +879,8 @@ summary {
 }
 
 .pxBtnAccent {
-  border-color: var(--accent);
-  background: var(--accent);
+  border-color: var(--accent-deep);
+  background: var(--accent-deep);
   color: #fff;
 }
 
@@ -927,7 +927,7 @@ summary {
 
 .pxInput::placeholder,
 .pxTextarea::placeholder {
-  color: #98999d;
+  color: var(--muted);
 }
 
 .pxInput:focus-visible,
@@ -1033,20 +1033,6 @@ summary {
   font-weight: 650;
 }
 
-.settingsLoadError {
-  position: absolute;
-  right: 24px;
-  bottom: 24px;
-  max-width: 360px;
-  border: 1px solid #e7bdb7;
-  border-radius: 12px;
-  background: var(--danger-soft);
-  color: var(--danger);
-  padding: 11px 13px;
-  box-shadow: 0 16px 36px var(--shadow);
-  font-size: 11px;
-}
-
 .pxToastHost {
   position: fixed;
   z-index: 1000;
@@ -1061,16 +1047,49 @@ summary {
   pointer-events: auto;
   min-width: 180px;
   max-width: 340px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 12px;
-  background: rgba(31, 30, 32, 0.94);
+  background: #252426;
   color: #e7e1da;
   padding: 11px 14px;
-  cursor: pointer;
-  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.28);
-  backdrop-filter: blur(16px);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
   font-size: 10px;
   animation: toastIn 220ms var(--ease-out) both;
+}
+
+.pxToastMessage {
+  min-width: 0;
+}
+
+.pxToastDismiss {
+  appearance: none;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 7px;
+  background: transparent;
+  color: #f5f2ee;
+  padding: 0 0 2px;
+  cursor: pointer;
+  font-size: 17px;
+  line-height: 1;
+}
+
+.pxToastDismiss:hover,
+.pxToastDismiss:focus-visible {
+  border-color: rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.1);
+  outline: none;
+}
+
+.pxToastDismiss:focus-visible {
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.18);
 }
 
 .pxToast.isOk {
@@ -1200,6 +1219,16 @@ body.isOverlay {
   text-shadow: 0 1px 4px rgba(0, 0, 0, 0.34);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 @keyframes recordPulse {
