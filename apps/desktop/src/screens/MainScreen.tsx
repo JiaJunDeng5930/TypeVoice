@@ -53,7 +53,7 @@ export function MainScreen({
         const refreshed = await defaultTauriGateway.invoke<WorkflowView>("workflow_snapshot");
         setWorkflow(refreshed);
       } catch (refreshErr) {
-        const refreshDiag = buildDiagnostic(refreshErr, "WORKFLOW STATE FAILED");
+        const refreshDiag = buildDiagnostic(refreshErr, "Recording status unavailable");
         pushToast(refreshDiag.title, "danger");
       }
     }
@@ -79,7 +79,7 @@ export function MainScreen({
         const refreshed = await defaultTauriGateway.invoke<WorkflowView>("workflow_snapshot");
         setWorkflow(refreshed);
       } catch (refreshErr) {
-        const refreshDiag = buildDiagnostic(refreshErr, "WORKFLOW STATE FAILED");
+        const refreshDiag = buildDiagnostic(refreshErr, "Recording status unavailable");
         pushToast(refreshDiag.title, "danger");
       }
     }
@@ -107,7 +107,7 @@ export function MainScreen({
       const view = await defaultTauriGateway.invoke<WorkflowView>("workflow_snapshot");
       await acceptWorkflowView(view, false);
     })().catch((err) => {
-      const diag = buildDiagnostic(err, "WORKFLOW STATE FAILED");
+      const diag = buildDiagnostic(err, "Recording status unavailable");
       pushToast(diag.title, "danger");
     });
   }, [acceptWorkflowView, pushToast]);
@@ -166,7 +166,7 @@ export function MainScreen({
                 });
                 await acceptWorkflowView(next, false);
               } catch (err) {
-                const diag = buildDiagnostic(err, "WORKFLOW EVENT FAILED");
+                const diag = buildDiagnostic(err, "Recording update failed");
                 pushToast(diag.title, "danger");
               }
             }
@@ -180,7 +180,7 @@ export function MainScreen({
           return;
         }
         if (ev.status === "cancelled") {
-          pushToast("CANCELLED", "default");
+          pushToast("Cancelled", "default");
           return;
         }
         if (ev.kind === "transcription.empty") {
@@ -192,12 +192,12 @@ export function MainScreen({
               });
               await acceptWorkflowView(next, false);
             } catch (err) {
-              const diag = buildDiagnostic(err, "WORKFLOW EVENT FAILED");
+              const diag = buildDiagnostic(err, "Recording update failed");
               pushToast(diag.title, "danger");
               return;
             }
           }
-          pushToast("未检测到语音", "default");
+          pushToast("No speech detected", "default");
           return;
         }
         if (ev.kind === "transcription.completed") {
@@ -218,7 +218,7 @@ export function MainScreen({
             pushToast("Text ready", "ok");
             onHistoryChanged();
           } catch (err) {
-            const diag = buildDiagnostic(err, "WORKFLOW EVENT FAILED");
+            const diag = buildDiagnostic(err, "Recording update failed");
             pushToast(diag.title, "danger");
           }
           return;
@@ -239,7 +239,7 @@ export function MainScreen({
       });
       trackUnlisten(unlistenUiEvent);
     })().catch((err) => {
-      const diag = buildDiagnostic(err, "UI EVENT LISTEN FAILED");
+      const diag = buildDiagnostic(err, "Live recording updates unavailable");
       pushToast(diag.title, "danger");
     });
 
@@ -265,7 +265,7 @@ export function MainScreen({
         const refreshed = await defaultTauriGateway.invoke<WorkflowView>("workflow_snapshot");
         await acceptWorkflowView(refreshed, false);
       } catch (refreshErr) {
-        const refreshDiag = buildDiagnostic(refreshErr, "WORKFLOW STATE FAILED");
+        const refreshDiag = buildDiagnostic(refreshErr, "Recording status unavailable");
         pushToast(refreshDiag.title, "danger");
       }
     }

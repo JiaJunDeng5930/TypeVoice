@@ -93,10 +93,12 @@ export function HistoryScreen({
     <div className="pageSurface historySurface">
       <header className="pageHeader historyHeader">
         <h1 className="pageTitle">History</h1>
-        <div className="itemCount" aria-label={`${items.length} loaded items`}>
-          <strong>{items.length}</strong>
-          <span>loaded</span>
-        </div>
+        {!loadError && (!loading || items.length > 0) ? (
+          <div className="itemCount" aria-label={`${items.length} loaded items`}>
+            <strong>{items.length}</strong>
+            <span>loaded</span>
+          </div>
+        ) : null}
       </header>
 
       <div
