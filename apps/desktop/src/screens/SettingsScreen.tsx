@@ -15,35 +15,37 @@ import { PixelToggle } from "../ui/PixelToggle";
 
 type Props = {
   settings: Settings | null;
+  settingsError?: string | null;
+  onRetrySettings: () => void;
   savePatch: (patch: Record<string, unknown>) => Promise<void>;
   pushToast: (msg: string, tone?: "default" | "ok" | "danger") => void;
   onHistoryCleared: () => void;
 };
 
 const REASONING: PixelSelectOption[] = [
-  { value: "default", label: "default (omit)" },
-  { value: "none", label: "none" },
-  { value: "minimal", label: "minimal" },
-  { value: "low", label: "low" },
-  { value: "medium", label: "medium" },
-  { value: "high", label: "high" },
-  { value: "xhigh", label: "xhigh" },
+  { value: "default", label: "Default (omit)" },
+  { value: "none", label: "None" },
+  { value: "minimal", label: "Minimal" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+  { value: "xhigh", label: "Extra high" },
 ];
 
 const ASR_PROVIDERS: PixelSelectOption[] = [
-  { value: "doubao", label: "doubao streaming" },
-  { value: "remote", label: "remote (cloud)" },
+  { value: "doubao", label: "Doubao streaming" },
+  { value: "remote", label: "Remote (cloud)" },
 ];
 
 const RECORD_INPUT_STRATEGIES: PixelSelectOption[] = [
-  { value: "follow_default", label: "follow system default" },
-  { value: "fixed_device", label: "fixed specific device" },
-  { value: "auto_select", label: "auto-select available" },
+  { value: "follow_default", label: "Follow system default" },
+  { value: "fixed_device", label: "Use a specific device" },
+  { value: "auto_select", label: "Select an available device" },
 ];
 
 const RECORD_DEFAULT_ROLES: PixelSelectOption[] = [
-  { value: "communications", label: "communications (eCommunications)" },
-  { value: "console", label: "console (eConsole)" },
+  { value: "communications", label: "Communications (eCommunications)" },
+  { value: "console", label: "Console (eConsole)" },
 ];
 
 const PRIMARY_HOTKEYS: PixelSelectOption[] = [
@@ -147,25 +149,33 @@ function SettingsLine({
   children,
 }: SettingsLineProps) {
   const expanded = expandedPanels.includes(panel);
+  const panelId = `settings-panel-${panel}`;
   return (
     <div className={`settingsLineBlock ${expanded ? "isExpanded" : ""}`}>
       <div className="settingsLine">
-        <button
-          type="button"
-          className="settingsLineSummary"
-          aria-label={`${title} settings`}
-          aria-expanded={expanded}
-          onClick={() => onTogglePanel(panel)}
-        >
-          <span className="settingsLineText">
-            <span className="settingsLineTitle">{title}</span>
-            {detail ? <span className="settingsLineDetail">{detail}</span> : null}
-          </span>
-          <span className="settingsChevron" aria-hidden="true" />
-        </button>
+        <h3 className="settingsLineHeading">
+          <button
+            type="button"
+            className="settingsLineSummary"
+            aria-label={`${title} settings`}
+            aria-expanded={expanded}
+            aria-controls={panelId}
+            onClick={() => onTogglePanel(panel)}
+          >
+            <span className="settingsLineText">
+              <span className="settingsLineTitle">{title}</span>
+              {detail ? <span className="settingsLineDetail">{detail}</span> : null}
+            </span>
+            <span className="settingsChevron" aria-hidden="true" />
+          </button>
+        </h3>
         {control ? <div className="settingsLineControl">{control}</div> : null}
       </div>
-      {expanded && children ? <div className="settingsLinePanel">{children}</div> : null}
+      {expanded && children ? (
+        <div id={panelId} className="settingsLinePanel">
+          {children}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -183,6 +193,8 @@ function clampNumber(value: number | null | undefined, fallback: number, min: nu
 
 export function SettingsScreen({
   settings,
+  settingsError,
+  onRetrySettings,
   savePatch,
   pushToast,
   onHistoryCleared,
@@ -210,6 +222,7 @@ export function SettingsScreen({
   const [recordFixedEndpointId, setRecordFixedEndpointId] = useState("");
   const [recordFixedFriendlyName, setRecordFixedFriendlyName] = useState("");
   const [audioCaptureDevices, setAudioCaptureDevices] = useState<AudioCaptureDevice[]>([]);
+  const [audioCaptureDevicesError, setAudioCaptureDevicesError] = useState<string | null>(null);
 
   const [hotkeysEnabled, setHotkeysEnabled] = useState(true);
   const [hotkeyPrimary, setHotkeyPrimary] = useState("Alt");
@@ -368,12 +381,13 @@ export function SettingsScreen({
         "list_audio_capture_devices",
       )) as AudioCaptureDevice[];
       setAudioCaptureDevices(rows);
+      setAudioCaptureDevicesError(null);
       if (!recordFixedEndpointId.trim()) return;
       const found = rows.find((v) => v.endpoint_id === recordFixedEndpointId);
       if (!found) return;
       setRecordFixedFriendlyName(found.friendly_name);
     } catch {
-      setAudioCaptureDevices([]);
+      setAudioCaptureDevicesError("Recording devices could not be loaded.");
     }
   }
 
@@ -407,13 +421,13 @@ export function SettingsScreen({
 
   async function persistSettingsPatch(
     patch: Record<string, unknown>,
-    successMessage = "SAVED",
+    successMessage = "Saved",
   ): Promise<boolean> {
     return runToastAction(
       async () => {
         await savePatch(patch);
       },
-      { success: successMessage, failure: "SAVE FAILED" },
+      { success: successMessage, failure: "Save failed" },
     );
   }
 
@@ -421,11 +435,11 @@ export function SettingsScreen({
     const provider = asrProvider === "remote" ? "remote" : "doubao";
     const concurrencyNum = Number(remoteAsrConcurrency);
     if (provider === "remote" && !remoteAsrUrl.trim()) {
-      pushToast("REMOTE ASR URL REQUIRED", "danger");
+      pushToast("Remote ASR URL is required", "danger");
       return;
     }
     if (!Number.isFinite(concurrencyNum)) {
-      pushToast("REMOTE ASR CONCURRENCY MUST BE A NUMBER", "danger");
+      pushToast("Remote ASR concurrency must be a number", "danger");
       return;
     }
     const normalizedConcurrency = Math.max(1, Math.min(16, Math.round(concurrencyNum)));
@@ -449,7 +463,7 @@ export function SettingsScreen({
           : "follow_default";
     const role = recordFollowDefaultRole === "console" ? "console" : "communications";
     if (strategy === "fixed_device" && !recordFixedEndpointId.trim()) {
-      pushToast("FIXED DEVICE MUST BE SELECTED", "danger");
+      pushToast("Select a fixed recording device", "danger");
       return;
     }
     const selected = audioCaptureDevices.find(
@@ -478,15 +492,15 @@ export function SettingsScreen({
     const trimStartMs = Number(asrPreprocessStartMs);
     const trimEndMs = Number(asrPreprocessEndMs);
     if (!Number.isFinite(thresholdDb) || !Number.isFinite(trimStartMs) || !Number.isFinite(trimEndMs)) {
-      pushToast("INVALID PREPROCESS INPUT", "danger");
+      pushToast("Silence trim values must be numbers", "danger");
       return;
     }
     if (thresholdDb > 0) {
-      pushToast("SILENCE THRESHOLD SHOULD NOT BE ABOVE 0", "danger");
+      pushToast("Silence threshold cannot be above 0 dB", "danger");
       return;
     }
     if (trimStartMs < 0 || trimEndMs < 0) {
-      pushToast("TRIM MS SHOULD BE >= 0", "danger");
+      pushToast("Silence trim duration cannot be negative", "danger");
       return;
     }
     await persistSettingsPatch({
@@ -511,7 +525,7 @@ export function SettingsScreen({
 
   async function saveRewrite() {
     if (rewriteEnabled && !llmPrompt.trim()) {
-      pushToast("LLM PROMPT REQUIRED", "danger");
+      pushToast("A rewrite prompt is required", "danger");
       return;
     }
     await persistSettingsPatch({
@@ -526,7 +540,13 @@ export function SettingsScreen({
       .split("\n")
       .map((x) => x.trim())
       .filter((x) => x.length > 0);
-    await persistSettingsPatch({ rewrite_glossary: items }, "GLOSSARY SAVED");
+    await persistSettingsPatch(
+      {
+        rewrite_glossary: items,
+        rewrite_include_glossary: rewriteIncludeGlossary,
+      },
+      "Glossary saved",
+    );
   }
 
   async function saveContextConfig() {
@@ -563,9 +583,9 @@ export function SettingsScreen({
       await defaultTauriGateway.invoke("set_llm_api_key", { apiKey: k });
       setKeyDraft("");
       await refreshSensitiveSettingStatuses();
-      pushToast("KEY SAVED", "ok");
+      pushToast("API key saved", "ok");
     } catch {
-      pushToast("KEY SAVE FAILED", "danger");
+      pushToast("API key could not be saved", "danger");
     }
   }
 
@@ -574,9 +594,9 @@ export function SettingsScreen({
       await defaultTauriGateway.invoke("clear_llm_api_key");
       setLlmKeyStatus(null);
       await refreshSensitiveSettingStatuses();
-      pushToast("KEY CLEARED", "ok");
+      pushToast("API key cleared", "ok");
     } catch {
-      pushToast("KEY CLEAR FAILED", "danger");
+      pushToast("API key could not be cleared", "danger");
     }
   }
 
@@ -604,9 +624,9 @@ export function SettingsScreen({
       await defaultTauriGateway.invoke("set_remote_asr_api_key", { apiKey: k });
       setRemoteAsrKeyDraft("");
       await refreshSensitiveSettingStatuses();
-      pushToast("REMOTE KEY SAVED", "ok");
+      pushToast("Remote ASR key saved", "ok");
     } catch {
-      pushToast("REMOTE KEY SAVE FAILED", "danger");
+      pushToast("Remote ASR key could not be saved", "danger");
     }
   }
 
@@ -615,9 +635,9 @@ export function SettingsScreen({
       await defaultTauriGateway.invoke("clear_remote_asr_api_key");
       setRemoteAsrKeyStatus(null);
       await refreshSensitiveSettingStatuses();
-      pushToast("REMOTE KEY CLEARED", "ok");
+      pushToast("Remote ASR key cleared", "ok");
     } catch {
-      pushToast("REMOTE KEY CLEAR FAILED", "danger");
+      pushToast("Remote ASR key could not be cleared", "danger");
     }
   }
 
@@ -646,9 +666,9 @@ export function SettingsScreen({
       setDoubaoAppKeyDraft("");
       setDoubaoAccessKeyDraft("");
       await refreshSensitiveSettingStatuses();
-      pushToast("DOUBAO KEY SAVED", "ok");
+      pushToast("Doubao credentials saved", "ok");
     } catch {
-      pushToast("DOUBAO KEY SAVE FAILED", "danger");
+      pushToast("Doubao credentials could not be saved", "danger");
     }
   }
 
@@ -657,9 +677,9 @@ export function SettingsScreen({
       await defaultTauriGateway.invoke("clear_doubao_asr_credentials");
       setDoubaoCredentialsStatus(null);
       await refreshSensitiveSettingStatuses();
-      pushToast("DOUBAO KEY CLEARED", "ok");
+      pushToast("Doubao credentials cleared", "ok");
     } catch {
-      pushToast("DOUBAO KEY CLEAR FAILED", "danger");
+      pushToast("Doubao credentials could not be cleared", "danger");
     }
   }
 
@@ -679,10 +699,10 @@ export function SettingsScreen({
   async function clearHistory() {
     try {
       await defaultTauriGateway.invoke("history_clear");
-      pushToast("HISTORY CLEARED", "ok");
+      pushToast("History cleared", "ok");
       onHistoryCleared();
     } catch {
-      pushToast("CLEAR FAILED", "danger");
+      pushToast("History could not be cleared", "danger");
     } finally {
       setConfirmClear(false);
     }
@@ -690,7 +710,7 @@ export function SettingsScreen({
 
   const asrStatusText = useMemo(() => {
     if (asrProvider === "doubao") {
-      return "Doubao streaming  wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async";
+      return "Doubao streaming";
     }
     return `Remote ${remoteAsrUrl.trim() || "https://api.server/transcribe"}`;
   }, [asrProvider, remoteAsrUrl]);
@@ -707,6 +727,40 @@ export function SettingsScreen({
     );
   }
 
+  function expandSettingsPanel(panel: SettingsPanelId) {
+    setExpandedSettingsPanels((current) =>
+      current.includes(panel) ? current : [...current, panel],
+    );
+  }
+
+  if (settings === null) {
+    return (
+      <div className="pageSurface settingsSurface">
+        <header className="pageHeader settingsHeader">
+          <h1 className="pageTitle">Settings</h1>
+        </header>
+        <div className="card">
+          {settingsError ? (
+            <div className="stack">
+              <h2 className="settingsGroupTitle">Settings unavailable</h2>
+              <div className="muted">{settingsError}</div>
+              <div className="row" style={{ justifyContent: "flex-end" }}>
+                <PixelButton onClick={onRetrySettings} tone="accent">
+                  Retry
+                </PixelButton>
+              </div>
+            </div>
+          ) : (
+            <div className="stack">
+              <h2 className="settingsGroupTitle">Loading settings</h2>
+              <div className="muted">Reading your saved configuration…</div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="pageSurface settingsSurface">
       <header className="pageHeader settingsHeader">
@@ -716,7 +770,7 @@ export function SettingsScreen({
       <div className="settingsGrid">
         <div className="settingsColumn">
           <div className="card">
-            <div className="settingsGroupTitle">Voice &amp; input</div>
+            <h2 className="settingsGroupTitle">Voice &amp; input</h2>
             <SettingsLine
               title="Speech recognition"
               detail={asrStatusText}
@@ -726,7 +780,10 @@ export function SettingsScreen({
               control={
                 <PixelSelect
                   value={asrProvider}
-                  onChange={setAsrProvider}
+                  onChange={(value) => {
+                    setAsrProvider(value);
+                    expandSettingsPanel("asr");
+                  }}
                   options={ASR_PROVIDERS}
                   ariaLabel="Speech recognition provider"
                 />
@@ -736,17 +793,24 @@ export function SettingsScreen({
                 {asrProvider === "doubao" ? (
                   <>
                     <PixelInput
-                      value={doubaoAppKeyDraft || doubaoCredentialsDisplay}
+                      value={doubaoAppKeyDraft}
                       onChange={setDoubaoAppKeyDraft}
-                      placeholder="App Key not configured"
-                      readOnly={!doubaoAppKeyDraft && !!doubaoCredentialsDisplay}
+                      label="Doubao app key"
+                      placeholder="Enter a new app key"
+                      type="password"
+                      autoComplete="new-password"
                     />
                     <PixelInput
-                      value={doubaoAccessKeyDraft || doubaoCredentialsDisplay}
+                      value={doubaoAccessKeyDraft}
                       onChange={setDoubaoAccessKeyDraft}
-                      placeholder="Access Key not configured"
-                      readOnly={!doubaoAccessKeyDraft && !!doubaoCredentialsDisplay}
+                      label="Doubao access key"
+                      placeholder="Enter a new access key"
+                      type="password"
+                      autoComplete="new-password"
                     />
+                    <div className="muted">
+                      {doubaoCredentialsDisplay || "Doubao credentials are not configured"}
+                    </div>
                     <div className="row" style={{ justifyContent: "flex-end" }}>
                       <PixelButton
                         onClick={setDoubaoAsrCredentials}
@@ -768,24 +832,40 @@ export function SettingsScreen({
                     <PixelInput
                       value={remoteAsrUrl}
                       onChange={setRemoteAsrUrl}
-                      placeholder="remote ASR URL (e.g. https://api.server/transcribe)"
+                      label="Remote ASR URL"
+                      placeholder="https://api.server/transcribe"
+                      type="url"
+                      inputMode="url"
+                      autoComplete="url"
                     />
                     <PixelInput
                       value={remoteAsrModel}
                       onChange={setRemoteAsrModel}
-                      placeholder="remote model name (optional)"
+                      label="Remote ASR model"
+                      placeholder="Optional model name"
+                      type="text"
+                      autoComplete="off"
                     />
                     <PixelInput
                       value={remoteAsrConcurrency}
                       onChange={setRemoteAsrConcurrency}
-                      placeholder="remote slicing concurrency (1-16)"
+                      label="Slicing concurrency"
+                      placeholder="1–16"
+                      type="number"
+                      inputMode="numeric"
+                      autoComplete="off"
                     />
                     <PixelInput
-                      value={remoteAsrKeyDraft || remoteAsrKeyDisplay}
+                      value={remoteAsrKeyDraft}
                       onChange={setRemoteAsrKeyDraft}
-                      placeholder="Remote ASR key not configured"
-                      readOnly={!remoteAsrKeyDraft && !!remoteAsrKeyDisplay}
+                      label="Remote ASR API key"
+                      placeholder="Enter a new API key"
+                      type="password"
+                      autoComplete="new-password"
                     />
+                    <div className="muted">
+                      {remoteAsrKeyDisplay || "Remote ASR key is not configured"}
+                    </div>
                     <div className="row" style={{ justifyContent: "flex-end" }}>
                       <PixelButton
                         onClick={setRemoteAsrApiKey}
@@ -820,7 +900,10 @@ export function SettingsScreen({
               control={
                 <PixelSelect
                   value={recordInputStrategy}
-                  onChange={setRecordInputStrategy}
+                  onChange={(value) => {
+                    setRecordInputStrategy(value);
+                    expandSettingsPanel("recording");
+                  }}
                   options={RECORD_INPUT_STRATEGIES}
                   ariaLabel="Recording input strategy"
                 />
@@ -841,15 +924,17 @@ export function SettingsScreen({
                       value={recordFixedEndpointId}
                       onChange={setRecordFixedEndpointId}
                       options={captureDeviceOptions}
-                      placeholder="select fixed capture endpoint"
+                      placeholder="Select a fixed capture endpoint"
                       ariaLabel="Fixed recording device"
                     />
                     {recordFixedFriendlyName ? (
-                      <div className="muted">fixed: {recordFixedFriendlyName}</div>
+                      <div className="muted">Fixed device: {recordFixedFriendlyName}</div>
                     ) : null}
                   </>
                 ) : null}
-                {audioCaptureDevices.length === 0 ? (
+                {audioCaptureDevicesError ? (
+                  <div className="muted">{audioCaptureDevicesError}</div>
+                ) : audioCaptureDevices.length === 0 ? (
                   <div className="muted">No active capture endpoints detected.</div>
                 ) : null}
                 <div className="row" style={{ justifyContent: "flex-end" }}>
@@ -870,36 +955,42 @@ export function SettingsScreen({
               control={
                 <PixelToggle
                   value={asrPreprocessTrimEnabled}
-                  onChange={setAsrPreprocessTrimEnabled}
-                  label="silence trim"
+                  onChange={(value) => {
+                    setAsrPreprocessTrimEnabled(value);
+                    expandSettingsPanel("preprocess");
+                  }}
+                  label="Silence trim"
                 />
               }
             >
               <div className="stack">
-                <div className="settingsField">
-                  <div className="muted">阈值（dB）</div>
-                  <PixelInput
-                    value={asrPreprocessThresholdDb}
-                    onChange={setAsrPreprocessThresholdDb}
-                    placeholder="-50"
-                  />
-                </div>
-                <div className="settingsField">
-                  <div className="muted">前段静音 (ms)</div>
-                  <PixelInput
-                    value={asrPreprocessStartMs}
-                    onChange={setAsrPreprocessStartMs}
-                    placeholder="300"
-                  />
-                </div>
-                <div className="settingsField">
-                  <div className="muted">末段静音 (ms)</div>
-                  <PixelInput
-                    value={asrPreprocessEndMs}
-                    onChange={setAsrPreprocessEndMs}
-                    placeholder="300"
-                  />
-                </div>
+                <PixelInput
+                  value={asrPreprocessThresholdDb}
+                  onChange={setAsrPreprocessThresholdDb}
+                  label="Silence threshold (dB)"
+                  placeholder="-50"
+                  type="number"
+                  inputMode="decimal"
+                  autoComplete="off"
+                />
+                <PixelInput
+                  value={asrPreprocessStartMs}
+                  onChange={setAsrPreprocessStartMs}
+                  label="Leading silence (ms)"
+                  placeholder="300"
+                  type="number"
+                  inputMode="numeric"
+                  autoComplete="off"
+                />
+                <PixelInput
+                  value={asrPreprocessEndMs}
+                  onChange={setAsrPreprocessEndMs}
+                  label="Trailing silence (ms)"
+                  placeholder="300"
+                  type="number"
+                  inputMode="numeric"
+                  autoComplete="off"
+                />
                 <div className="row" style={{ justifyContent: "flex-end" }}>
                   <PixelButton onClick={savePreprocessConfig} tone="accent">
                     Save
@@ -910,20 +1001,30 @@ export function SettingsScreen({
           </div>
 
           <div className="card">
-            <div className="settingsGroupTitle">Writing</div>
+            <h2 className="settingsGroupTitle">Writing</h2>
             <SettingsLine
               title="Rewrite"
               detail={rewriteEnabled ? "On" : "Off"}
               panel="rewrite"
               expandedPanels={expandedSettingsPanels}
               onTogglePanel={toggleSettingsPanel}
-              control={<PixelToggle value={rewriteEnabled} onChange={setRewriteEnabled} label="rewrite" />}
+              control={
+                <PixelToggle
+                  value={rewriteEnabled}
+                  onChange={(value) => {
+                    setRewriteEnabled(value);
+                    expandSettingsPanel("rewrite");
+                  }}
+                  label="Rewrite"
+                />
+              }
             >
               <div className="stack">
                 <PixelTextarea
                   value={llmPrompt}
                   onChange={setLlmPrompt}
-                  placeholder="LLM prompt..."
+                  label="Rewrite prompt"
+                  placeholder="Describe how dictated text should be rewritten"
                   rows={10}
                 />
                 <div className="row" style={{ justifyContent: "flex-end" }}>
@@ -942,19 +1043,23 @@ export function SettingsScreen({
               control={
                 <PixelToggle
                   value={rewriteIncludeGlossary}
-                  onChange={setRewriteIncludeGlossary}
-                  label="rewrite glossary"
+                  onChange={(value) => {
+                    setRewriteIncludeGlossary(value);
+                    expandSettingsPanel("glossary");
+                  }}
+                  label="Rewrite glossary"
                 />
               }
             >
               <div className="stack">
                 <div className="muted">
-                  每行一个词；空行会自动忽略。用于 rewrite 阶段作为上下文词汇或术语约束模型遵循。
+                  Add one term per line. Empty lines are ignored, and saved terms guide rewriting.
                 </div>
                 <PixelTextarea
                   value={rewriteGlossaryDraft}
                   onChange={setRewriteGlossaryDraft}
-                  placeholder={"比如：QPSK\nTypeScript\nOAuth"}
+                  label="Glossary terms"
+                  placeholder={"For example:\nQPSK\nTypeScript\nOAuth"}
                   rows={8}
                 />
                 <div className="row" style={{ justifyContent: "flex-end" }}>
@@ -967,21 +1072,30 @@ export function SettingsScreen({
           </div>
 
           <div className="card">
-            <div className="settingsGroupTitle">Shortcuts &amp; overlay</div>
+            <h2 className="settingsGroupTitle">Shortcuts &amp; overlay</h2>
             <SettingsLine
               title="Hotkeys"
               detail={hotkeysEnabled ? "On" : "Off"}
               panel="hotkeys"
               expandedPanels={expandedSettingsPanels}
               onTogglePanel={toggleSettingsPanel}
-              control={<PixelToggle value={hotkeysEnabled} onChange={setHotkeysEnabled} label="hotkeys" />}
+              control={
+                <PixelToggle
+                  value={hotkeysEnabled}
+                  onChange={(value) => {
+                    setHotkeysEnabled(value);
+                    expandSettingsPanel("hotkeys");
+                  }}
+                  label="Hotkeys"
+                />
+              }
             >
               <div className="stack">
                 <div className="hotkeyGuide">
-                  <div><span>{hotkeyPrimary}</span><span>short press starts or stops recording</span></div>
+                  <div><span>{hotkeyPrimary}</span><span>Short press to start or stop recording.</span></div>
                 </div>
                 <div className="stack">
-                  <div className="muted">Primary Key</div>
+                  <div className="muted">Primary key</div>
                   <PixelSelect
                     value={hotkeyPrimary}
                     onChange={setHotkeyPrimary}
@@ -994,11 +1108,11 @@ export function SettingsScreen({
                   <PixelToggle
                     value={hotkeysShowOverlay}
                     onChange={setHotkeysShowOverlay}
-                    label="current-session subtitles"
+                    label="Current-session subtitles"
                   />
                 </div>
                 <SliderField
-                  label="Background Depth"
+                  label="Background depth"
                   min={0.35}
                   max={0.95}
                   step={0.01}
@@ -1006,7 +1120,7 @@ export function SettingsScreen({
                   onChange={setOverlayBackgroundOpacity}
                 />
                 <SliderField
-                  label="Font Size"
+                  label="Font size"
                   min={18}
                   max={56}
                   step={1}
@@ -1044,7 +1158,7 @@ export function SettingsScreen({
 
         <div className="settingsColumn">
           <div className="card">
-            <div className="settingsGroupTitle">Intelligence</div>
+            <h2 className="settingsGroupTitle">Intelligence</h2>
             <SettingsLine
               title="Language model"
               detail={llmModel.trim() || "Model settings"}
@@ -1054,7 +1168,10 @@ export function SettingsScreen({
               control={
                 <PixelSelect
                   value={reasoning}
-                  onChange={setReasoning}
+                  onChange={(value) => {
+                    setReasoning(value);
+                    expandSettingsPanel("llm");
+                  }}
                   options={REASONING}
                   ariaLabel="Reasoning effort"
                 />
@@ -1064,9 +1181,20 @@ export function SettingsScreen({
                 <PixelInput
                   value={llmBaseUrl}
                   onChange={setLlmBaseUrl}
-                  placeholder="API Base URL (e.g. https://api.openai.com/v1)"
+                  label="API base URL"
+                  placeholder="https://api.openai.com/v1"
+                  type="url"
+                  inputMode="url"
+                  autoComplete="url"
                 />
-                <PixelInput value={llmModel} onChange={setLlmModel} placeholder="Model" />
+                <PixelInput
+                  value={llmModel}
+                  onChange={setLlmModel}
+                  label="Model"
+                  placeholder="Model name"
+                  type="text"
+                  autoComplete="off"
+                />
                 <div className="row" style={{ justifyContent: "flex-end" }}>
                   <PixelButton onClick={saveLlm} tone="accent">
                     Save
@@ -1083,11 +1211,14 @@ export function SettingsScreen({
             >
               <div className="stack">
                 <PixelInput
-                  value={keyDraft || llmKeyDisplay}
+                  value={keyDraft}
                   onChange={setKeyDraft}
-                  placeholder="LLM API key not configured"
-                  readOnly={!keyDraft && !!llmKeyDisplay}
+                  label="LLM API key"
+                  placeholder="Enter a new API key"
+                  type="password"
+                  autoComplete="new-password"
                 />
+                <div className="muted">{llmKeyDisplay || "LLM API key is not configured"}</div>
                 <div className="row" style={{ justifyContent: "flex-end" }}>
                   <PixelButton onClick={setApiKey} tone="accent" disabled={!keyDraft.trim()}>
                     Save
@@ -1114,7 +1245,7 @@ export function SettingsScreen({
                   <PixelToggle
                     value={contextIncludeHistory}
                     onChange={setContextIncludeHistory}
-                    label="recent dictated text"
+                    label="Recent dictated text"
                   />
                 </div>
                 <div className="settingsInlineToggle">
@@ -1122,7 +1253,7 @@ export function SettingsScreen({
                   <PixelToggle
                     value={contextIncludeClipboard}
                     onChange={setContextIncludeClipboard}
-                    label="clipboard text"
+                    label="Clipboard text"
                   />
                 </div>
                 <div className="settingsInlineToggle">
@@ -1130,7 +1261,7 @@ export function SettingsScreen({
                   <PixelToggle
                     value={contextIncludePrevWindowMeta}
                     onChange={setContextIncludePrevWindowMeta}
-                    label="current app name and title"
+                    label="Current app name and title"
                   />
                 </div>
                 <div className="settingsInlineToggle">
@@ -1138,7 +1269,7 @@ export function SettingsScreen({
                   <PixelToggle
                     value={contextIncludePrevWindowScreenshot}
                     onChange={setContextIncludePrevWindowScreenshot}
-                    label="current screen image"
+                    label="Current screen image"
                   />
                 </div>
                 <div className="row" style={{ justifyContent: "flex-end" }}>
@@ -1151,7 +1282,7 @@ export function SettingsScreen({
           </div>
 
           <div className="card">
-            <div className="settingsGroupTitle">Delivery &amp; data</div>
+            <h2 className="settingsGroupTitle">Delivery &amp; data</h2>
             <SettingsLine
               title="Export"
               detail={autoPasteEnabled ? "Auto paste on" : "Auto paste off"}
@@ -1161,8 +1292,11 @@ export function SettingsScreen({
               control={
                 <PixelToggle
                   value={autoPasteEnabled}
-                  onChange={setAutoPasteEnabled}
-                  label="auto paste"
+                  onChange={(value) => {
+                    setAutoPasteEnabled(value);
+                    expandSettingsPanel("export");
+                  }}
+                  label="Auto paste"
                 />
               }
             >
