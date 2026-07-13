@@ -1,10 +1,11 @@
 use std::{
     env,
     fs::{self, File},
-    io::{self, Write},
+    io::{Read, Write},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
-    time::{Duration, Instant},
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -376,17 +377,99 @@ fn ensure_fixtures_ready(required_files: &[&str]) -> Result<()> {
 }
 
 fn download_file(client: &Client, url: &str, target: &Path) -> Result<()> {
+    const MAX_ATTEMPTS: usize = 3;
+
+    for attempt in 1..=MAX_ATTEMPTS {
+        match download_file_once(client, url, target) {
+            Ok(()) => return Ok(()),
+            Err(DownloadAttemptError::Fatal(error)) => {
+                let _ = fs::remove_file(target);
+                return Err(error);
+            }
+            Err(DownloadAttemptError::Retryable(error)) if attempt < MAX_ATTEMPTS => {
+                let _ = fs::remove_file(target);
+                let delay = download_retry_delay(attempt);
+                println!(
+                    "WARN: download attempt {attempt}/{MAX_ATTEMPTS} failed: {error}; retrying in {:.2}s",
+                    delay.as_secs_f64()
+                );
+                thread::sleep(delay);
+            }
+            Err(DownloadAttemptError::Retryable(error)) => {
+                let _ = fs::remove_file(target);
+                return Err(error)
+                    .with_context(|| format!("download failed after {MAX_ATTEMPTS} attempts"));
+            }
+        }
+    }
+
+    unreachable!("download retry loop always returns")
+}
+
+enum DownloadAttemptError {
+    Retryable(anyhow::Error),
+    Fatal(anyhow::Error),
+}
+
+fn download_file_once(
+    client: &Client,
+    url: &str,
+    target: &Path,
+) -> std::result::Result<(), DownloadAttemptError> {
     let mut response = client
         .get(url)
         .header(
             USER_AGENT,
             "TypeVoice xtask/0.1 (https://github.com/JiaJunDeng5930/TypeVoice)",
         )
-        .send()?
-        .error_for_status()?;
-    let mut out = File::create(target).with_context(|| format!("create {}", target.display()))?;
-    io::copy(&mut response, &mut out).with_context(|| format!("write {}", target.display()))?;
-    Ok(())
+        .send()
+        .map_err(|error| {
+            if error.is_connect() || error.is_timeout() || error.is_body() || error.is_request() {
+                DownloadAttemptError::Retryable(error.into())
+            } else {
+                DownloadAttemptError::Fatal(error.into())
+            }
+        })?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let error = anyhow!("HTTP {status} from {url}");
+        return if is_retryable_download_status(status.as_u16()) {
+            Err(DownloadAttemptError::Retryable(error))
+        } else {
+            Err(DownloadAttemptError::Fatal(error))
+        };
+    }
+
+    let mut out = File::create(target)
+        .with_context(|| format!("create {}", target.display()))
+        .map_err(DownloadAttemptError::Fatal)?;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = response
+            .read(&mut buffer)
+            .map_err(|error| DownloadAttemptError::Retryable(error.into()))?;
+        if read == 0 {
+            return Ok(());
+        }
+        out.write_all(&buffer[..read])
+            .with_context(|| format!("write {}", target.display()))
+            .map_err(DownloadAttemptError::Fatal)?;
+    }
+}
+
+fn is_retryable_download_status(status: u16) -> bool {
+    matches!(status, 408 | 429 | 500..=599)
+}
+
+fn download_retry_delay(failed_attempt: usize) -> Duration {
+    let base_ms = if failed_attempt == 1 { 1_000 } else { 3_000 };
+    let jitter_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_millis() as u64
+        % 251;
+    Duration::from_millis(base_ms + jitter_ms)
 }
 
 fn ensure_dirs() -> Result<()> {
@@ -1945,6 +2028,16 @@ mod tests {
             "http://api.server/v1"
         );
         assert_eq!(normalize_base_url(""), "https://api.openai.com/v1");
+    }
+
+    #[test]
+    fn download_retries_only_transient_http_statuses() {
+        for status in [408, 429, 500, 502, 599] {
+            assert!(is_retryable_download_status(status), "status {status}");
+        }
+        for status in [400, 401, 403, 404, 422] {
+            assert!(!is_retryable_download_status(status), "status {status}");
+        }
     }
 
     #[test]
