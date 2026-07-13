@@ -49,6 +49,18 @@ jobs:
         run: cargo xtask toolchain ffmpeg --platform linux-x86_64
       - name: Xtask quick verify
         run: cargo xtask verify quick
+      - name: Linux insertion contract
+        run: cargo xtask verify insertion-contract
+
+  insertion-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9
+        with:
+          toolchain: stable
+      - name: Windows insertion contract
+        run: cargo xtask verify insertion-contract
 
   web:
     runs-on: ubuntu-latest

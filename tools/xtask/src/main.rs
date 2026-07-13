@@ -56,6 +56,7 @@ enum Commands {
 enum VerifyCommand {
     Quick,
     Full,
+    InsertionContract,
 }
 
 #[derive(Subcommand)]
@@ -238,6 +239,7 @@ fn run() -> Result<()> {
         Commands::Verify { command } => match command {
             VerifyCommand::Quick => run_verify(VerifyLevel::Quick),
             VerifyCommand::Full => run_verify(VerifyLevel::Full),
+            VerifyCommand::InsertionContract => run_insertion_contract_gate(),
         },
         Commands::Fixtures { command } => match command {
             FixturesCommand::Download => {
@@ -272,6 +274,180 @@ impl VerifyLevel {
             VerifyLevel::Quick => "quick",
             VerifyLevel::Full => "full",
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContractSurface {
+    Workspace,
+    Engine,
+    Frontend,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ContractCommand {
+    CargoTests {
+        label: &'static str,
+        args: &'static [&'static str],
+    },
+    NpmBuild,
+    NpmTests {
+        script: &'static str,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ContractStep {
+    surface: ContractSurface,
+    command: ContractCommand,
+}
+
+fn verify_contract_plan(level: VerifyLevel) -> Vec<ContractStep> {
+    match level {
+        VerifyLevel::Quick => vec![
+            ContractStep {
+                surface: ContractSurface::Workspace,
+                command: ContractCommand::CargoTests {
+                    label: "workspace preprocessing sentinel",
+                    args: &[
+                        "test",
+                        "--locked",
+                        "--workspace",
+                        "ffmpeg_preprocess_args_keep_asr_input_format",
+                    ],
+                },
+            },
+            ContractStep {
+                surface: ContractSurface::Workspace,
+                command: ContractCommand::CargoTests {
+                    label: "debug JSONL concurrency contract",
+                    args: &[
+                        "test",
+                        "--locked",
+                        "-p",
+                        "typevoice-observability",
+                        "concurrent_emit_keeps_jsonl_lines_parseable",
+                    ],
+                },
+            },
+            ContractStep {
+                surface: ContractSurface::Workspace,
+                command: ContractCommand::CargoTests {
+                    label: "metrics JSONL concurrency contract",
+                    args: &[
+                        "test",
+                        "--locked",
+                        "-p",
+                        "typevoice-observability",
+                        "concurrent_metrics_emit_keeps_jsonl_lines_parseable",
+                    ],
+                },
+            },
+            ContractStep {
+                surface: ContractSurface::Engine,
+                command: ContractCommand::CargoTests {
+                    label: "engine safety sentinel",
+                    args: &[
+                        "test",
+                        "--locked",
+                        "-p",
+                        "typevoice-engine",
+                        "ffmpeg_record_args_transcodes_file_and_stream_outputs",
+                    ],
+                },
+            },
+            ContractStep {
+                surface: ContractSurface::Frontend,
+                command: ContractCommand::NpmBuild,
+            },
+        ],
+        VerifyLevel::Full => vec![
+            ContractStep {
+                surface: ContractSurface::Workspace,
+                command: ContractCommand::CargoTests {
+                    label: "workspace contracts",
+                    args: &["test", "--locked", "--workspace"],
+                },
+            },
+            ContractStep {
+                surface: ContractSurface::Engine,
+                command: ContractCommand::CargoTests {
+                    label: "engine architecture contracts",
+                    args: &[
+                        "test",
+                        "--locked",
+                        "-p",
+                        "typevoice-engine",
+                        "target_contract_",
+                    ],
+                },
+            },
+            ContractStep {
+                surface: ContractSurface::Frontend,
+                command: ContractCommand::NpmTests {
+                    script: "test:contracts",
+                },
+            },
+        ],
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InsertionContractPlatform {
+    Windows,
+    Linux,
+}
+
+impl InsertionContractPlatform {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Windows => "windows",
+            Self::Linux => "linux",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct InsertionContractSpec {
+    platform: InsertionContractPlatform,
+    package: &'static str,
+    filter: &'static str,
+}
+
+const INSERTION_CONTRACTS: [InsertionContractSpec; 2] = [
+    InsertionContractSpec {
+        platform: InsertionContractPlatform::Windows,
+        package: "typevoice-platform",
+        filter: "target_contract_t23_insertion_port_contract_windows",
+    },
+    InsertionContractSpec {
+        platform: InsertionContractPlatform::Linux,
+        package: "typevoice-platform",
+        filter: "target_contract_t23_insertion_port_contract_linux",
+    },
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlatformGateState {
+    Passed,
+    Failed,
+    NotRun,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CrossPlatformGateState {
+    Passed,
+    Failed,
+    Incomplete,
+}
+
+fn summarize_platform_gates(states: &[PlatformGateState]) -> CrossPlatformGateState {
+    if states.contains(&PlatformGateState::Failed) {
+        CrossPlatformGateState::Failed
+    } else if states.contains(&PlatformGateState::NotRun) {
+        CrossPlatformGateState::Incomplete
+    } else {
+        CrossPlatformGateState::Passed
     }
 }
 
@@ -503,10 +679,10 @@ fn run_verify(level: VerifyLevel) -> Result<()> {
         VerifyLevel::Full => ensure_fixtures_ready(&["zh_10s.ogg", "zh_60s.ogg", "zh_5m.ogg"])?,
     }
 
-    let tauri_dir = root.join("apps").join("desktop").join("src-tauri");
+    let desktop_dir = root.join("apps").join("desktop");
     let metrics_path = root.join("metrics").join("verify.jsonl");
 
-    if let Err(e) = run_native(&tauri_dir, "cargo", &["check", "--locked"]) {
+    if let Err(e) = run_native(&root, "cargo", &["check", "--locked", "--workspace"]) {
         let record = json!({
             "ts_ms": now_ms(),
             "level": level.as_str(),
@@ -517,28 +693,15 @@ fn run_verify(level: VerifyLevel) -> Result<()> {
         return Err(e.context("cargo check failed"));
     }
 
-    if let Err(e) = run_debuggability_tests(&tauri_dir) {
+    if let Err(e) = run_verify_contracts(level, &root, &desktop_dir) {
         let record = json!({
             "ts_ms": now_ms(),
             "level": level.as_str(),
             "status": "FAIL",
-            "fail_reasons": ["debuggability_contract_tests_failed"],
+            "fail_reasons": ["architecture_contract_tests_failed"],
         });
         append_jsonl(&metrics_path, &record)?;
-        return Err(e.context("debuggability contract tests failed"));
-    }
-
-    match level {
-        VerifyLevel::Quick => run_native(
-            &tauri_dir,
-            "cargo",
-            &[
-                "test",
-                "--locked",
-                "ffmpeg_preprocess_args_keep_asr_input_format",
-            ],
-        )?,
-        VerifyLevel::Full => run_native(&tauri_dir, "cargo", &["test", "--locked"])?,
+        return Err(e.context("architecture contract tests failed"));
     }
 
     let mut fail_reasons = Vec::<String>::new();
@@ -603,26 +766,157 @@ fn run_verify(level: VerifyLevel) -> Result<()> {
     }
 }
 
-fn run_debuggability_tests(tauri_dir: &Path) -> Result<()> {
-    run_native(
-        tauri_dir,
-        "cargo",
-        &[
-            "test",
-            "--locked",
-            "concurrent_emit_keeps_jsonl_lines_parseable",
-        ],
-    )?;
-    run_native(
-        tauri_dir,
-        "cargo",
-        &[
-            "test",
-            "--locked",
-            "concurrent_metrics_emit_keeps_jsonl_lines_parseable",
-        ],
-    )?;
-    Ok(())
+fn run_verify_contracts(level: VerifyLevel, root: &Path, desktop_dir: &Path) -> Result<()> {
+    let mut failures = Vec::new();
+    for step in verify_contract_plan(level) {
+        let result = match step.command {
+            ContractCommand::CargoTests { label, args } => {
+                run_counted_cargo_tests(root, label, args)
+            }
+            ContractCommand::NpmBuild => {
+                println!("INFO: running frontend build contract");
+                run_native(desktop_dir, "npm", &["run", "build"]).map(|()| 1)
+            }
+            ContractCommand::NpmTests { script } => run_counted_node_tests(desktop_dir, script),
+        };
+        if let Err(error) = result {
+            failures.push(format!("{:?}: {error:#}", step.surface));
+        }
+    }
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        bail!("{}", failures.join("; "))
+    }
+}
+
+fn run_counted_cargo_tests(cwd: &Path, label: &str, args: &[&str]) -> Result<usize> {
+    let mut list_args = args.to_vec();
+    list_args.extend(["--", "--list"]);
+    let listing = run_output(cwd, "cargo", &list_args)?;
+    let stdout = String::from_utf8_lossy(&listing.stdout);
+    let stderr = String::from_utf8_lossy(&listing.stderr);
+    let count = validate_cargo_test_listing(label, listing.status.success(), &stdout, &stderr)?;
+    println!("INFO: {label} selected {count} test(s)");
+    run_native(cwd, "cargo", args)?;
+    Ok(count)
+}
+
+fn validate_cargo_test_listing(
+    label: &str,
+    command_succeeded: bool,
+    stdout: &str,
+    stderr: &str,
+) -> Result<usize> {
+    if !command_succeeded {
+        bail!("{label} listing failed: {}", stderr.trim());
+    }
+    let count = stdout
+        .lines()
+        .filter(|line| line.trim_end().ends_with(": test"))
+        .count();
+    if count == 0 {
+        bail!("{label} matched 0 tests");
+    }
+    Ok(count)
+}
+
+fn run_counted_node_tests(cwd: &Path, script: &str) -> Result<usize> {
+    let output = run_output(cwd, "npm", &["run", script])?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    print!("{stdout}");
+    eprint!("{stderr}");
+    let count = validate_node_test_output(script, output.status.success(), &stdout, &stderr)?;
+    println!("INFO: frontend {script} selected {count} test(s)");
+    Ok(count)
+}
+
+fn validate_node_test_output(
+    script: &str,
+    command_succeeded: bool,
+    stdout: &str,
+    stderr: &str,
+) -> Result<usize> {
+    let count = stdout
+        .lines()
+        .rev()
+        .find_map(|line| {
+            let line = line.trim();
+            line.strip_prefix("# tests ")
+                .or_else(|| line.strip_prefix("ℹ tests "))
+        })
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .ok_or_else(|| anyhow!("frontend {script} did not report a test count"))?;
+    if count == 0 {
+        bail!("frontend {script} matched 0 tests");
+    }
+    if !command_succeeded {
+        bail!(
+            "frontend {script} failed after selecting {count} test(s): {}",
+            stderr.trim()
+        );
+    }
+    Ok(count)
+}
+
+fn current_insertion_contract_platform() -> Result<InsertionContractPlatform> {
+    if cfg!(target_os = "windows") {
+        Ok(InsertionContractPlatform::Windows)
+    } else if cfg!(target_os = "linux") {
+        Ok(InsertionContractPlatform::Linux)
+    } else {
+        bail!("insertion contract gate is only defined for Windows and Linux")
+    }
+}
+
+fn run_insertion_contract_gate() -> Result<()> {
+    let root = repo_root()?;
+    let current = current_insertion_contract_platform()?;
+    let mut states = [PlatformGateState::NotRun; INSERTION_CONTRACTS.len()];
+    let mut current_error = None;
+
+    for (index, spec) in INSERTION_CONTRACTS.iter().enumerate() {
+        if spec.platform != current {
+            continue;
+        }
+        let args = ["test", "--locked", "-p", spec.package, spec.filter];
+        match run_counted_cargo_tests(&root, spec.filter, &args) {
+            Ok(_) => states[index] = PlatformGateState::Passed,
+            Err(error) => {
+                states[index] = PlatformGateState::Failed;
+                current_error = Some(error);
+            }
+        }
+    }
+
+    for (spec, state) in INSERTION_CONTRACTS.iter().zip(states.iter()) {
+        println!(
+            "INFO: insertion-contract platform={} state={state:?}",
+            spec.platform.as_str()
+        );
+    }
+    println!(
+        "INFO: insertion-contract cross-platform={:?}",
+        summarize_platform_gates(&states)
+    );
+
+    let current_state = INSERTION_CONTRACTS
+        .iter()
+        .zip(states)
+        .find_map(|(spec, state)| (spec.platform == current).then_some(state))
+        .unwrap_or(PlatformGateState::NotRun);
+    match current_state {
+        PlatformGateState::Passed => Ok(()),
+        PlatformGateState::Failed => Err(current_error
+            .unwrap_or_else(|| anyhow!("current-platform gate failed without an error"))
+            .context(format!("{} insertion contract failed", current.as_str()))),
+        PlatformGateState::NotRun => bail!(
+            "{} insertion contract was not run; per-platform gate cannot pass",
+            current.as_str()
+        ),
+    }
 }
 
 fn run_native(cwd: &Path, program: &str, args: &[&str]) -> Result<()> {
@@ -2016,6 +2310,126 @@ fn clamp_chars(value: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn contract_runner_nonzero_selection_succeeds() {
+        let stdout =
+            "suite::contract_one: test\nsuite::contract_two: test\n\n2 tests, 0 benchmarks\n";
+        let count = validate_cargo_test_listing("fake contracts", true, stdout, "")
+            .expect("nonzero contract selection");
+
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn contract_runner_zero_match_fails() {
+        let error =
+            validate_cargo_test_listing("fake contracts", true, "0 tests, 0 benchmarks\n", "")
+                .expect_err("zero-match selection must fail");
+
+        assert!(error.to_string().contains("matched 0 tests"));
+    }
+
+    #[test]
+    fn frontend_contract_runner_rejects_zero_match() {
+        let error = validate_node_test_output(
+            "test:contracts",
+            true,
+            "TAP version 13\n1..0\n# tests 0\n# pass 0\n",
+            "",
+        )
+        .expect_err("zero frontend tests must fail");
+
+        assert!(error.to_string().contains("matched 0 tests"));
+    }
+
+    #[test]
+    fn frontend_contract_runner_counts_node_spec_output() {
+        let count = validate_node_test_output(
+            "test:contracts",
+            true,
+            "✔ target_contract_t19 (1ms)\nℹ tests 1\nℹ pass 1\n",
+            "",
+        )
+        .expect("Node spec output must report a nonzero selection");
+
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn full_contract_plan_covers_workspace_engine_and_frontend_sentinels() {
+        let plan = verify_contract_plan(VerifyLevel::Full);
+
+        assert!(plan.iter().any(|step| {
+            step.surface == ContractSurface::Workspace
+                && matches!(
+                    step.command,
+                    ContractCommand::CargoTests { args, .. } if args.contains(&"--workspace")
+                )
+        }));
+        assert!(plan.iter().any(|step| {
+            step.surface == ContractSurface::Engine
+                && matches!(
+                    step.command,
+                    ContractCommand::CargoTests { args, .. }
+                        if args.contains(&"typevoice-engine") && args.contains(&"target_contract_")
+                )
+        }));
+        assert!(plan.iter().any(|step| {
+            step.surface == ContractSurface::Frontend
+                && matches!(
+                    step.command,
+                    ContractCommand::NpmTests {
+                        script: "test:contracts"
+                    }
+                )
+        }));
+    }
+
+    #[test]
+    fn quick_contract_plan_covers_workspace_engine_and_frontend_sentinels() {
+        let plan = verify_contract_plan(VerifyLevel::Quick);
+
+        for surface in [
+            ContractSurface::Workspace,
+            ContractSurface::Engine,
+            ContractSurface::Frontend,
+        ] {
+            assert!(plan.iter().any(|step| step.surface == surface));
+        }
+    }
+
+    #[test]
+    fn insertion_contract_registry_is_platform_exact() {
+        assert_eq!(INSERTION_CONTRACTS.len(), 2);
+        assert_eq!(
+            INSERTION_CONTRACTS[0].filter,
+            "target_contract_t23_insertion_port_contract_windows"
+        );
+        assert_eq!(
+            INSERTION_CONTRACTS[1].filter,
+            "target_contract_t23_insertion_port_contract_linux"
+        );
+        assert!(INSERTION_CONTRACTS
+            .iter()
+            .all(|spec| spec.package == "typevoice-platform"));
+    }
+
+    #[test]
+    fn insertion_contract_not_run_is_not_global_pass() {
+        assert_eq!(
+            summarize_platform_gates(&[PlatformGateState::Passed, PlatformGateState::NotRun]),
+            CrossPlatformGateState::Incomplete
+        );
+        assert_eq!(
+            summarize_platform_gates(&[PlatformGateState::Passed, PlatformGateState::Passed]),
+            CrossPlatformGateState::Passed
+        );
+        assert_eq!(
+            summarize_platform_gates(&[PlatformGateState::Failed, PlatformGateState::NotRun]),
+            CrossPlatformGateState::Failed
+        );
+    }
 
     #[test]
     fn normalize_base_url_accepts_endpoint_or_base() {
