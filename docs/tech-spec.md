@@ -1,6 +1,6 @@
 # TypeVoice 技术规格
 
-状态：目标技术契约，尚未由当前业务代码完整实现。
+状态：已实现的技术契约；跨平台 adapter 仍必须由 Windows/Linux gate 分别证明。
 
 范围：Windows 桌面端的线协议、能力边界与工程约束，并保留冻结的 Linux 自动输入 adapter 合同。业务状态、转移和取消语义只在 `docs/architecture.md` 定义；本文件不复制第二份状态机。
 
