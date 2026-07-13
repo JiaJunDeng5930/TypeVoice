@@ -284,6 +284,10 @@ impl ControlledFactory {
             .expect("target-contract controller must have created a run handle")
             .clone()
     }
+
+    fn handle_count(&self) -> usize {
+        self.handles.lock().unwrap().len()
+    }
 }
 
 impl RunFactory for ControlledFactory {
@@ -1362,6 +1366,11 @@ fn target_contract_t03_intent_admission_and_matrix_are_total() {
             }
             let before = harness.controller.snapshot();
             let before_sink = harness.sink.len();
+            let before_handle_count = harness.factory.handle_count();
+            let before_handle = before
+                .active_run
+                .as_ref()
+                .map(|_| harness.factory.last_handle().inspect());
             let result = match intent {
                 IntentCase::FreshPrimary => harness.controller.command(WorkflowIntent::Primary {
                     action_key: before.action_key.clone(),
@@ -1376,7 +1385,13 @@ fn target_contract_t03_intent_admission_and_matrix_are_total() {
                         &label,
                         parsed.is_err()
                             && harness.controller.snapshot() == before
-                            && harness.sink.len() == before_sink,
+                            && harness.sink.len() == before_sink
+                            && harness.factory.handle_count() == before_handle_count
+                            && before_handle
+                                == before
+                                    .active_run
+                                    .as_ref()
+                                    .map(|_| harness.factory.last_handle().inspect()),
                         format!("parsed={parsed:?}, before={}", wire(&before)),
                     );
                     continue;
@@ -1392,29 +1407,77 @@ fn target_contract_t03_intent_admission_and_matrix_are_total() {
             };
             let after = harness.controller.snapshot();
             let reply = result.expect("typed protocol intent must return a reply");
-            let stale = matches!(
-                intent,
-                IntentCase::StaleActionKey | IntentCase::MismatchedTargetRunId
-            );
+            let expected_before_mode = match mode {
+                ModeCase::Ready => WorkflowMode::Ready,
+                ModeCase::Recording => WorkflowMode::Recording,
+                ModeCase::Processing => WorkflowMode::Processing,
+                ModeCase::Cancelling => WorkflowMode::Cancelling,
+            };
+            let unchanged = || {
+                reply.disposition == CommandDisposition::NoOp
+                    && after == before
+                    && harness.sink.len() == before_sink
+                    && harness.factory.handle_count() == before_handle_count
+                    && before_handle
+                        == after
+                            .active_run
+                            .as_ref()
+                            .map(|_| harness.factory.last_handle().inspect())
+            };
+            let applied = |expected_mode, expected_stop_count, expected_cancel_requests| {
+                let handle = harness.factory.last_handle().inspect();
+                reply.disposition == CommandDisposition::Applied
+                    && after.mode == expected_mode
+                    && after.active_run.as_ref().map(|run| run.run_id.as_str())
+                        == Some(run_id.as_str())
+                    && after.revision == before.revision + 1
+                    && harness.sink.len() == before_sink + 1
+                    && handle.begin_count == 1
+                    && handle.stop_count == expected_stop_count
+                    && handle.arbiter.cancel_requests == expected_cancel_requests
+                    && handle.arbiter.cancel_winner == (expected_cancel_requests == 1)
+            };
+            let behavior_matches = match (mode, intent) {
+                (ModeCase::Ready, IntentCase::FreshPrimary) => {
+                    harness.factory.handle_count() == before_handle_count + 1
+                        && applied(WorkflowMode::Recording, 0, 0)
+                }
+                (ModeCase::Recording, IntentCase::FreshPrimary) => {
+                    harness.factory.handle_count() == before_handle_count
+                        && applied(WorkflowMode::Processing, 1, 0)
+                }
+                (ModeCase::Processing, IntentCase::FreshPrimary) => {
+                    harness.factory.handle_count() == before_handle_count
+                        && applied(WorkflowMode::Cancelling, 1, 1)
+                }
+                (ModeCase::Ready, IntentCase::Cancel)
+                | (ModeCase::Cancelling, IntentCase::FreshPrimary)
+                | (ModeCase::Cancelling, IntentCase::Cancel)
+                | (_, IntentCase::StaleActionKey)
+                | (_, IntentCase::MismatchedTargetRunId) => unchanged(),
+                (ModeCase::Recording, IntentCase::Cancel) => {
+                    harness.factory.handle_count() == before_handle_count
+                        && applied(WorkflowMode::Cancelling, 0, 1)
+                }
+                (ModeCase::Processing, IntentCase::Cancel) => {
+                    harness.factory.handle_count() == before_handle_count
+                        && applied(WorkflowMode::Cancelling, 1, 1)
+                }
+                (_, IntentCase::Invalid) => unreachable!("Invalid returns before matrix checks"),
+            };
             failures.check(
                 &label,
-                before.mode
-                    == match mode {
-                        ModeCase::Ready => WorkflowMode::Ready,
-                        ModeCase::Recording => WorkflowMode::Recording,
-                        ModeCase::Processing => WorkflowMode::Processing,
-                        ModeCase::Cancelling => WorkflowMode::Cancelling,
-                    }
-                    && (!stale
-                        || (reply.disposition == CommandDisposition::NoOp
-                            && after == before
-                            && harness.sink.len() == before_sink)),
+                before.mode == expected_before_mode && reply.view == after && behavior_matches,
                 format!(
-                    "reply={:?}, before={}, after={}, sink_before={before_sink}, sink_after={}",
+                    "reply={:?}, before={}, after={}, sink_before={before_sink}, sink_after={}, handle_before={before_handle:?}, handle_after={:?}",
                     reply.disposition,
                     wire(&before),
                     wire(&after),
-                    harness.sink.len()
+                    harness.sink.len(),
+                    after
+                        .active_run
+                        .as_ref()
+                        .map(|_| harness.factory.last_handle().inspect())
                 ),
             );
         }
