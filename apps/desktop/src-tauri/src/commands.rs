@@ -14,7 +14,7 @@ use typevoice_engine::workflow_controller::WorkflowController;
 )]
 pub enum WorkflowCommandRequest {
     Primary { action_key: String },
-    Cancel { target_run_id: Option<RunId> },
+    Cancel { target_run_id: RunId },
 }
 
 impl From<WorkflowCommandRequest> for WorkflowIntent {
@@ -76,9 +76,18 @@ mod tests {
             "actionKey": "ready:initial",
             "legacy": true
         }));
+        let missing_cancel_target = parse_workflow_command_request(serde_json::json!({
+            "command": "cancel"
+        }));
         assert!(primary.is_ok());
         assert_eq!(
             unknown.expect_err("unknown command field must fail").code,
+            "E_WORKFLOW_INTENT_INVALID"
+        );
+        assert_eq!(
+            missing_cancel_target
+                .expect_err("Cancel without targetRunId must fail")
+                .code,
             "E_WORKFLOW_INTENT_INVALID"
         );
     }
