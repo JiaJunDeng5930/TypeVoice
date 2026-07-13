@@ -367,6 +367,7 @@ mod tests {
         assert_eq!(rows[0].final_text, "rewritten");
         assert_eq!(rows[0].rewritten_text, "rewritten");
         assert_eq!(rows[0].template_id.as_deref(), Some("template-1"));
+        assert!(crate::obs::flush(2_000), "history trace flush timeout");
     }
 
     #[test]
@@ -397,6 +398,7 @@ mod tests {
         assert_eq!(rows[0].inserted_text, "inserted");
         assert_eq!(rows[0].final_text, "inserted");
         assert_eq!(rows[0].rewritten_text, "rewritten");
+        assert!(crate::obs::flush(2_000), "history trace flush timeout");
     }
 
     #[test]
@@ -431,5 +433,6 @@ mod tests {
         assert_eq!(rows[0].rewritten_text, "");
         assert_eq!(rows[0].inserted_text, "");
         assert_eq!(rows[0].final_text, "final");
+        assert!(crate::obs::flush(2_000), "history trace flush timeout");
     }
 }

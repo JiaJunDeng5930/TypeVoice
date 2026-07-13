@@ -1,379 +1,59 @@
-use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
-
-use crate::audio_capture::RecordingRegistry;
-use crate::insertion::{InsertResult, InsertTextRequest};
-use crate::ports::PortError;
-use crate::record_input_cache::RecordInputCacheState;
-use crate::rewrite::{RewriteResult, RewriteTextRequest};
-use crate::transcription::{TranscriptionResult, TranscriptionService};
-use crate::transcription_actor::TranscriptionActor;
-use crate::ui_events::UiEventMailbox;
-use crate::voice_workflow::{
-    VoiceWorkflow, WorkflowApplyEventRequest, WorkflowAsrCompletedRequest, WorkflowAsrEmptyRequest,
-    WorkflowCommandDeps, WorkflowCommandRequest, WorkflowError, WorkflowInsertCompletedRequest,
-    WorkflowRewriteCompletedRequest, WorkflowTaskFailedRequest, WorkflowTextCommandRequest,
-    WorkflowView,
+use serde::Deserialize;
+use tauri::State;
+use typevoice_core::workflow::{
+    RunId, WorkflowCommandReply, WorkflowError, WorkflowIntent, WorkflowView,
 };
-use crate::{data_dir, RuntimeState};
+use typevoice_engine::workflow_controller::WorkflowController;
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(
+    tag = "command",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum WorkflowCommandRequest {
+    Primary { action_key: String },
+    Cancel { target_run_id: Option<RunId> },
+}
+
+impl From<WorkflowCommandRequest> for WorkflowIntent {
+    fn from(request: WorkflowCommandRequest) -> Self {
+        match request {
+            WorkflowCommandRequest::Primary { action_key } => Self::Primary { action_key },
+            WorkflowCommandRequest::Cancel { target_run_id } => Self::Cancel { target_run_id },
+        }
+    }
+}
+
+#[tauri::command]
+pub fn workflow_snapshot(workflow: State<'_, std::sync::Arc<WorkflowController>>) -> WorkflowView {
+    workflow.snapshot()
+}
+
+#[tauri::command]
+pub fn workflow_command(
+    workflow: State<'_, std::sync::Arc<WorkflowController>>,
+    req: serde_json::Value,
+) -> Result<WorkflowCommandReply, WorkflowError> {
+    let request = parse_workflow_command_request(req)?;
+    workflow.inner().command(request.into())
+}
+
+fn parse_workflow_command_request(
+    req: serde_json::Value,
+) -> Result<WorkflowCommandRequest, WorkflowError> {
+    serde_json::from_value(req).map_err(|_| {
+        WorkflowError::new(
+            "E_WORKFLOW_INTENT_INVALID",
+            "workflow intent does not match the command schema",
+        )
+    })
+}
 
 #[cfg(test)]
 pub fn command_names() -> &'static [&'static str] {
-    &[
-        "record_transcribe_start",
-        "record_transcribe_stop",
-        "record_transcribe_cancel",
-        "rewrite_text",
-        "insert_text",
-        "workflow_snapshot",
-        "workflow_command",
-        "workflow_apply_event",
-        "workflow_report_asr_completed",
-        "workflow_report_asr_empty",
-        "workflow_report_asr_failed",
-        "workflow_rewrite",
-        "workflow_insert",
-        "workflow_report_rewrite_completed",
-        "workflow_report_rewrite_failed",
-        "workflow_report_insert_completed",
-        "workflow_report_insert_failed",
-        "overlay_insert_text",
-    ]
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RecordTranscribeStartRequest {
-    pub task_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RecordTranscribeStartResult {
-    pub session_id: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OverlayInsertTextRequest {
-    pub transcript_id: Option<String>,
-    pub text: String,
-}
-
-#[tauri::command]
-pub fn record_transcribe_start(
-    runtime: State<'_, RuntimeState>,
-    workflow: State<'_, VoiceWorkflow>,
-    audio: State<'_, RecordingRegistry>,
-    streaming_actor: State<'_, TranscriptionActor>,
-    mailbox: State<'_, UiEventMailbox>,
-    record_input_cache: State<'_, RecordInputCacheState>,
-    req: RecordTranscribeStartRequest,
-) -> Result<RecordTranscribeStartResult, String> {
-    let session_id = workflow
-        .start_record_transcribe(
-            &runtime,
-            &audio,
-            &streaming_actor,
-            &mailbox,
-            &record_input_cache,
-            normalize_task_id(req.task_id)?,
-        )
-        .map_err(render_workflow_error)?;
-    Ok(RecordTranscribeStartResult { session_id })
-}
-
-#[tauri::command]
-pub fn workflow_snapshot(workflow: State<'_, VoiceWorkflow>) -> Result<WorkflowView, String> {
-    workflow.snapshot_view().map_err(render_workflow_error)
-}
-
-#[tauri::command]
-pub async fn workflow_command(
-    app: AppHandle,
-    req: WorkflowCommandRequest,
-) -> Result<WorkflowView, String> {
-    let runtime = app.state::<RuntimeState>();
-    let workflow = app.state::<VoiceWorkflow>();
-    let audio = app.state::<RecordingRegistry>();
-    let transcriber = app.state::<TranscriptionService>();
-    let streaming_actor = app.state::<TranscriptionActor>();
-    let mailbox = app.state::<UiEventMailbox>();
-    let record_input_cache = app.state::<RecordInputCacheState>();
-
-    let outcome = workflow
-        .run_command(
-            WorkflowCommandDeps {
-                runtime: &runtime,
-                audio: &audio,
-                transcriber: &transcriber,
-                streaming_actor: &streaming_actor,
-                mailbox: &mailbox,
-                record_input_cache: &record_input_cache,
-            },
-            req,
-        )
-        .await
-        .map_err(render_workflow_error)?;
-    if let Some(task) = outcome.task {
-        crate::voice_tasks::spawn(app.clone(), task);
-    }
-    Ok(outcome.view)
-}
-
-#[tauri::command]
-pub fn workflow_apply_event(
-    workflow: State<'_, VoiceWorkflow>,
-    mailbox: State<'_, UiEventMailbox>,
-    req: WorkflowApplyEventRequest,
-) -> Result<WorkflowView, String> {
-    workflow
-        .apply_event(&mailbox, req)
-        .map_err(render_workflow_error)
-}
-
-#[tauri::command]
-pub fn workflow_report_asr_completed(
-    workflow: State<'_, VoiceWorkflow>,
-    mailbox: State<'_, UiEventMailbox>,
-    req: WorkflowAsrCompletedRequest,
-) -> Result<WorkflowView, String> {
-    workflow
-        .report_asr_completed(&mailbox, req)
-        .map_err(render_workflow_error)
-}
-
-#[tauri::command]
-pub fn workflow_report_asr_empty(
-    workflow: State<'_, VoiceWorkflow>,
-    mailbox: State<'_, UiEventMailbox>,
-    req: WorkflowAsrEmptyRequest,
-) -> Result<WorkflowView, String> {
-    workflow
-        .report_asr_empty(&mailbox, req)
-        .map_err(render_workflow_error)
-}
-
-#[tauri::command]
-pub fn workflow_report_asr_failed(
-    workflow: State<'_, VoiceWorkflow>,
-    audio: State<'_, RecordingRegistry>,
-    streaming_actor: State<'_, TranscriptionActor>,
-    mailbox: State<'_, UiEventMailbox>,
-    req: WorkflowTaskFailedRequest,
-) -> Result<WorkflowView, String> {
-    workflow
-        .report_asr_failed(&audio, &streaming_actor, &mailbox, req)
-        .map_err(render_workflow_error)
-}
-
-#[tauri::command]
-pub async fn workflow_rewrite(
-    workflow: State<'_, VoiceWorkflow>,
-    mailbox: State<'_, UiEventMailbox>,
-    task_state: State<'_, crate::task_manager::TaskManager>,
-    req: WorkflowTextCommandRequest,
-) -> Result<RewriteResult, String> {
-    workflow
-        .rewrite_current_text(&mailbox, &task_state, req)
-        .await
-        .map_err(render_workflow_error)
-}
-
-#[tauri::command]
-pub async fn workflow_insert(
-    workflow: State<'_, VoiceWorkflow>,
-    mailbox: State<'_, UiEventMailbox>,
-    task_state: State<'_, crate::task_manager::TaskManager>,
-    req: WorkflowTextCommandRequest,
-) -> Result<InsertResult, String> {
-    let target_hwnd = task_state.last_external_hwnd_best_effort();
-    workflow
-        .insert_current_text_after_focus(&mailbox, req, target_hwnd)
-        .await
-        .map_err(render_workflow_error)
-}
-
-#[tauri::command]
-pub fn workflow_report_rewrite_completed(
-    workflow: State<'_, VoiceWorkflow>,
-    mailbox: State<'_, UiEventMailbox>,
-    req: WorkflowRewriteCompletedRequest,
-) -> Result<WorkflowView, String> {
-    workflow
-        .report_rewrite_completed(&mailbox, req)
-        .map_err(render_workflow_error)
-}
-
-#[tauri::command]
-pub fn workflow_report_rewrite_failed(
-    workflow: State<'_, VoiceWorkflow>,
-    mailbox: State<'_, UiEventMailbox>,
-    req: WorkflowTaskFailedRequest,
-) -> Result<WorkflowView, String> {
-    workflow
-        .report_rewrite_failed(&mailbox, req)
-        .map_err(render_workflow_error)
-}
-
-#[tauri::command]
-pub fn workflow_report_insert_completed(
-    workflow: State<'_, VoiceWorkflow>,
-    mailbox: State<'_, UiEventMailbox>,
-    req: WorkflowInsertCompletedRequest,
-) -> Result<WorkflowView, String> {
-    workflow
-        .report_insert_completed(&mailbox, req)
-        .map_err(render_workflow_error)
-}
-
-#[tauri::command]
-pub fn workflow_report_insert_failed(
-    workflow: State<'_, VoiceWorkflow>,
-    mailbox: State<'_, UiEventMailbox>,
-    req: WorkflowTaskFailedRequest,
-) -> Result<WorkflowView, String> {
-    workflow
-        .report_insert_failed(&mailbox, req)
-        .map_err(render_workflow_error)
-}
-
-#[tauri::command]
-pub async fn record_transcribe_stop(
-    runtime: State<'_, RuntimeState>,
-    workflow: State<'_, VoiceWorkflow>,
-    audio: State<'_, RecordingRegistry>,
-    transcriber: State<'_, TranscriptionService>,
-    mailbox: State<'_, UiEventMailbox>,
-) -> Result<Option<TranscriptionResult>, String> {
-    if workflow.current_session_uses_streaming_transcription() {
-        workflow
-            .stop_streaming_record_transcribe(&audio, &mailbox)
-            .map_err(render_workflow_error)?;
-        return Ok(None);
-    }
-
-    workflow
-        .stop_record_transcribe(&runtime, &audio, &transcriber, &mailbox)
-        .await
-        .map_err(render_workflow_error)
-}
-
-#[tauri::command]
-pub fn record_transcribe_cancel(
-    workflow: State<'_, VoiceWorkflow>,
-    audio: State<'_, RecordingRegistry>,
-    transcriber: State<'_, TranscriptionService>,
-    streaming_actor: State<'_, TranscriptionActor>,
-    mailbox: State<'_, UiEventMailbox>,
-) -> Result<(), String> {
-    workflow
-        .cancel_record_transcribe(&audio, &transcriber, &streaming_actor, &mailbox)
-        .map_err(render_workflow_error)
-}
-
-#[tauri::command]
-pub async fn rewrite_text(
-    workflow: State<'_, VoiceWorkflow>,
-    mailbox: State<'_, UiEventMailbox>,
-    task_state: State<'_, crate::task_manager::TaskManager>,
-    req: RewriteTextRequest,
-) -> Result<RewriteResult, String> {
-    workflow
-        .rewrite_text(&mailbox, &task_state, req)
-        .await
-        .map_err(render_workflow_error)
-}
-
-#[tauri::command]
-pub async fn insert_text(
-    workflow: State<'_, VoiceWorkflow>,
-    mailbox: State<'_, UiEventMailbox>,
-    req: InsertTextRequest,
-) -> Result<InsertResult, String> {
-    workflow
-        .insert_text(&mailbox, req)
-        .await
-        .map_err(render_workflow_error)
-}
-
-#[tauri::command]
-pub async fn overlay_insert_text(
-    task_state: State<'_, crate::task_manager::TaskManager>,
-    req: OverlayInsertTextRequest,
-) -> Result<InsertResult, String> {
-    if req.text.trim().is_empty() {
-        return Err("E_EXPORT_EMPTY_TEXT: empty text cannot be exported".to_string());
-    }
-    let target_hwnd = task_state.last_external_hwnd_best_effort().ok_or_else(|| {
-        "E_OVERLAY_TARGET_UNAVAILABLE: no external target window captured".to_string()
-    })?;
-    crate::insertion::insert_text_after_focus(
-        InsertTextRequest {
-            transcript_id: req.transcript_id,
-            text: req.text,
-        },
-        Some(target_hwnd),
-    )
-    .await
-    .map_err(render_port_error)
-}
-
-fn normalize_task_id(task_id: Option<String>) -> Result<Option<String>, String> {
-    let raw = match task_id {
-        Some(v) => v.trim().to_string(),
-        None => return Ok(None),
-    };
-    if raw.is_empty() {
-        return Ok(None);
-    }
-    let parsed = uuid::Uuid::parse_str(&raw)
-        .map_err(|e| format!("E_TASK_ID_INVALID: invalid task_id ({e})"))?;
-    Ok(Some(parsed.to_string()))
-}
-
-fn render_workflow_error(err: WorkflowError) -> String {
-    let rendered = err.render();
-    if let Ok(dir) = data_dir::data_dir() {
-        crate::obs::event_err(
-            &dir,
-            crate::obs::ErrorEvent {
-                task_id: None,
-                stage: "Cmd",
-                step_id: "CMD.workflow_error",
-                kind: "workflow",
-                code: &err.code,
-                ctx: Some(serde_json::json!({
-                    "rendered": rendered.clone(),
-                    "raw": err.raw_message(),
-                })),
-            },
-            &err.message,
-        );
-    }
-    rendered
-}
-
-fn render_port_error(err: PortError) -> String {
-    let rendered = err.to_string();
-    if let Ok(dir) = data_dir::data_dir() {
-        crate::obs::event_err(
-            &dir,
-            crate::obs::ErrorEvent {
-                task_id: None,
-                stage: "Cmd",
-                step_id: "CMD.port_error",
-                kind: "port",
-                code: &err.code,
-                ctx: Some(serde_json::json!({
-                    "rendered": rendered.clone(),
-                    "raw": err.raw_message(),
-                })),
-            },
-            &err.message,
-        );
-    }
-    rendered
+    &["workflow_snapshot", "workflow_command"]
 }
 
 #[cfg(test)]
@@ -381,21 +61,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn command_names_include_runtime_entrypoints() {
-        let names = command_names();
+    fn command_surface_has_only_controller_entrypoints() {
+        assert_eq!(command_names(), &["workflow_snapshot", "workflow_command"]);
+    }
 
-        assert!(names.contains(&"record_transcribe_start"));
-        assert!(names.contains(&"record_transcribe_stop"));
-        assert!(names.contains(&"record_transcribe_cancel"));
-        assert!(names.contains(&"rewrite_text"));
-        assert!(names.contains(&"insert_text"));
-        assert!(names.contains(&"workflow_snapshot"));
-        assert!(names.contains(&"workflow_command"));
-        assert!(names.contains(&"workflow_apply_event"));
-        assert!(names.contains(&"workflow_report_asr_completed"));
-        assert!(names.contains(&"workflow_report_asr_empty"));
-        assert!(names.contains(&"workflow_report_asr_failed"));
-        assert!(names.contains(&"workflow_rewrite"));
-        assert!(names.contains(&"workflow_insert"));
+    #[test]
+    fn command_envelope_is_strict() {
+        let primary = parse_workflow_command_request(serde_json::json!({
+            "command": "primary",
+            "actionKey": "ready:initial"
+        }));
+        let unknown = parse_workflow_command_request(serde_json::json!({
+            "command": "primary",
+            "actionKey": "ready:initial",
+            "legacy": true
+        }));
+        assert!(primary.is_ok());
+        assert_eq!(
+            unknown.expect_err("unknown command field must fail").code,
+            "E_WORKFLOW_INTENT_INVALID"
+        );
     }
 }

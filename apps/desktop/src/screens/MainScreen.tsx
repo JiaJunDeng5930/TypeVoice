@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { buildDiagnostic, buildUiEventDiagnostic, userMessageFromDiagnostic } from "../domain/diagnostic";
+import { buildDiagnostic, userMessageFromDiagnostic } from "../domain/diagnostic";
 import {
   EMPTY_WORKFLOW_VIEW,
   isWorkflowCommandReply,
@@ -13,6 +13,7 @@ import {
 } from "../domain/workflowView";
 import { defaultTauriGateway } from "../infra/runtimePorts";
 import type {
+  LastRunProjection,
   RuntimeToolchainStatus,
   Settings,
   UiEvent,
@@ -47,10 +48,11 @@ export function MainScreen({
     const lastRunId = next.lastRun?.runId ?? null;
     if (lastRunId && lastRunId !== observedLastRunIdRef.current) {
       observedLastRunIdRef.current = lastRunId;
-      onHistoryChanged();
+      if (next.lastRun && next.lastRun.effects.historyCommitCount > 0) onHistoryChanged();
+      if (next.lastRun) notifyLastRun(next.lastRun, pushToast);
     }
     return true;
-  }, [onHistoryChanged]);
+  }, [onHistoryChanged, pushToast]);
 
   const refreshWorkflowSnapshot = useCallback(async () => {
     const payload = await defaultTauriGateway.invoke<unknown>("workflow_snapshot");
@@ -134,11 +136,25 @@ export function MainScreen({
     }
   }
 
+  async function copyRecoveredText(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      pushToast("Recovered text copied", "ok");
+    } catch (error) {
+      const copyDiagnostic = buildDiagnostic(error, "Recovered text could not be copied");
+      pushToast(copyDiagnostic.title, "danger");
+    }
+  }
+
   const presentationPhase = workflowPresentationPhase(workflow);
   const buttonLabel = primaryActionLabel(workflow.primaryLabel);
-  const cancelTargetRunId = workflow.cancelEnabled ? workflow.activeRun?.runId ?? null : null;
+  const cancelTargetRunId = workflow.cancelEnabled && workflow.mode === "recording"
+    ? workflow.activeRun?.runId ?? null
+    : null;
   const diagnostic = workflowDiagnostic(workflow);
   const diagnosticMessage = userMessageFromDiagnostic(diagnostic.code, diagnostic.message);
+  const recoveredText = recoveredTextFromLastRun(workflow.lastRun);
+  const recoveredTextWasSaved = recoveredTextSaved(workflow.lastRun);
 
   return (
     <div className="pageSurface mainSurface" aria-live="polite">
@@ -179,10 +195,22 @@ export function MainScreen({
         </PixelButton>
       ) : null}
 
+      {recoveredText ? (
+        <PixelButton
+          onClick={() => void copyRecoveredText(recoveredText)}
+          title="Copy the text recovered before the workflow failed"
+        >
+          Copy recovered text
+        </PixelButton>
+      ) : null}
+
       {diagnostic.code || diagnostic.message ? (
         <div className="mainDiag isVisible" role="alert">
           {diagnostic.code ? <span>{diagnostic.code}</span> : null}
           {diagnosticMessage}
+          {recoveredText && !recoveredTextWasSaved ? (
+            <strong>Recovered text was not saved to History.</strong>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -193,54 +221,51 @@ function handleDisplayEvent(
   event: UiEvent,
   pushToast: (msg: string, tone?: "default" | "ok" | "danger") => void,
 ) {
-  if (event.kind === "transcription.partial") return;
-  if (event.kind === "workflow.task.failed" || event.status === "failed") {
-    const diagnostic = buildUiEventDiagnostic(event, failureTitleFromStage(event.stage));
-    pushToast(diagnostic.title, "danger");
+  if (event.kind === "diagnostic.error") {
+    pushToast(userMessageFromDiagnostic(event.errorCode, event.message), "danger");
+  }
+}
+
+function notifyLastRun(
+  lastRun: LastRunProjection,
+  pushToast: (msg: string, tone?: "default" | "ok" | "danger") => void,
+) {
+  if ("completed" in lastRun.outcome) {
+    const completed = lastRun.outcome.completed;
+    if (
+      completed.warning
+      || (completed.insertResult.autoPasteAttempted && !completed.insertResult.autoPasteOk)
+    ) {
+      pushToast("Text copied, but it could not be pasted", "danger");
+    } else {
+      pushToast(completed.insertResult.autoPasteAttempted ? "Text pasted" : "Text copied", "ok");
+    }
     return;
   }
-  if (event.status === "cancelled") {
-    pushToast("Cancelled", "default");
-    return;
-  }
-  if (event.kind === "transcription.empty") {
+  if ("empty" in lastRun.outcome) {
     pushToast("No speech detected", "default");
     return;
   }
-  if (event.kind === "transcription.completed") {
-    pushToast("Text ready", "ok");
+  if ("cancelled" in lastRun.outcome) {
+    pushToast("Cancelled", "default");
     return;
   }
-  if (event.kind === "rewrite.completed") {
-    pushToast("Text improved", "ok");
-    return;
-  }
-  if (event.kind === "insertion.completed") {
-    const inserted = insertionPayload(event.payload);
-    if (inserted?.autoPasteAttempted && !inserted.autoPasteOk) {
-      pushToast("Text could not be pasted", "danger");
-    } else {
-      pushToast(inserted?.autoPasteAttempted ? "Text pasted" : "Text copied", "ok");
-    }
-  }
+  const error = lastRun.outcome.failed.primaryError;
+  pushToast(userMessageFromDiagnostic(error.code, error.message), "danger");
 }
 
-function insertionPayload(payload: unknown): {
-  autoPasteAttempted: boolean;
-  autoPasteOk: boolean;
-} | null {
-  if (!payload || typeof payload !== "object") return null;
-  const raw = payload as Record<string, unknown>;
-  return {
-    autoPasteAttempted: raw.autoPasteAttempted === true,
-    autoPasteOk: raw.autoPasteOk === true,
-  };
+function recoveredTextFromLastRun(lastRun: LastRunProjection | null): string {
+  if (!lastRun || !("failed" in lastRun.outcome)) return "";
+  const result = lastRun.outcome.failed.recoveredResult;
+  return result?.finalText.trim() || result?.asrText.trim() || "";
 }
 
-function failureTitleFromStage(stage: string | null | undefined): string {
-  if (stage === "Rewrite") return "Text improvement failed";
-  if (stage === "Insert") return "Text could not be pasted";
-  return "Speech recognition failed";
+function recoveredTextSaved(lastRun: LastRunProjection | null): boolean {
+  return Boolean(
+    lastRun
+    && "failed" in lastRun.outcome
+    && lastRun.outcome.failed.recordSaved,
+  );
 }
 
 function commandErrorTitle(command: WorkflowCommandRequest["command"]): string {

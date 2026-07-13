@@ -383,37 +383,15 @@ fn now_epoch_ms() -> i64 {
     }
 }
 
-fn save_last_working_cache(
-    data_dir: &Path,
-    settings: &mut Settings,
-    resolved: &ResolvedRecordInput,
-) -> Result<(), String> {
-    let mut changed = false;
-    let next_endpoint_id = resolved.endpoint_id.clone();
-    let next_friendly_name = resolved.friendly_name.clone();
-    let next_spec = Some(resolved.spec.clone());
-    if settings.record_last_working_endpoint_id != next_endpoint_id {
-        settings.record_last_working_endpoint_id = next_endpoint_id;
-        changed = true;
-    }
-    if settings.record_last_working_friendly_name != next_friendly_name {
-        settings.record_last_working_friendly_name = next_friendly_name;
-        changed = true;
-    }
-    if settings.record_last_working_dshow_spec != next_spec {
-        settings.record_last_working_dshow_spec = next_spec;
-        changed = true;
-    }
-    let next_ts = Some(now_epoch_ms());
-    if settings.record_last_working_ts_ms != next_ts {
-        settings.record_last_working_ts_ms = next_ts;
-        changed = true;
-    }
-    if !changed {
-        return Ok(());
-    }
-    settings::save_settings(data_dir, settings)
-        .map_err(|e| format!("E_RECORD_INPUT_CACHE_SAVE_FAILED: {e}"))
+fn save_last_working_cache(data_dir: &Path, resolved: &ResolvedRecordInput) -> Result<(), String> {
+    settings::update_record_last_working(
+        data_dir,
+        resolved.endpoint_id.clone(),
+        resolved.friendly_name.clone(),
+        resolved.spec.clone(),
+        now_epoch_ms(),
+    )
+    .map_err(|e| format!("E_RECORD_INPUT_CACHE_SAVE_FAILED: {e}"))
 }
 
 fn build_resolve_failed(
@@ -459,11 +437,19 @@ pub fn resolve_record_input_for_recording(
     data_dir: &Path,
     ffmpeg_cmd: &str,
 ) -> Result<ResolvedRecordInput, String> {
+    let settings = settings::load_settings_strict(data_dir).map_err(|e| e.to_string())?;
+    resolve_record_input_for_settings(data_dir, ffmpeg_cmd, &settings)
+}
+
+pub(crate) fn resolve_record_input_for_settings(
+    data_dir: &Path,
+    ffmpeg_cmd: &str,
+    settings: &Settings,
+) -> Result<ResolvedRecordInput, String> {
     let ffmpeg = Path::new(ffmpeg_cmd);
-    let mut settings = settings::load_settings_strict(data_dir).map_err(|e| e.to_string())?;
     let mut decision_logs: Vec<ResolveLogEntry> = Vec::new();
 
-    let strategy = match parse_strategy(&settings) {
+    let strategy = match parse_strategy(settings) {
         Ok(v) => v,
         Err(e) => {
             push_resolution_log(&mut decision_logs, "strategy.parse", "fail", e.as_str());
@@ -473,7 +459,7 @@ pub fn resolve_record_input_for_recording(
             ));
         }
     };
-    let role = match parse_default_role(&settings) {
+    let role = match parse_default_role(settings) {
         Ok(v) => v,
         Err(e) => {
             push_resolution_log(&mut decision_logs, "role.parse", "fail", e.as_str());
@@ -646,7 +632,7 @@ pub fn resolve_record_input_for_recording(
                     "start",
                     "attempt cached last_working spec",
                 );
-                match attempt_last_working(&settings) {
+                match attempt_last_working(settings) {
                     Ok(v) => {
                         push_resolution_log(
                             &mut decision_logs,
@@ -732,7 +718,7 @@ pub fn resolve_record_input_for_recording(
     );
     resolved.resolution_log = decision_logs;
 
-    let _ = save_last_working_cache(data_dir, &mut settings, &resolved);
+    let _ = save_last_working_cache(data_dir, &resolved);
     Ok(resolved)
 }
 

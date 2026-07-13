@@ -12,12 +12,13 @@ pub use typevoice_storage::{data_dir, history, settings};
 pub mod audio_capture;
 mod pcm;
 pub mod rewrite;
+pub mod run_executor;
+pub mod runtime_run_ports;
 pub mod task_manager;
 pub mod transcription;
 pub mod transcription_actor;
 pub mod ui_events;
-pub mod voice_tasks;
-pub mod voice_workflow;
+pub mod workflow_controller;
 
 #[cfg(test)]
 mod target_architecture_contracts;

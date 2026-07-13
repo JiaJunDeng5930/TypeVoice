@@ -1,6 +1,10 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";
-import { compactDetail, extractErrorCode } from "../domain/diagnostic";
+import {
+  compactDetail,
+  extractErrorCode,
+  workflowErrorFromUnknown,
+} from "../domain/diagnostic";
 
 export type Unlisten = () => void;
 
@@ -27,8 +31,11 @@ const tauriGateway: TauriGateway = {
       return await tauriInvoke<T>(command, args);
     } catch (err) {
       if (command !== "ui_log_event") {
-        const message = errorMessage(err);
-        const code = extractErrorCode(message) || "E_INVOKE_FAILED";
+        const workflowError = workflowErrorFromUnknown(err);
+        const message = workflowError
+          ? `${workflowError.code}: ${workflowError.message}`
+          : errorMessage(err);
+        const code = workflowError?.code || extractErrorCode(message) || "E_INVOKE_FAILED";
         try {
           await tauriInvoke("ui_log_event", {
             req: {

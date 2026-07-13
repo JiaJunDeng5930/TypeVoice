@@ -281,7 +281,7 @@ async fn transcribe_remote_inner(
     while completed < parts.len() {
         let next = tokio::select! {
             _ = token.cancelled() => {
-                set.abort_all();
+                abort_and_drain(&mut set).await;
                 return Err(err("E_CANCELLED", "cancelled"));
             }
             v = set.join_next() => v
@@ -292,11 +292,11 @@ async fn transcribe_remote_inner(
                 completed += 1;
             }
             Some(Ok(Err(e))) => {
-                set.abort_all();
+                abort_and_drain(&mut set).await;
                 return Err(e);
             }
             Some(Err(e)) => {
-                set.abort_all();
+                abort_and_drain(&mut set).await;
                 return Err(err(
                     "E_REMOTE_ASR_INTERNAL",
                     format!("slice task join failed: {e}"),
@@ -335,6 +335,11 @@ async fn transcribe_remote_inner(
             model_version: None,
         },
     })
+}
+
+async fn abort_and_drain<T: 'static>(set: &mut JoinSet<T>) {
+    set.abort_all();
+    while set.join_next().await.is_some() {}
 }
 
 async fn transcribe_one_slice(

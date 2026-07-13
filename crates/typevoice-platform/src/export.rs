@@ -13,6 +13,15 @@ impl ExportError {
     }
 }
 
+#[cfg(target_os = "linux")]
+pub use linux::InsertionTarget;
+#[cfg(windows)]
+pub use windows::InsertionTarget;
+
+#[cfg(not(any(windows, target_os = "linux")))]
+#[derive(Debug, Clone)]
+pub struct InsertionTarget;
+
 pub fn copy_text_to_clipboard(text: &str) -> Result<(), ExportError> {
     if text.trim().is_empty() {
         return Err(ExportError::new(
@@ -36,7 +45,27 @@ pub fn copy_text_to_clipboard(text: &str) -> Result<(), ExportError> {
     })
 }
 
-pub async fn auto_paste_text(text: &str) -> Result<(), ExportError> {
+pub async fn capture_insertion_target() -> Result<InsertionTarget, ExportError> {
+    #[cfg(windows)]
+    {
+        windows::capture_insertion_target()
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        linux::capture_insertion_target().await
+    }
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        Err(ExportError::new(
+            "E_EXPORT_TARGET_UNSUPPORTED",
+            "insertion target capture is only supported on Linux and Windows",
+        ))
+    }
+}
+
+pub async fn auto_paste_text(target: &InsertionTarget, text: &str) -> Result<(), ExportError> {
     if text.trim().is_empty() {
         return Err(ExportError::new(
             "E_EXPORT_EMPTY_TEXT",
@@ -46,12 +75,12 @@ pub async fn auto_paste_text(text: &str) -> Result<(), ExportError> {
 
     #[cfg(windows)]
     {
-        windows::auto_input_text(text)
+        windows::auto_input_text(target, text)
     }
 
     #[cfg(target_os = "linux")]
     {
-        linux::auto_input_text(text).await
+        linux::auto_input_text(target, text).await
     }
 
     #[cfg(not(any(windows, target_os = "linux")))]
@@ -60,19 +89,6 @@ pub async fn auto_paste_text(text: &str) -> Result<(), ExportError> {
             "E_EXPORT_PASTE_UNSUPPORTED",
             "auto input is only supported on Linux and Windows",
         ))
-    }
-}
-
-pub fn focus_window_best_effort(hwnd: Option<isize>) -> bool {
-    #[cfg(windows)]
-    {
-        windows::focus_window_best_effort(hwnd)
-    }
-
-    #[cfg(not(windows))]
-    {
-        let _ = hwnd;
-        false
     }
 }
 
@@ -112,18 +128,85 @@ mod windows {
         SetForegroundWindow, GUITHREADINFO,
     };
 
-    pub fn focus_window_best_effort(hwnd: Option<isize>) -> bool {
-        let Some(hwnd) = hwnd else {
-            return false;
-        };
-        let hwnd = hwnd as HWND;
-        if hwnd.is_null() || unsafe { IsWindow(hwnd) } == 0 {
-            return false;
-        }
-        unsafe { SetForegroundWindow(hwnd) != 0 }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct InsertionTarget {
+        foreground_hwnd: isize,
+        focus_hwnd: isize,
+        foreground_pid: u32,
+        focus_pid: u32,
     }
 
-    pub fn auto_input_text(text: &str) -> Result<(), ExportError> {
+    pub fn capture_insertion_target() -> Result<InsertionTarget, ExportError> {
+        let target = resolve_external_focus_target()?;
+        Ok(InsertionTarget {
+            foreground_hwnd: target.foreground_hwnd as isize,
+            focus_hwnd: target.hwnd as isize,
+            foreground_pid: target.foreground_pid,
+            focus_pid: target.focus_pid,
+        })
+    }
+
+    pub fn auto_input_text(expected: &InsertionTarget, text: &str) -> Result<(), ExportError> {
+        let expected_foreground = expected.foreground_hwnd as HWND;
+        if expected_foreground.is_null() || unsafe { IsWindow(expected_foreground) } == 0 {
+            return Err(ExportError::new(
+                "E_EXPORT_TARGET_UNAVAILABLE",
+                "the frozen insertion target no longer exists",
+            ));
+        }
+        let mut target = resolve_external_focus_target().ok();
+        if !target_matches(target.as_ref(), expected) {
+            let _ = unsafe { SetForegroundWindow(expected_foreground) };
+            target = resolve_external_focus_target().ok();
+        }
+        let _validated_target = target
+            .filter(|current| target_matches(Some(current), expected))
+            .ok_or_else(|| {
+                ExportError::new(
+                    "E_EXPORT_TARGET_MISMATCH",
+                    "current focus no longer matches the frozen insertion target",
+                )
+            })?;
+
+        let target = resolve_external_focus_target()
+            .ok()
+            .filter(|current| target_matches(Some(current), expected))
+            .ok_or_else(|| {
+                ExportError::new(
+                    "E_EXPORT_TARGET_MISMATCH",
+                    "focus changed immediately before native Unicode input",
+                )
+            })?;
+        let (expected_count, sent) = dispatch_unicode_inputs(text, |inputs| unsafe {
+            SendInput(
+                inputs.len() as u32,
+                inputs.as_ptr(),
+                size_of::<INPUT>() as i32,
+            )
+        });
+        if sent != expected_count {
+            let err = unsafe { GetLastError() };
+            return Err(ExportError::new(
+                "E_EXPORT_PASTE_FAILED",
+                format!(
+                    "SendInput(unicode) failed: last_error={err}, sent={sent}, expected={expected_count}, focus_hwnd={:p}, foreground_hwnd={:p}, foreground_pid={}, focus_pid={}",
+                    target.hwnd, target.foreground_hwnd, target.foreground_pid, target.focus_pid,
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn target_matches(current: Option<&ForegroundFocusTarget>, expected: &InsertionTarget) -> bool {
+        current.is_some_and(|current| {
+            current.foreground_hwnd as isize == expected.foreground_hwnd
+                && current.hwnd as isize == expected.focus_hwnd
+                && current.foreground_pid == expected.foreground_pid
+                && current.focus_pid == expected.focus_pid
+        })
+    }
+
+    fn resolve_external_focus_target() -> Result<ForegroundFocusTarget, ExportError> {
         let target = resolve_foreground_focus_window().ok_or_else(|| {
             ExportError::new(
                 "E_EXPORT_TARGET_UNAVAILABLE",
@@ -139,25 +222,7 @@ mod windows {
                 ),
             ));
         }
-
-        let (expected, sent) = dispatch_unicode_inputs(text, |inputs| unsafe {
-            SendInput(
-                inputs.len() as u32,
-                inputs.as_ptr(),
-                size_of::<INPUT>() as i32,
-            )
-        });
-        if sent != expected {
-            let err = unsafe { GetLastError() };
-            return Err(ExportError::new(
-                "E_EXPORT_PASTE_FAILED",
-                format!(
-                    "SendInput(unicode) failed: last_error={err}, sent={sent}, expected={expected}, focus_hwnd={:p}, foreground_hwnd={:p}, foreground_pid={}, focus_pid={}",
-                    target.hwnd, target.foreground_hwnd, target.foreground_pid, target.focus_pid,
-                ),
-            ));
-        }
-        Ok(())
+        Ok(target)
     }
 
     #[cfg(test)]
@@ -265,22 +330,51 @@ mod linux {
 
     const MAX_TRAVERSE_NODES: usize = 2048;
 
-    pub async fn auto_input_text(text: &str) -> Result<(), ExportError> {
-        let conn = AccessibilityConnection::new().await.map_err(|e| {
-            ExportError::new(
-                "E_EXPORT_PASTE_UNAVAILABLE",
-                format!("failed to connect to AT-SPI bus: {e}"),
-            )
-        })?;
+    #[derive(Clone)]
+    pub struct InsertionTarget {
+        object: ObjectRefOwned,
+    }
 
-        let target = find_focused_editable_object(&conn).await?.ok_or_else(|| {
+    pub async fn capture_insertion_target() -> Result<InsertionTarget, ExportError> {
+        let conn = connection().await?;
+        let object = find_focused_editable_object(&conn).await?.ok_or_else(|| {
             ExportError::new(
                 "E_EXPORT_TARGET_NOT_EDITABLE",
                 "focused editable target not found via AT-SPI",
             )
         })?;
+        Ok(InsertionTarget { object })
+    }
 
-        let accessible = target
+    async fn connection() -> Result<AccessibilityConnection, ExportError> {
+        AccessibilityConnection::new().await.map_err(|e| {
+            ExportError::new(
+                "E_EXPORT_PASTE_UNAVAILABLE",
+                format!("failed to connect to AT-SPI bus: {e}"),
+            )
+        })
+    }
+
+    pub async fn auto_input_text(
+        expected: &InsertionTarget,
+        text: &str,
+    ) -> Result<(), ExportError> {
+        let conn = connection().await?;
+        let current = find_focused_editable_object(&conn).await?.ok_or_else(|| {
+            ExportError::new(
+                "E_EXPORT_TARGET_NOT_EDITABLE",
+                "focused editable target not found via AT-SPI",
+            )
+        })?;
+        if current != expected.object {
+            return Err(ExportError::new(
+                "E_EXPORT_TARGET_MISMATCH",
+                "current focus no longer matches the frozen insertion target",
+            ));
+        }
+
+        let accessible = expected
+            .object
             .as_accessible_proxy(conn.connection())
             .await
             .map_err(|e| {
@@ -297,8 +391,17 @@ mod linux {
             )
         })?;
 
-        if let Ok(component) = proxies.component().await {
-            let _ = component.grab_focus().await;
+        let state = accessible.get_state().await.map_err(|e| {
+            ExportError::new(
+                "E_EXPORT_TARGET_UNAVAILABLE",
+                format!("failed to revalidate target focus: {e}"),
+            )
+        })?;
+        if !state.contains(State::Focused) {
+            return Err(ExportError::new(
+                "E_EXPORT_TARGET_MISMATCH",
+                "the frozen insertion target lost focus before insertion",
+            ));
         }
 
         let editable = proxies.editable_text().await.map_err(|e| {

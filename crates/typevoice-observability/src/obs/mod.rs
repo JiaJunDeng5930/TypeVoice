@@ -6,7 +6,7 @@ pub mod startup;
 pub mod trace;
 mod writer;
 
-pub use trace::{event, event_err, event_err_anyhow, ErrorEvent, Span};
+pub use trace::{event, event_err, event_err_anyhow, event_err_durable, ErrorEvent, Span};
 
 const APP_DATA_DIR: &str = "com.typevoice.typevoice";
 const APP_DATA_SUBDIR: &str = "data";

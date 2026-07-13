@@ -1,5 +1,5 @@
 use std::{
-    io::Read,
+    io::{ErrorKind, Read},
     path::Path,
     process::{Command, Stdio},
     time::Instant,
@@ -157,8 +157,10 @@ fn cleanup_audio_artifacts_with_keep(
         return Ok(());
     }
 
-    let _ = std::fs::remove_file(wav_path);
-    cleanup_input_audio_artifact_with_keep(input_audio, data_dir, false)
+    let wav_result = remove_file_if_exists(wav_path);
+    let input_result = cleanup_input_audio_artifact_with_keep(input_audio, data_dir, false);
+    wav_result?;
+    input_result
 }
 
 fn cleanup_input_audio_artifact_with_keep(
@@ -170,9 +172,27 @@ fn cleanup_input_audio_artifact_with_keep(
         return Ok(());
     }
     if managed_audio_artifact(input_audio, data_dir) {
-        let _ = std::fs::remove_file(input_audio);
+        remove_file_if_exists(input_audio)?;
     }
     Ok(())
+}
+
+pub fn cleanup_preprocess_audio_artifact(data_dir: &Path, task_id: &str) -> Result<()> {
+    let keep_audio = std::env::var("TYPEVOICE_KEEP_AUDIO").ok().as_deref() == Some("1");
+    if keep_audio {
+        return Ok(());
+    }
+    remove_file_if_exists(&preprocess_to_temp_wav(data_dir, task_id)?)
+}
+
+fn remove_file_if_exists(path: &Path) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => {
+            Err(error).with_context(|| format!("remove audio artifact failed: {}", path.display()))
+        }
+    }
 }
 
 fn managed_audio_artifact(path: &Path, data_dir: &Path) -> bool {

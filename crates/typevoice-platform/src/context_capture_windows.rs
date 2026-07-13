@@ -1,6 +1,7 @@
 #![cfg(windows)]
 
 use std::ffi::c_void;
+use std::io::Write;
 use std::mem::size_of;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -9,12 +10,13 @@ use std::sync::{
 use std::time::Duration;
 
 use serde::Serialize;
+use tokio_util::sync::CancellationToken;
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HWND, RECT};
 use windows_sys::Win32::Graphics::Gdi::{
-    CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits,
+    BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits,
     ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, RGBQUAD,
+    SRCCOPY,
 };
-use windows_sys::Win32::Storage::Xps::PrintWindow;
 use windows_sys::Win32::System::Ole::CF_UNICODETEXT;
 use windows_sys::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -303,6 +305,90 @@ impl WindowsContext {
             },
         }
     }
+
+    pub fn capture_foreground_window_now_diag_cancellable(
+        &self,
+        max_side: u32,
+        cancellation: &CancellationToken,
+    ) -> ForegroundNowCaptureResult {
+        let hwnd = unsafe { GetForegroundWindow() };
+        if hwnd.is_null() || unsafe { IsWindow(hwnd) } == 0 {
+            return ForegroundNowCaptureResult {
+                capture: None,
+                error: Some(cancelled_or_unavailable_error(
+                    cancellation,
+                    "foreground_window",
+                    max_side,
+                )),
+            };
+        }
+        let mut pid = 0;
+        unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
+        if pid == 0 || cancellation.is_cancelled() {
+            return ForegroundNowCaptureResult {
+                capture: None,
+                error: Some(cancelled_or_unavailable_error(
+                    cancellation,
+                    "foreground_pid",
+                    max_side,
+                )),
+            };
+        }
+        let info = WindowInfo {
+            title: get_window_title_best_effort(hwnd),
+            process_image: get_process_image_best_effort(pid),
+        };
+        match capture_window_png_diagnose_cancellable(hwnd, max_side, cancellation) {
+            Ok(screenshot) => ForegroundNowCaptureResult {
+                capture: Some(ForegroundNowCapture {
+                    window: info,
+                    screenshot,
+                    pid,
+                    hwnd: hwnd as isize,
+                }),
+                error: None,
+            },
+            Err(error) => ForegroundNowCaptureResult {
+                capture: None,
+                error: Some(error),
+            },
+        }
+    }
+}
+
+fn cancelled_or_unavailable_error(
+    cancellation: &CancellationToken,
+    step: &str,
+    max_side: u32,
+) -> ScreenshotDiagError {
+    let cancelled = cancellation.is_cancelled();
+    ScreenshotDiagError {
+        step: if cancelled { "cancelled" } else { step }.to_string(),
+        api: if cancelled {
+            "CancellationToken"
+        } else {
+            "GetForegroundWindow"
+        }
+        .to_string(),
+        api_ret: if cancelled {
+            "cancelled"
+        } else {
+            "unavailable"
+        }
+        .to_string(),
+        last_error: if cancelled { 0 } else { last_error_u32() },
+        note: Some(
+            if cancelled {
+                "context capture cancelled"
+            } else {
+                "foreground window is unavailable"
+            }
+            .to_string(),
+        ),
+        window_w: 0,
+        window_h: 0,
+        max_side,
+    }
 }
 
 impl Default for WindowsContext {
@@ -438,6 +524,23 @@ fn capture_window_png_diagnose(
     hwnd: HWND,
     max_side: u32,
 ) -> Result<ScreenshotRaw, ScreenshotDiagError> {
+    capture_window_png_diagnose_inner(hwnd, max_side, None)
+}
+
+fn capture_window_png_diagnose_cancellable(
+    hwnd: HWND,
+    max_side: u32,
+    cancellation: &CancellationToken,
+) -> Result<ScreenshotRaw, ScreenshotDiagError> {
+    capture_window_png_diagnose_inner(hwnd, max_side, Some(cancellation))
+}
+
+fn capture_window_png_diagnose_inner(
+    hwnd: HWND,
+    max_side: u32,
+    cancellation: Option<&CancellationToken>,
+) -> Result<ScreenshotRaw, ScreenshotDiagError> {
+    ensure_capture_active(cancellation, "begin", 0, 0, max_side)?;
     let mut rect = RECT {
         left: 0,
         top: 0,
@@ -532,7 +635,16 @@ fn capture_window_png_diagnose(
                 max_side,
             ));
         }
-        let pw_ok = PrintWindow(hwnd, mem_dc, 0);
+        if let Err(error) = ensure_capture_active(cancellation, "screen_copy", w, h, max_side) {
+            let _ = SelectObject(mem_dc, old);
+            let _ = DeleteObject(bmp as _);
+            let _ = DeleteDC(mem_dc);
+            let _ = ReleaseDC(std::ptr::null_mut(), screen_dc);
+            return Err(error);
+        }
+        let pw_ok = BitBlt(
+            mem_dc, 0, 0, w as i32, h as i32, screen_dc, rect.left, rect.top, SRCCOPY,
+        );
         ReleaseDC(std::ptr::null_mut(), screen_dc);
 
         if pw_ok == 0 {
@@ -541,7 +653,7 @@ fn capture_window_png_diagnose(
             let _ = DeleteDC(mem_dc);
             return Err(screenshot_err(
                 "print_window",
-                "PrintWindow",
+                "BitBlt",
                 "0".to_string(),
                 None,
                 w,
@@ -602,6 +714,8 @@ fn capture_window_png_diagnose(
             ));
         }
 
+        ensure_capture_active(cancellation, "pixels_read", w, h, max_side)?;
+
         if is_effectively_black_bgra(&src_bgra) {
             return Err(ScreenshotDiagError {
                 step: "validate_pixels".to_string(),
@@ -615,23 +729,57 @@ fn capture_window_png_diagnose(
             });
         }
 
-        resize_convert_bgra_to_rgba(&src_bgra, w, h, &mut rgba, out_w, out_h);
-        let png_bytes =
-            encode_png_rgba(&rgba, out_w, out_h).ok_or_else(|| ScreenshotDiagError {
-                step: "encode_png".to_string(),
-                api: "png::Encoder".to_string(),
-                api_ret: "None".to_string(),
-                last_error: 0,
-                note: Some("encode_png_rgba returned None".to_string()),
-                window_w: w,
-                window_h: h,
-                max_side,
-            })?;
+        if !resize_convert_bgra_to_rgba(&src_bgra, w, h, &mut rgba, out_w, out_h, cancellation) {
+            return Err(cancelled_capture_error(w, h, max_side));
+        }
+        let png_bytes = encode_png_rgba(&rgba, out_w, out_h, cancellation).ok_or_else(|| {
+            if cancellation.is_some_and(CancellationToken::is_cancelled) {
+                cancelled_capture_error(w, h, max_side)
+            } else {
+                ScreenshotDiagError {
+                    step: "encode_png".to_string(),
+                    api: "png::Encoder".to_string(),
+                    api_ret: "None".to_string(),
+                    last_error: 0,
+                    note: Some("encode_png_rgba returned None".to_string()),
+                    window_w: w,
+                    window_h: h,
+                    max_side,
+                }
+            }
+        })?;
         Ok(ScreenshotRaw {
             png_bytes,
             width: out_w,
             height: out_h,
         })
+    }
+}
+
+fn ensure_capture_active(
+    cancellation: Option<&CancellationToken>,
+    _step: &str,
+    window_w: u32,
+    window_h: u32,
+    max_side: u32,
+) -> Result<(), ScreenshotDiagError> {
+    if cancellation.is_some_and(CancellationToken::is_cancelled) {
+        Err(cancelled_capture_error(window_w, window_h, max_side))
+    } else {
+        Ok(())
+    }
+}
+
+fn cancelled_capture_error(window_w: u32, window_h: u32, max_side: u32) -> ScreenshotDiagError {
+    ScreenshotDiagError {
+        step: "cancelled".to_string(),
+        api: "CancellationToken".to_string(),
+        api_ret: "cancelled".to_string(),
+        last_error: 0,
+        note: Some("context capture cancelled".to_string()),
+        window_w,
+        window_h,
+        max_side,
     }
 }
 
@@ -680,10 +828,14 @@ fn resize_convert_bgra_to_rgba(
     dst_rgba: &mut [u8],
     dst_w: u32,
     dst_h: u32,
-) {
+    cancellation: Option<&CancellationToken>,
+) -> bool {
     if src_w == dst_w && src_h == dst_h {
         // Fast path: just convert BGRA -> RGBA.
         for y in 0..dst_h {
+            if cancellation.is_some_and(CancellationToken::is_cancelled) {
+                return false;
+            }
             for x in 0..dst_w {
                 let sidx = ((y * src_w + x) as usize) * 4;
                 let didx = ((y * dst_w + x) as usize) * 4;
@@ -697,7 +849,7 @@ fn resize_convert_bgra_to_rgba(
                 dst_rgba[didx + 3] = a;
             }
         }
-        return;
+        return true;
     }
 
     // Bilinear resize + BGRA -> RGBA conversion.
@@ -708,6 +860,9 @@ fn resize_convert_bgra_to_rgba(
     let dst_h_f = (dst_h as f32).max(1.0);
 
     for y in 0..dst_h {
+        if cancellation.is_some_and(CancellationToken::is_cancelled) {
+            return false;
+        }
         // Center-sampling mapping (reduces aliasing compared to edge mapping).
         let fy = ((y as f32) + 0.5) * (src_h_f / dst_h_f) - 0.5;
         let fy = fy.clamp(0.0, src_h_f - 1.0);
@@ -769,16 +924,30 @@ fn resize_convert_bgra_to_rgba(
             dst_rgba[didx + 3] = a.round().clamp(0.0, 255.0) as u8;
         }
     }
+    true
 }
 
-fn encode_png_rgba(rgba: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
+fn encode_png_rgba(
+    rgba: &[u8],
+    w: u32,
+    h: u32,
+    cancellation: Option<&CancellationToken>,
+) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     {
         let mut enc = png::Encoder::new(&mut out, w, h);
         enc.set_color(png::ColorType::Rgba);
         enc.set_depth(png::BitDepth::Eight);
         let mut writer = enc.write_header().ok()?;
-        writer.write_image_data(rgba).ok()?;
+        let mut stream = writer.stream_writer().ok()?;
+        let row_bytes = w as usize * 4;
+        for row in rgba.chunks(row_bytes) {
+            if cancellation.is_some_and(CancellationToken::is_cancelled) {
+                return None;
+            }
+            stream.write_all(row).ok()?;
+        }
+        stream.finish().ok()?;
     }
     Some(out)
 }

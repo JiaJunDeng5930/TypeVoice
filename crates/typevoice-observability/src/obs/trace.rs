@@ -233,6 +233,40 @@ pub fn event_err(data_dir: &Path, event: ErrorEvent<'_>, message: &str) {
     );
 }
 
+pub fn event_err_durable(
+    data_dir: &Path,
+    event: ErrorEvent<'_>,
+    message: &str,
+    deadline: std::time::Instant,
+) -> bool {
+    let ErrorEvent {
+        task_id,
+        stage,
+        step_id,
+        kind,
+        code,
+        ctx,
+    } = event;
+    let trace = TraceEvent {
+        ts_ms: now_ms(),
+        task_id: task_id.map(|value| value.to_string()),
+        stage: stage.to_string(),
+        step_id: step_id.to_string(),
+        op: "event".to_string(),
+        status: "err".to_string(),
+        duration_ms: None,
+        error: Some(message_trace_error(kind, code, message)),
+        ctx,
+    };
+    match writer::emit_trace_event_durable(data_dir, &trace, deadline) {
+        Ok(persisted) => persisted,
+        Err(error) => {
+            crate::safe_eprintln!("trace: durable emit failed: {error:#}");
+            false
+        }
+    }
+}
+
 pub fn event_err_anyhow(data_dir: &Path, event: ErrorEvent<'_>, err: &AnyhowError) {
     let ErrorEvent {
         task_id,
