@@ -1,9 +1,7 @@
 mod commands;
+mod workflow_runtime;
 pub use typevoice_core::{context_pack, ports};
-pub use typevoice_engine::{
-    audio_capture, rewrite, task_manager, transcription, transcription_actor, ui_events,
-    voice_tasks, voice_workflow, RuntimeState,
-};
+pub use typevoice_engine::{task_manager, ui_events, RuntimeState};
 pub use typevoice_observability::obs;
 #[cfg(windows)]
 pub use typevoice_platform::context_capture_windows;
@@ -23,6 +21,16 @@ use settings::SettingsPatch;
 use task_manager::TaskManager;
 use tauri::Emitter;
 use tauri::Manager;
+use typevoice_engine::{
+    run_executor::{RunExecutorFactory, TauriExecutorSpawner},
+    runtime_run_ports::RuntimeRunPortsFactory,
+    workflow_controller::{
+        SystemWorkflowClock, UuidRunIdSource, WorkflowController, WorkflowSnapshotSink,
+    },
+};
+
+static SETTINGS_UPDATE: std::sync::LazyLock<std::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct OverlayState {
@@ -246,6 +254,7 @@ fn overlay_config() -> Result<settings::OverlayConfigResolved, String> {
 
 #[tauri::command]
 fn overlay_save_position(app: tauri::AppHandle) -> Result<(), String> {
+    let _settings_turn = SETTINGS_UPDATE.lock().unwrap();
     let Some(w) = app.get_webview_window("overlay") else {
         return Ok(());
     };
@@ -272,27 +281,6 @@ fn runtime_toolchain_status(
     runtime: tauri::State<'_, RuntimeState>,
 ) -> Result<toolchain::ToolchainStatus, String> {
     Ok(runtime.get_toolchain())
-}
-
-#[tauri::command]
-fn abort_pending_task(
-    workflow: tauri::State<voice_workflow::VoiceWorkflow>,
-    task_id: &str,
-) -> Result<(), String> {
-    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let span = cmd_span(
-        &dir,
-        None,
-        "CMD.abort_pending_task",
-        Some(serde_json::json!({"has_task_id": !task_id.trim().is_empty()})),
-    );
-    if task_id.trim().is_empty() {
-        span.ok(Some(serde_json::json!({"removed": false})));
-        return Ok(());
-    }
-    let removed = workflow.abort_pending_task(task_id.trim());
-    span.ok(Some(serde_json::json!({"removed": removed})));
-    Ok(())
 }
 
 #[tauri::command]
@@ -631,28 +619,6 @@ fn history_db_path() -> Result<std::path::PathBuf, String> {
 }
 
 #[tauri::command]
-fn history_append(item: HistoryItem) -> Result<(), String> {
-    let db = history_db_path()?;
-    let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
-    let span = cmd_span(
-        &dir,
-        Some(item.task_id.as_str()),
-        "CMD.history_append",
-        None,
-    );
-    match history::append(&db, &item) {
-        Ok(()) => {
-            span.ok(None);
-            Ok(())
-        }
-        Err(e) => {
-            span.err_anyhow("history", "E_CMD_HISTORY_APPEND", &e, None);
-            Err(e.to_string())
-        }
-    }
-}
-
-#[tauri::command]
 fn history_list(limit: i64, before_ms: Option<i64>) -> Result<Vec<HistoryItem>, String> {
     let db = history_db_path()?;
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
@@ -762,20 +728,28 @@ fn list_audio_capture_devices() -> Result<Vec<record_input::AudioCaptureDeviceVi
 fn set_settings(
     s: Settings,
     record_input_cache: tauri::State<'_, record_input_cache::RecordInputCacheState>,
+    workflow: tauri::State<'_, std::sync::Arc<WorkflowController>>,
 ) -> Result<(), String> {
+    let _settings_turn = SETTINGS_UPDATE.lock().unwrap();
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let span = cmd_span(&dir, None, "CMD.set_settings", None);
-    match settings::save_settings(&dir, &s) {
+    let seed = workflow_runtime::run_plan_seed(&s).map_err(|error| error.render())?;
+    let save_result = if cfg!(windows) {
+        record_input_cache
+            .save_validated_settings_blocking(&dir, "set_settings", &s)
+            .map(|_| ())
+    } else {
+        settings::save_settings(&dir, &s).map_err(|error| error.to_string())
+    };
+    match save_result {
         Ok(()) => {
-            if cfg!(windows) {
-                let _ = record_input_cache.refresh_blocking(&dir, "set_settings");
-            }
+            workflow.update_cached_seed(seed);
             span.ok(None);
             Ok(())
         }
         Err(e) => {
-            span.err_anyhow("settings", "E_CMD_SET_SETTINGS", &e, None);
-            Err(e.to_string())
+            span.err("settings", "E_CMD_SET_SETTINGS", &e, None);
+            Err(e)
         }
     }
 }
@@ -787,6 +761,7 @@ fn update_settings(
     record_input_cache: tauri::State<record_input_cache::RecordInputCacheState>,
     patch: SettingsPatch,
 ) -> Result<Settings, String> {
+    let _settings_turn = SETTINGS_UPDATE.lock().unwrap();
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let patch_summary = serde_json::json!({
         "asr_provider": patch.asr_provider.is_some(),
@@ -889,9 +864,24 @@ fn update_settings(
             return Err(e.to_string());
         }
     }
-    if let Err(e) = settings::save_settings(&dir, &next) {
-        span.err_anyhow("settings", "E_CMD_UPDATE_SETTINGS", &e, None);
-        return Err(e.to_string());
+    let seed = match workflow_runtime::run_plan_seed(&next) {
+        Ok(seed) => seed,
+        Err(error) => {
+            let rendered = error.render();
+            span.err("config", &error.code, &error.message, None);
+            return Err(rendered);
+        }
+    };
+    let save_result = if cfg!(windows) && record_input_changed {
+        record_input_cache
+            .save_validated_settings_blocking(&dir, "settings_changed", &next)
+            .map(|_| ())
+    } else {
+        settings::save_settings(&dir, &next).map_err(|error| error.to_string())
+    };
+    if let Err(error) = save_result {
+        span.err("settings", "E_CMD_UPDATE_SETTINGS", &error, None);
+        return Err(error);
     }
     let overlay_config = settings::resolve_overlay_config(&next);
     if let Some(w) = app.get_webview_window("overlay") {
@@ -900,9 +890,8 @@ fn update_settings(
     let _ = app.emit("tv_overlay_config_changed", overlay_config);
     // Hotkeys are also best-effort; failures are traced and should not break settings.
     hotkeys.apply_from_settings_best_effort(&app, &dir, &next);
-    if cfg!(windows) && record_input_changed {
-        let _ = record_input_cache.refresh_blocking(&dir, "settings_changed");
-    }
+    app.state::<std::sync::Arc<WorkflowController>>()
+        .update_cached_seed(seed);
 
     span.ok(None);
     Ok(next)
@@ -917,9 +906,6 @@ pub fn run() {
     obs::startup::mark_best_effort("context_generated");
     tauri::Builder::default()
         .manage(TaskManager::new())
-        .manage(voice_workflow::VoiceWorkflow::new())
-        .manage(transcription::TranscriptionService::new())
-        .manage(audio_capture::RecordingRegistry::new())
         .manage(RuntimeState::new())
         .manage(record_input_cache::RecordInputCacheState::new())
         .manage(audio_device_notifications_windows::AudioDeviceNotificationState::new())
@@ -952,8 +938,38 @@ pub fn run() {
         .setup(|app| {
             obs::startup::mark_best_effort("setup_enter");
             let mailbox = ui_events::UiEventMailbox::new(app.handle().clone());
-            app.manage(transcription_actor::TranscriptionActor::new(mailbox.clone()));
-            app.manage(mailbox);
+            app.manage(mailbox.clone());
+
+            let dir = data_dir::data_dir()?;
+            settings::ensure_settings(&dir)?;
+            let initial_settings = settings::load_settings_strict(&dir)?;
+            let seed = workflow_runtime::run_plan_seed(&initial_settings)
+                .map_err(|error| anyhow::anyhow!(error.render()))?;
+            let ports = std::sync::Arc::new(RuntimeRunPortsFactory::new(
+                mailbox.clone(),
+                app.state::<TaskManager>().inner().clone(),
+                app.state::<record_input_cache::RecordInputCacheState>()
+                    .inner()
+                    .clone(),
+            ));
+            let factory = std::sync::Arc::new(RunExecutorFactory::new(
+                ports,
+                std::sync::Arc::new(TauriExecutorSpawner),
+            ));
+            let sink = std::sync::Arc::new(workflow_runtime::UiWorkflowSnapshotSink::new(
+                mailbox.clone(),
+                app.handle().clone(),
+            ));
+            let controller = WorkflowController::new(
+                seed,
+                factory,
+                sink.clone(),
+                std::sync::Arc::new(UuidRunIdSource),
+                std::sync::Arc::new(SystemWorkflowClock),
+            );
+            sink.publish(&controller.snapshot())
+                .map_err(|error| anyhow::anyhow!(error.render()))?;
+            app.manage(controller);
 
             // Small always-on-top overlay window for hotkey-driven UX.
             // Keep it hidden by default; the frontend will invoke overlay_set_state to show/hide.
@@ -975,7 +991,6 @@ pub fn run() {
 
             let mut toolchain_ready = false;
             if let Ok(dir) = data_dir::data_dir() {
-                settings::ensure_settings(&dir)?;
                 let runtime = app.state::<RuntimeState>();
                 let st = toolchain::initialize_and_verify(app.handle(), &dir);
                 toolchain_ready = st.ready;
@@ -1035,25 +1050,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            commands::record_transcribe_start,
-            commands::record_transcribe_stop,
-            commands::record_transcribe_cancel,
-            commands::rewrite_text,
-            commands::insert_text,
             commands::workflow_snapshot,
             commands::workflow_command,
-            commands::workflow_apply_event,
-            commands::workflow_report_asr_completed,
-            commands::workflow_report_asr_empty,
-            commands::workflow_report_asr_failed,
-            commands::workflow_rewrite,
-            commands::workflow_insert,
-            commands::workflow_report_rewrite_completed,
-            commands::workflow_report_rewrite_failed,
-            commands::workflow_report_insert_completed,
-            commands::workflow_report_insert_failed,
-            commands::overlay_insert_text,
-            abort_pending_task,
             set_llm_api_key,
             clear_llm_api_key,
             llm_api_key_status,
@@ -1066,7 +1064,6 @@ pub fn run() {
             clear_doubao_asr_credentials,
             doubao_asr_credentials_status,
             check_doubao_asr_credentials,
-            history_append,
             history_list,
             history_clear,
             get_settings,

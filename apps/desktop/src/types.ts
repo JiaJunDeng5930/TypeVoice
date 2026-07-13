@@ -11,8 +11,6 @@ export type TaskEvent = {
 
 export type UiEvent = {
   kind: string;
-  effect?: "displayOnly" | "stateChanging" | null;
-  eventId?: string | null;
   sequence?: number | null;
   taskId?: string | null;
   stage?: string | null;
@@ -22,10 +20,6 @@ export type UiEvent = {
   errorCode?: string | null;
   payload?: unknown;
   tsMs: number;
-};
-
-export type RecordTranscribeStartResult = {
-  sessionId: string;
 };
 
 export type TranscriptionMetrics = {
@@ -59,17 +53,96 @@ export type InsertResult = {
 
 export type WorkflowMode = "ready" | "recording" | "processing" | "cancelling";
 
-export type WorkflowRunProjection = {
+export type WorkflowStageKind =
+  | "contextCapture"
+  | "recordFinalize"
+  | "preprocess"
+  | "transcribe"
+  | "rewrite"
+  | "insertPrepare"
+  | "finalize";
+
+export type WorkflowStage = {
+  kind: WorkflowStageKind;
+  status: "pending" | "started" | "completed";
+  elapsedMs?: number;
+};
+
+export type RunTimings = {
+  totalMs: number;
+  recordMs?: number;
+  preprocessMs?: number;
+  asrMs?: number;
+  rewriteMs?: number;
+};
+
+export type RecoveredRunResult = {
+  asrText: string;
+  finalText: string;
+  timings: RunTimings;
+  metrics?: TranscriptionMetrics;
+};
+
+export type WorkflowError = {
+  code: string;
+  message: string;
+};
+
+export type CompletedRunResult = RecoveredRunResult & {
+  insertResult: InsertResult;
+  warning?: WorkflowError;
+};
+
+export type WorkflowOutcome =
+  | { completed: CompletedRunResult }
+  | { empty: { timings: RunTimings } }
+  | {
+    failed: {
+      primaryError: WorkflowError;
+      recoveredResult?: RecoveredRunResult;
+      recoveryErrors: WorkflowError[];
+      recordSaved: boolean;
+      protocolContext?: {
+        originalVariant: string;
+        originalError?: WorkflowError;
+      };
+    };
+  }
+  | { cancelled: { recoveredResult?: RecoveredRunResult } };
+
+export type ActiveRunProjection = {
   runId: string;
-  [key: string]: unknown;
+  stage?: WorkflowStage;
+  result?: RecoveredRunResult;
+};
+
+export type LastRunProjection = {
+  runId: string;
+  outcome: WorkflowOutcome;
+  stoppedCount: number;
+  cleanupDiagnostic?: {
+    elapsedMs: number;
+    gracefulTimedOut: boolean;
+    forceAttempted: boolean;
+    forceSucceeded: boolean;
+    detail?: string;
+  };
+  effects: {
+    historyCommitCount: number;
+    copyCount: number;
+    pasteCount: number;
+  };
+  finalization: {
+    commitCount: number;
+  };
 };
 
 export type WorkflowView = {
   mode: WorkflowMode;
   revision: number;
   actionKey: string;
-  activeRun: WorkflowRunProjection | null;
-  lastRun: WorkflowRunProjection | null;
+  activeRun: ActiveRunProjection | null;
+  lastRun: LastRunProjection | null;
   primaryLabel: string;
   primaryDisabled: boolean;
   cancelEnabled: boolean;
@@ -86,26 +159,6 @@ export type WorkflowCommandDisposition = "applied" | "noOp" | "cancelTooLate";
 export type WorkflowCommandReply = {
   disposition: WorkflowCommandDisposition;
   view: WorkflowView;
-};
-
-export type TaskDone = {
-  task_id: string;
-  asr_text: string;
-  final_text: string;
-  rtf: number;
-  device_used: string;
-  preprocess_ms: number;
-  asr_ms: number;
-  rewrite_ms?: number | null;
-  rewrite_enabled: boolean;
-};
-
-export type ExportTextResult = {
-  copied: boolean;
-  auto_paste_attempted: boolean;
-  auto_paste_ok: boolean;
-  error_code?: string | null;
-  error_message?: string | null;
 };
 
 export type Settings = {

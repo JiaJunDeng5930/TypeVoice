@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { textFromTranscriptionPartial } from "../src/domain/overlaySession.ts";
+import { buildDiagnostic } from "../src/domain/diagnostic.ts";
 import {
   shouldAcceptWorkflowProjection,
   workflowProjectionRevision,
@@ -136,15 +137,39 @@ test("target_contract_t19_equal_command_reply_keeps_view_but_processes_dispositi
 });
 
 for (const [label, payload] of [
-  ["unknown_mode", targetSnapshot(1, { mode: "surprise" })],
+  ["unknown_mode", [
+    targetSnapshot(1, { mode: "surprise" }),
+    targetSnapshot(1, { legacyEffect: "stateChanging" }),
+    {
+      disposition: "noOp",
+      view: targetSnapshot(1),
+      legacyEventId: "removed-protocol-field",
+    },
+  ]],
   ["missing_revision", { mode: "ready", actionKey: "Start(Initial)" }],
   ["missing_action_key", { mode: "ready", revision: 1 }],
 ]) {
   test(`target_contract_t19_${label}_fails_closed`, () => {
-    assert.equal(
-      workflowViewFromPayload(payload),
-      null,
-      `malformed projection ${label} must fail closed instead of becoming a startable Idle view`,
-    );
+    for (const candidate of Array.isArray(payload) ? payload : [payload]) {
+      assert.equal(
+        workflowViewFromPayload(candidate),
+        null,
+        `malformed projection ${label} must fail closed instead of becoming a startable Idle view`,
+      );
+    }
+    if (label === "unknown_mode") {
+      const diagnostic = buildDiagnostic(
+        {
+          code: "E_WORKFLOW_INTENT_INVALID",
+          message: "workflow intent does not match the command schema",
+        },
+        "Workflow command failed",
+      );
+      assert.equal(
+        diagnostic.code,
+        "E_WORKFLOW_INTENT_INVALID",
+        "typed workflow errors must preserve their structured code without string parsing",
+      );
+    }
   });
 }

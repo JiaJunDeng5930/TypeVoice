@@ -7,6 +7,7 @@ use crate::{history, settings};
 use crate::{obs, obs::Span};
 #[cfg(windows)]
 use anyhow::{anyhow, Result};
+use tokio_util::sync::CancellationToken;
 #[cfg(windows)]
 use uuid::Uuid;
 
@@ -138,7 +139,11 @@ impl ContextService {
         &self,
         data_dir: &Path,
         cfg: &ContextConfig,
+        cancellation: &CancellationToken,
     ) -> Result<String> {
+        if cancellation.is_cancelled() {
+            return Err(anyhow!("E_CANCELLED: context capture cancelled"));
+        }
         let max_side = env_u32("TYPEVOICE_CONTEXT_SCREENSHOT_MAX_SIDE", 1600);
         let span = Span::start(
             data_dir,
@@ -154,6 +159,9 @@ impl ContextService {
 
         if !cfg.include_prev_window_screenshot {
             let mut g = self.inner.lock().unwrap();
+            if cancellation.is_cancelled() {
+                return Err(anyhow!("E_CANCELLED: context capture cancelled"));
+            }
             let mut snapshot = ContextSnapshot {
                 recent_history: vec![],
                 clipboard_text: None,
@@ -184,7 +192,7 @@ impl ContextService {
         let mut g = self.inner.lock().unwrap();
         let cap = g
             .win
-            .capture_foreground_window_now_diag_best_effort(max_side);
+            .capture_foreground_window_now_diag_cancellable(max_side, cancellation);
         let cap = match cap.capture {
             Some(v) => v,
             None => {
@@ -220,6 +228,10 @@ impl ContextService {
                 ));
             }
         };
+
+        if cancellation.is_cancelled() {
+            return Err(anyhow!("E_CANCELLED: context capture cancelled"));
+        }
 
         let sha = crate::context_pack::sha256_hex(&cap.screenshot.png_bytes);
         let snapshot = ContextSnapshot {
@@ -275,6 +287,7 @@ impl ContextService {
         &self,
         _data_dir: &Path,
         _cfg: &ContextConfig,
+        _cancellation: &CancellationToken,
     ) -> anyhow::Result<String> {
         Err(anyhow::anyhow!(
             "E_HOTKEY_CAPTURE_UNSUPPORTED: hotkey capture is only supported on Windows"

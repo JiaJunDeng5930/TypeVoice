@@ -323,6 +323,43 @@ pub async fn rewrite_with_context(
     rewrite_glossary: &[String],
     policy: &RewriteContextPolicy,
 ) -> Result<String> {
+    let cfg = load_config(data_dir)?;
+    rewrite_with_context_config(
+        data_dir,
+        task_id,
+        &cfg,
+        RewriteRequest {
+            system_prompt,
+            asr_text,
+            context: ctx,
+            glossary: rewrite_glossary,
+            policy,
+        },
+    )
+    .await
+}
+
+pub struct RewriteRequest<'a> {
+    pub system_prompt: &'a str,
+    pub asr_text: &'a str,
+    pub context: Option<&'a PreparedContext>,
+    pub glossary: &'a [String],
+    pub policy: &'a RewriteContextPolicy,
+}
+
+pub async fn rewrite_with_context_config(
+    data_dir: &std::path::Path,
+    task_id: &str,
+    cfg: &LlmConfig,
+    request: RewriteRequest<'_>,
+) -> Result<String> {
+    let RewriteRequest {
+        system_prompt,
+        asr_text,
+        context: ctx,
+        glossary: rewrite_glossary,
+        policy,
+    } = request;
     let span = Span::start(
         data_dir,
         Some(task_id),
@@ -335,13 +372,6 @@ pub async fn rewrite_with_context(
         })),
     );
 
-    let cfg = match load_config(data_dir) {
-        Ok(c) => c,
-        Err(e) => {
-            span.err_anyhow("config", "E_LLM_CONFIG", &e, None);
-            return Err(e);
-        }
-    };
     let key = match load_api_key() {
         Ok(k) => k,
         Err(e) => {

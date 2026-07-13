@@ -1,4 +1,4 @@
-import type { TaskEvent, UiEvent } from "../types";
+import type { TaskEvent, UiEvent, WorkflowError } from "../types";
 
 export type DiagnosticView = {
   title: string;
@@ -7,7 +7,19 @@ export type DiagnosticView = {
   actionHint: string;
 };
 
+export function workflowErrorFromUnknown(err: unknown): WorkflowError | null {
+  if (!err || typeof err !== "object" || Array.isArray(err)) return null;
+  const record = err as Record<string, unknown>;
+  const keys = Object.keys(record);
+  if (keys.length !== 2 || !keys.includes("code") || !keys.includes("message")) return null;
+  if (typeof record.code !== "string" || typeof record.message !== "string") return null;
+  if (!record.code.trim() || !record.message.trim()) return null;
+  return { code: record.code, message: record.message };
+}
+
 function errorMessage(err: unknown): string {
+  const workflowError = workflowErrorFromUnknown(err);
+  if (workflowError) return `${workflowError.code}: ${workflowError.message}`;
   if (typeof err === "string") return err;
   if (err && typeof err === "object" && "toString" in err) {
     try {
@@ -109,8 +121,9 @@ function userTitleFromFallback(fallback: string): string {
 }
 
 export function buildDiagnostic(err: unknown, fallbackTitle: string): DiagnosticView {
+  const workflowError = workflowErrorFromUnknown(err);
   const raw = errorMessage(err);
-  const code = extractErrorCode(raw) ?? "E_UNKNOWN";
+  const code = workflowError?.code ?? extractErrorCode(raw) ?? "E_UNKNOWN";
   return {
     title: titleForCode(code, fallbackTitle),
     code,

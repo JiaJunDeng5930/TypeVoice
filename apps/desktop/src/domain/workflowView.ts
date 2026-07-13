@@ -1,9 +1,10 @@
 import { userMessageFromDiagnosticLine } from "./diagnostic.ts";
 import type {
+  ActiveRunProjection,
+  LastRunProjection,
   WorkflowCommandDisposition,
   WorkflowCommandReply,
   WorkflowMode,
-  WorkflowRunProjection,
   WorkflowView,
 } from "../types";
 
@@ -75,8 +76,7 @@ export function workflowProjectionRevision(candidate: unknown): number | null {
     const reply = commandReplyFromRecord(candidate);
     return reply ? reply.view.revision : null;
   }
-  const revision = candidate.revision;
-  return isRevision(revision) ? revision : null;
+  return workflowViewFromRecord(candidate)?.revision ?? null;
 }
 
 export function workflowPresentationPhase(view: WorkflowView): WorkflowPresentationPhase {
@@ -111,6 +111,8 @@ export function workflowDisplayText(view: WorkflowView): string {
     valueAt(view.lastRun, "outcome", "completed", "asrText"),
     valueAt(view.lastRun, "outcome", "failed", "recoveredResult", "finalText"),
     valueAt(view.lastRun, "outcome", "failed", "recoveredResult", "asrText"),
+    valueAt(view.lastRun, "outcome", "cancelled", "recoveredResult", "finalText"),
+    valueAt(view.lastRun, "outcome", "cancelled", "recoveredResult", "asrText"),
     valueAt(view.lastRun, "result", "finalText"),
     valueAt(view.lastRun, "result", "asrText"),
   ];
@@ -138,6 +140,16 @@ export function primaryActionLabel(raw: string): string {
 }
 
 function workflowViewFromRecord(raw: Record<string, unknown>): WorkflowView | null {
+  if (!isRecordWithKeys(raw, [
+    "mode",
+    "revision",
+    "actionKey",
+    "activeRun",
+    "lastRun",
+    "primaryLabel",
+    "primaryDisabled",
+    "cancelEnabled",
+  ], [])) return null;
   const mode = workflowMode(raw.mode);
   if (!mode || !isRevision(raw.revision)) return null;
   if (typeof raw.actionKey !== "string" || !raw.actionKey.trim()) return null;
@@ -147,8 +159,8 @@ function workflowViewFromRecord(raw: Record<string, unknown>): WorkflowView | nu
   }
   if (!hasOwn(raw, "activeRun") || !hasOwn(raw, "lastRun")) return null;
 
-  const activeRun = nullableRunProjection(raw.activeRun);
-  const lastRun = nullableRunProjection(raw.lastRun);
+  const activeRun = nullableActiveRunProjection(raw.activeRun);
+  const lastRun = nullableLastRunProjection(raw.lastRun);
   if (!activeRun.valid || !lastRun.valid) return null;
   if (mode === "ready" && activeRun.value !== null) return null;
   if (mode !== "ready" && activeRun.value === null) return null;
@@ -166,6 +178,7 @@ function workflowViewFromRecord(raw: Record<string, unknown>): WorkflowView | nu
 }
 
 function commandReplyFromRecord(raw: Record<string, unknown>): WorkflowCommandReply | null {
+  if (!isRecordWithKeys(raw, ["disposition", "view"], [])) return null;
   const disposition = commandDisposition(raw.disposition);
   if (!disposition || !isRecord(raw.view)) return null;
   const view = workflowViewFromRecord(raw.view);
@@ -187,15 +200,206 @@ function commandDisposition(value: unknown): WorkflowCommandDisposition | null {
     : null;
 }
 
-function nullableRunProjection(value: unknown): {
+function nullableActiveRunProjection(value: unknown): {
   valid: boolean;
-  value: WorkflowRunProjection | null;
+  value: ActiveRunProjection | null;
 } {
   if (value === null) return { valid: true, value: null };
-  if (!isRecord(value)) return { valid: false, value: null };
-  const runId = optionalString(value.runId);
-  if (!runId) return { valid: false, value: null };
-  return { valid: true, value: { ...value, runId } };
+  return isActiveRunProjection(value)
+    ? { valid: true, value }
+    : { valid: false, value: null };
+}
+
+function nullableLastRunProjection(value: unknown): {
+  valid: boolean;
+  value: LastRunProjection | null;
+} {
+  if (value === null) return { valid: true, value: null };
+  return isLastRunProjection(value)
+    ? { valid: true, value }
+    : { valid: false, value: null };
+}
+
+function isActiveRunProjection(value: unknown): value is ActiveRunProjection {
+  if (!isRecordWithKeys(value, ["runId"], ["stage", "result"])) return false;
+  if (!optionalString(value.runId)) return false;
+  if (hasOwn(value, "stage") && !isWorkflowStage(value.stage)) return false;
+  return !hasOwn(value, "result") || isRecoveredRunResult(value.result);
+}
+
+function isLastRunProjection(value: unknown): value is LastRunProjection {
+  if (!isRecordWithKeys(
+    value,
+    ["runId", "outcome", "stoppedCount", "effects", "finalization"],
+    ["cleanupDiagnostic"],
+  )) return false;
+  return Boolean(optionalString(value.runId))
+    && isNonNegativeInteger(value.stoppedCount)
+    && isWorkflowOutcome(value.outcome)
+    && isEffectCounts(value.effects)
+    && isFinalizationAudit(value.finalization)
+    && (!hasOwn(value, "cleanupDiagnostic") || isCleanupDiagnostic(value.cleanupDiagnostic));
+}
+
+function isWorkflowStage(value: unknown): boolean {
+  if (!isRecordWithKeys(value, ["kind", "status"], ["elapsedMs"])) return false;
+  const kinds = [
+    "contextCapture",
+    "recordFinalize",
+    "preprocess",
+    "transcribe",
+    "rewrite",
+    "insertPrepare",
+    "finalize",
+  ];
+  return kinds.includes(String(value.kind))
+    && ["pending", "started", "completed"].includes(String(value.status))
+    && (!hasOwn(value, "elapsedMs") || isNonNegativeNumber(value.elapsedMs));
+}
+
+function isWorkflowOutcome(value: unknown): boolean {
+  if (!isRecord(value) || Object.keys(value).length !== 1) return false;
+  if (hasOwn(value, "completed")) return isCompletedRunResult(value.completed);
+  if (hasOwn(value, "empty")) {
+    return isRecordWithKeys(value.empty, ["timings"], []) && isRunTimings(value.empty.timings);
+  }
+  if (hasOwn(value, "failed")) return isFailedRunResult(value.failed);
+  if (!hasOwn(value, "cancelled")) return false;
+  return isRecordWithKeys(value.cancelled, [], ["recoveredResult"])
+    && (!hasOwn(value.cancelled, "recoveredResult")
+      || isRecoveredRunResult(value.cancelled.recoveredResult));
+}
+
+function isCompletedRunResult(value: unknown): boolean {
+  if (!isRecordWithKeys(
+    value,
+    ["asrText", "finalText", "timings", "insertResult"],
+    ["metrics", "warning"],
+  )) return false;
+  return typeof value.asrText === "string"
+    && typeof value.finalText === "string"
+    && isRunTimings(value.timings)
+    && isInsertResult(value.insertResult)
+    && (!hasOwn(value, "metrics") || isTranscriptionMetrics(value.metrics))
+    && (!hasOwn(value, "warning") || isWorkflowError(value.warning));
+}
+
+function isRecoveredRunResult(value: unknown): boolean {
+  if (!isRecordWithKeys(value, ["asrText", "finalText", "timings"], ["metrics"])) return false;
+  return typeof value.asrText === "string"
+    && typeof value.finalText === "string"
+    && isRunTimings(value.timings)
+    && (!hasOwn(value, "metrics") || isTranscriptionMetrics(value.metrics));
+}
+
+function isFailedRunResult(value: unknown): boolean {
+  if (!isRecordWithKeys(
+    value,
+    ["primaryError", "recoveryErrors", "recordSaved"],
+    ["recoveredResult", "protocolContext"],
+  )) return false;
+  return isWorkflowError(value.primaryError)
+    && Array.isArray(value.recoveryErrors)
+    && value.recoveryErrors.every(isWorkflowError)
+    && typeof value.recordSaved === "boolean"
+    && (!hasOwn(value, "recoveredResult") || isRecoveredRunResult(value.recoveredResult))
+    && (!hasOwn(value, "protocolContext") || isProtocolContext(value.protocolContext));
+}
+
+function isProtocolContext(value: unknown): boolean {
+  if (!isRecordWithKeys(value, ["originalVariant"], ["originalError"])) return false;
+  return Boolean(optionalString(value.originalVariant))
+    && (!hasOwn(value, "originalError") || isWorkflowError(value.originalError));
+}
+
+function isWorkflowError(value: unknown): boolean {
+  return isRecordWithKeys(value, ["code", "message"], [])
+    && Boolean(optionalString(value.code))
+    && typeof value.message === "string";
+}
+
+function isRunTimings(value: unknown): boolean {
+  if (!isRecordWithKeys(
+    value,
+    ["totalMs"],
+    ["recordMs", "preprocessMs", "asrMs", "rewriteMs"],
+  )) return false;
+  return isNonNegativeNumber(value.totalMs)
+    && optionalNonNegativeNumber(value, "recordMs")
+    && optionalNonNegativeNumber(value, "preprocessMs")
+    && optionalNonNegativeNumber(value, "asrMs")
+    && optionalNonNegativeNumber(value, "rewriteMs");
+}
+
+function isTranscriptionMetrics(value: unknown): boolean {
+  if (!isRecordWithKeys(value, ["rtf", "deviceUsed", "preprocessMs", "asrMs"], [])) return false;
+  return isNonNegativeNumber(value.rtf)
+    && typeof value.deviceUsed === "string"
+    && isNonNegativeNumber(value.preprocessMs)
+    && isNonNegativeNumber(value.asrMs);
+}
+
+function isInsertResult(value: unknown): boolean {
+  if (!isRecordWithKeys(
+    value,
+    ["copied", "autoPasteAttempted", "autoPasteOk"],
+    ["errorCode", "errorMessage"],
+  )) return false;
+  return typeof value.copied === "boolean"
+    && typeof value.autoPasteAttempted === "boolean"
+    && typeof value.autoPasteOk === "boolean"
+    && optionalNullableString(value, "errorCode")
+    && optionalNullableString(value, "errorMessage");
+}
+
+function isEffectCounts(value: unknown): boolean {
+  if (!isRecordWithKeys(value, ["historyCommitCount", "copyCount", "pasteCount"], [])) return false;
+  return isNonNegativeInteger(value.historyCommitCount)
+    && isNonNegativeInteger(value.copyCount)
+    && isNonNegativeInteger(value.pasteCount);
+}
+
+function isFinalizationAudit(value: unknown): boolean {
+  return isRecordWithKeys(value, ["commitCount"], []) && isNonNegativeInteger(value.commitCount);
+}
+
+function isCleanupDiagnostic(value: unknown): boolean {
+  if (!isRecordWithKeys(
+    value,
+    ["elapsedMs", "gracefulTimedOut", "forceAttempted", "forceSucceeded"],
+    ["detail"],
+  )) return false;
+  return isNonNegativeNumber(value.elapsedMs)
+    && typeof value.gracefulTimedOut === "boolean"
+    && typeof value.forceAttempted === "boolean"
+    && typeof value.forceSucceeded === "boolean"
+    && optionalNullableString(value, "detail");
+}
+
+function isRecordWithKeys(
+  value: unknown,
+  required: readonly string[],
+  optional: readonly string[],
+): value is Record<string, unknown> {
+  if (!isRecord(value) || required.some((key) => !hasOwn(value, key))) return false;
+  const allowed = new Set([...required, ...optional]);
+  return Object.keys(value).every((key) => allowed.has(key));
+}
+
+function optionalNonNegativeNumber(value: Record<string, unknown>, key: string): boolean {
+  return !hasOwn(value, key) || isNonNegativeNumber(value[key]);
+}
+
+function optionalNullableString(value: Record<string, unknown>, key: string): boolean {
+  return !hasOwn(value, key) || value[key] === null || typeof value[key] === "string";
+}
+
+function isNonNegativeInteger(value: unknown): boolean {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isNonNegativeNumber(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
 function statusLabelFromWorkflow(

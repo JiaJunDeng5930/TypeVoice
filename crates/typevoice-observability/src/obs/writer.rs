@@ -7,7 +7,7 @@ use std::{
         mpsc::{self, Receiver, SyncSender, TrySendError},
         Mutex, OnceLock,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{anyhow, Context, Result};
@@ -52,6 +52,10 @@ struct RecordMsg {
 #[cfg_attr(not(test), allow(dead_code))]
 enum Msg {
     Record(RecordMsg),
+    RecordAndFlush {
+        record: RecordMsg,
+        ack: mpsc::Sender<bool>,
+    },
     Flush(mpsc::Sender<()>),
 }
 
@@ -225,6 +229,17 @@ fn writer_loop(rx: Receiver<Msg>) {
                 }
                 flush_dropped_counts();
             }
+            Ok(Msg::RecordAndFlush { record, ack }) => {
+                let persisted = match append_line(&record.data_dir, record.stream, &record.line) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        crate::safe_eprintln!("obs writer: critical append failed: {e:#}");
+                        false
+                    }
+                };
+                flush_dropped_counts();
+                let _ = ack.send(persisted);
+            }
             Ok(Msg::Flush(ack)) => {
                 flush_dropped_counts();
                 let _ = ack.send(());
@@ -262,21 +277,91 @@ pub fn emit_trace_event(data_dir: &Path, ev: &TraceEvent) -> Result<()> {
     emit_record_line(data_dir, StreamKind::Trace, line)
 }
 
+pub fn emit_trace_event_durable(
+    data_dir: &Path,
+    ev: &TraceEvent,
+    deadline: Instant,
+) -> Result<bool> {
+    let line = serde_json::to_string(ev).context("serialize trace event failed")?;
+    if Instant::now() >= deadline {
+        return Ok(false);
+    }
+    let tx = writer_tx();
+    let (ack_tx, ack_rx) = mpsc::channel();
+    if !send_until(
+        tx,
+        Msg::RecordAndFlush {
+            record: RecordMsg {
+                data_dir: data_dir.to_path_buf(),
+                stream: StreamKind::Trace,
+                line,
+            },
+            ack: ack_tx,
+        },
+        deadline,
+    ) {
+        return Ok(false);
+    }
+    Ok(ack_rx
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .unwrap_or(false))
+}
+
 pub fn emit_metrics_record(data_dir: &Path, rec: &MetricsRecord) -> Result<()> {
     let line = serde_json::to_string(rec).context("serialize metrics record failed")?;
     emit_record_line(data_dir, StreamKind::Metrics, line)
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-pub fn flush(timeout_ms: u64) -> bool {
-    let tx = writer_tx();
+fn send_within(tx: &SyncSender<Msg>, message: Msg, started: Instant, timeout: Duration) -> bool {
+    let mut pending = message;
+    loop {
+        match tx.try_send(pending) {
+            Ok(()) => return true,
+            Err(TrySendError::Disconnected(_)) => return false,
+            Err(TrySendError::Full(message)) => pending = message,
+        }
+        let remaining = timeout.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            return false;
+        }
+        std::thread::sleep(remaining.min(Duration::from_millis(1)));
+    }
+}
+
+fn send_until(tx: &SyncSender<Msg>, message: Msg, deadline: Instant) -> bool {
+    let mut pending = message;
+    loop {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        match tx.try_send(pending) {
+            Ok(()) => return true,
+            Err(TrySendError::Disconnected(_)) => return false,
+            Err(TrySendError::Full(message)) => pending = message,
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        std::thread::sleep(remaining.min(Duration::from_millis(1)));
+    }
+}
+
+fn flush_sender(tx: &SyncSender<Msg>, timeout_ms: u64) -> bool {
+    let started = Instant::now();
+    let timeout = Duration::from_millis(timeout_ms);
     let (ack_tx, ack_rx) = mpsc::channel();
-    if tx.send(Msg::Flush(ack_tx)).is_err() {
+    if !send_within(tx, Msg::Flush(ack_tx), started, timeout) {
         return false;
     }
     ack_rx
-        .recv_timeout(Duration::from_millis(timeout_ms))
+        .recv_timeout(timeout.saturating_sub(started.elapsed()))
         .is_ok()
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn flush(timeout_ms: u64) -> bool {
+    flush_sender(writer_tx(), timeout_ms)
 }
 
 #[cfg(test)]
@@ -328,6 +413,67 @@ mod tests {
         assert!(
             lines <= threads * per_thread,
             "metrics lines should not exceed emitted count"
+        );
+    }
+
+    #[test]
+    fn durable_trace_acknowledges_only_after_append() {
+        let _writer_guard = test_writer_lock().lock().unwrap();
+        let td = tempfile::tempdir().expect("tempdir");
+        let data_dir = td.path().to_path_buf();
+        let event = TraceEvent {
+            ts_ms: now_ms(),
+            task_id: Some("task-durable".to_string()),
+            stage: "Workflow".to_string(),
+            step_id: "workflow.fatal".to_string(),
+            op: "event".to_string(),
+            status: "err".to_string(),
+            duration_ms: None,
+            error: None,
+            ctx: Some(serde_json::json!({"fatal": true})),
+        };
+
+        assert!(
+            emit_trace_event_durable(&data_dir, &event, Instant::now() + Duration::from_secs(2),)
+                .expect("durable emit"),
+            "durable trace must receive an append acknowledgement"
+        );
+        let raw = fs::read_to_string(data_dir.join("trace.jsonl")).expect("read durable trace");
+        assert!(raw.contains("workflow.fatal"));
+    }
+
+    #[test]
+    fn durable_trace_rejects_an_expired_deadline() {
+        let _writer_guard = test_writer_lock().lock().unwrap();
+        let td = tempfile::tempdir().expect("tempdir");
+        let event = TraceEvent {
+            ts_ms: now_ms(),
+            task_id: Some("task-expired".to_string()),
+            stage: "Workflow".to_string(),
+            step_id: "workflow.fatal".to_string(),
+            op: "event".to_string(),
+            status: "err".to_string(),
+            duration_ms: None,
+            error: None,
+            ctx: None,
+        };
+
+        assert!(!emit_trace_event_durable(td.path(), &event, Instant::now())
+            .expect("expired durable emit"));
+        assert!(!td.path().join("trace.jsonl").exists());
+    }
+
+    #[test]
+    fn flush_queue_admission_respects_the_total_deadline() {
+        let (tx, _rx) = mpsc::sync_channel(1);
+        let (occupied_ack, _occupied_rx) = mpsc::channel();
+        assert!(tx.try_send(Msg::Flush(occupied_ack)).is_ok());
+        let started = Instant::now();
+
+        assert!(!flush_sender(&tx, 20));
+        assert!(
+            started.elapsed() < Duration::from_millis(200),
+            "queue admission must not block beyond the bounded flush deadline"
         );
     }
 

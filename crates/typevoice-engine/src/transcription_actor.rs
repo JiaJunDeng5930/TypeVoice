@@ -1,11 +1,12 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::{mpsc, Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use anyhow::{anyhow, Context, Result};
 use futures_util::{SinkExt, StreamExt};
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     data_dir, doubao_asr, obs,
@@ -63,26 +64,62 @@ enum ActorMessage {
     },
     Finish {
         task_id: String,
+        ack: mpsc::Sender<FinishAck>,
     },
     Cancel {
         task_id: String,
     },
+    Shutdown {
+        ack: mpsc::Sender<()>,
+    },
 }
 
 type StartAck = std::result::Result<(), String>;
+type FinishAck = std::result::Result<TranscriptionResult, String>;
+
+pub struct PendingSessionStart {
+    ack: mpsc::Receiver<StartAck>,
+}
+
+impl PendingSessionStart {
+    pub fn wait(self) -> Result<()> {
+        match self.ack.recv() {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(message)) => Err(anyhow!(message)),
+            Err(e) => Err(anyhow!("E_STREAMING_ACTOR_ACK: {e}")),
+        }
+    }
+
+    pub fn wait_timeout(self, timeout: Duration) -> Result<()> {
+        match self.ack.recv_timeout(timeout) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(message)) => Err(anyhow!(message)),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(anyhow!(
+                "E_STREAMING_ACTOR_ACK_TIMEOUT: Start acknowledgement timed out"
+            )),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(anyhow!(
+                "E_STREAMING_ACTOR_ACK: Start acknowledgement channel closed"
+            )),
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct TranscriptionActor {
     tx: mpsc::Sender<ActorMessage>,
     started: Arc<Mutex<HashSet<String>>>,
+    cancel_tokens: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    join: Arc<Mutex<Option<std::thread::JoinHandle<()>>>>,
 }
 
 impl TranscriptionActor {
-    pub fn new(mailbox: UiEventMailbox) -> Self {
+    pub fn new(mailbox: UiEventMailbox) -> Result<Self> {
         let (tx, rx) = mpsc::channel::<ActorMessage>();
         let started = Arc::new(Mutex::new(HashSet::new()));
         let started_for_thread = started.clone();
-        std::thread::Builder::new()
+        let cancel_tokens = Arc::new(Mutex::new(HashMap::new()));
+        let cancel_tokens_for_thread = cancel_tokens.clone();
+        let join = std::thread::Builder::new()
             .name("transcription_actor".to_string())
             .spawn(move || {
                 let mut session: Option<ActorSession> = None;
@@ -97,9 +134,16 @@ impl TranscriptionActor {
                                 let stale_task_id = active.task_id.clone();
                                 active.cancel();
                                 started_for_thread.lock().unwrap().remove(&stale_task_id);
+                                cancel_tokens_for_thread.lock().unwrap().remove(&stale_task_id);
                             }
                             match ActorSession::start(task_id.clone(), config, &mailbox) {
                                 Ok(next) => {
+                                    if let Some(token) = next.cancel_token() {
+                                        cancel_tokens_for_thread
+                                            .lock()
+                                            .unwrap()
+                                            .insert(task_id.clone(), token);
+                                    }
                                     started_for_thread.lock().unwrap().insert(task_id.clone());
                                     session = Some(next);
                                     let _ = ack.send(Ok(()));
@@ -133,28 +177,35 @@ impl TranscriptionActor {
                                 );
                             }
                         }
-                        ActorMessage::Finish { task_id } => {
+                        ActorMessage::Finish { task_id, ack } => {
                             let Some(mut active) = session.take() else {
                                 started_for_thread.lock().unwrap().remove(&task_id);
+                                let _ = ack.send(Err("E_STREAMING_SESSION_MISSING: no active session".to_string()));
                                 continue;
                             };
                             if active.task_id != task_id {
                                 started_for_thread.lock().unwrap().remove(&task_id);
                                 session = Some(active);
+                                let _ = ack.send(Err("E_STREAMING_SESSION_STALE: task id does not match active session".to_string()));
                                 continue;
                             }
                             match active.finish(&mailbox) {
-                                Ok(()) => {
+                                Ok(result) => {
                                     started_for_thread.lock().unwrap().remove(&task_id);
+                                    cancel_tokens_for_thread.lock().unwrap().remove(&task_id);
+                                    let _ = ack.send(Ok(result));
                                 }
                                 Err(e) => {
                                     started_for_thread.lock().unwrap().remove(&task_id);
+                                    cancel_tokens_for_thread.lock().unwrap().remove(&task_id);
+                                    let message = e.to_string();
                                     send_failed(
                                         &mailbox,
                                         &task_id,
                                         "E_STREAMING_TRANSCRIBE_FINISH",
-                                        e.to_string(),
+                                        message.clone(),
                                     );
+                                    let _ = ack.send(Err(message));
                                 }
                             }
                         }
@@ -168,18 +219,33 @@ impl TranscriptionActor {
                                         UiEventStatus::Cancelled,
                                         "cancelled",
                                     ));
-                                    mailbox.send(UiEvent::state_cancelled(&task_id, "Transcribe"));
                                 } else {
                                     session = Some(active);
                                 }
                             }
                             started_for_thread.lock().unwrap().remove(&task_id);
+                            cancel_tokens_for_thread.lock().unwrap().remove(&task_id);
+                        }
+                        ActorMessage::Shutdown { ack } => {
+                            if let Some(mut active) = session.take() {
+                                let task_id = active.task_id.clone();
+                                active.cancel();
+                                started_for_thread.lock().unwrap().remove(&task_id);
+                                cancel_tokens_for_thread.lock().unwrap().remove(&task_id);
+                            }
+                            let _ = ack.send(());
+                            break;
                         }
                     }
                 }
             })
-            .expect("failed to start transcription actor");
-        Self { tx, started }
+            .map_err(|error| anyhow!("E_STREAMING_ACTOR_SPAWN: {error}"))?;
+        Ok(Self {
+            tx,
+            started,
+            cancel_tokens,
+            join: Arc::new(Mutex::new(Some(join))),
+        })
     }
 
     pub fn session_config_for_current_settings(&self) -> Result<StreamingSessionConfig> {
@@ -198,6 +264,14 @@ impl TranscriptionActor {
     }
 
     pub fn start_session(&self, task_id: &str, config: StreamingSessionConfig) -> Result<()> {
+        self.start_session_pending(task_id, config)?.wait()
+    }
+
+    pub fn start_session_pending(
+        &self,
+        task_id: &str,
+        config: StreamingSessionConfig,
+    ) -> Result<PendingSessionStart> {
         let (ack_tx, ack_rx) = mpsc::channel::<StartAck>();
         self.tx
             .send(ActorMessage::Start {
@@ -206,11 +280,7 @@ impl TranscriptionActor {
                 ack: ack_tx,
             })
             .map_err(|e| anyhow!("E_STREAMING_ACTOR_SEND: {e}"))?;
-        match ack_rx.recv() {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(message)) => Err(anyhow!(message)),
-            Err(e) => Err(anyhow!("E_STREAMING_ACTOR_ACK: {e}")),
-        }
+        Ok(PendingSessionStart { ack: ack_rx })
     }
 
     pub fn send_audio_chunk(
@@ -230,15 +300,28 @@ impl TranscriptionActor {
             .map_err(|e| anyhow!("E_STREAMING_ACTOR_SEND: {e}"))
     }
 
-    pub fn finish_session(&self, task_id: &str) -> Result<()> {
+    pub fn finish_session(&self, task_id: &str) -> Result<TranscriptionResult> {
+        let (ack_tx, ack_rx) = mpsc::channel::<FinishAck>();
         self.tx
             .send(ActorMessage::Finish {
                 task_id: task_id.to_string(),
+                ack: ack_tx,
             })
-            .map_err(|e| anyhow!("E_STREAMING_ACTOR_SEND: {e}"))
+            .map_err(|e| anyhow!("E_STREAMING_ACTOR_SEND: {e}"))?;
+        match ack_rx.recv() {
+            Ok(Ok(result)) => Ok(result),
+            Ok(Err(message)) => Err(anyhow!(message)),
+            Err(e) => Err(anyhow!("E_STREAMING_ACTOR_ACK: {e}")),
+        }
     }
 
     pub fn cancel_session(&self, task_id: &str) -> Result<()> {
+        if self.join.lock().unwrap().is_none() {
+            return Ok(());
+        }
+        if let Some(token) = self.cancel_tokens.lock().unwrap().get(task_id).cloned() {
+            token.cancel();
+        }
         self.tx
             .send(ActorMessage::Cancel {
                 task_id: task_id.to_string(),
@@ -248,6 +331,41 @@ impl TranscriptionActor {
 
     pub fn is_session_started(&self, task_id: &str) -> bool {
         self.started.lock().unwrap().contains(task_id)
+    }
+
+    pub fn shutdown(&self) -> Result<()> {
+        if self.join.lock().unwrap().is_none() {
+            return Ok(());
+        }
+        for token in self.cancel_tokens.lock().unwrap().values() {
+            token.cancel();
+        }
+        let (ack_tx, ack_rx) = mpsc::channel();
+        let _ = self.tx.send(ActorMessage::Shutdown { ack: ack_tx });
+        let _ = ack_rx.recv_timeout(Duration::from_millis(50));
+
+        for _ in 0..10 {
+            let finished = self
+                .join
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_none_or(std::thread::JoinHandle::is_finished);
+            if finished {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let mut join = self.join.lock().unwrap();
+        if join.as_ref().is_some_and(|handle| !handle.is_finished()) {
+            return Err(anyhow!(
+                "E_STREAMING_ACTOR_SHUTDOWN_TIMEOUT: actor thread is still running"
+            ));
+        }
+        if let Some(handle) = join.take() {
+            let _ = handle.join();
+        }
+        Ok(())
     }
 }
 
@@ -305,22 +423,10 @@ impl ActorSession {
         }
     }
 
-    fn finish(&mut self, mailbox: &UiEventMailbox) -> Result<()> {
+    fn finish(&mut self, mailbox: &UiEventMailbox) -> Result<TranscriptionResult> {
         if let Some(doubao) = self.doubao.take() {
             let text = doubao.finish()?;
             self.text = text;
-        }
-        if self.text.trim().is_empty() {
-            mailbox.send(UiEvent::stage_with_elapsed(
-                &self.task_id,
-                "Transcribe",
-                UiEventStatus::Completed,
-                "empty",
-                Some(self.started_at.elapsed().as_millis()),
-                None,
-            ));
-            mailbox.send(UiEvent::transcription_empty(&self.task_id));
-            return Ok(());
         }
         let elapsed = self.started_at.elapsed().as_millis();
         let result = TranscriptionResult::new(
@@ -333,6 +439,17 @@ impl ActorSession {
                 asr_ms: elapsed,
             },
         );
+        if result.asr_text.is_empty() {
+            mailbox.send(UiEvent::stage_with_elapsed(
+                &self.task_id,
+                "Transcribe",
+                UiEventStatus::Completed,
+                "empty",
+                Some(elapsed),
+                None,
+            ));
+            return Ok(result);
+        }
         mailbox.send(UiEvent::stage_with_elapsed(
             &self.task_id,
             "Transcribe",
@@ -341,13 +458,7 @@ impl ActorSession {
             Some(elapsed),
             None,
         ));
-        mailbox.send(UiEvent::completed(
-            &self.task_id,
-            "transcription.completed",
-            "transcription completed",
-            serde_json::to_value(&result).unwrap_or_default(),
-        ));
-        Ok(())
+        Ok(result)
     }
 
     fn cancel(&mut self) {
@@ -355,10 +466,15 @@ impl ActorSession {
             doubao.cancel();
         }
     }
+
+    fn cancel_token(&self) -> Option<CancellationToken> {
+        self.doubao.as_ref().map(|handle| handle.cancel.clone())
+    }
 }
 
 struct DoubaoSessionHandle {
     tx: tokio::sync::mpsc::UnboundedSender<DoubaoCommand>,
+    cancel: CancellationToken,
     join: Option<std::thread::JoinHandle<Result<String>>>,
 }
 
@@ -383,19 +499,21 @@ enum DoubaoCommand {
         is_last: bool,
     },
     Finish,
-    Cancel,
 }
 
 impl DoubaoSessionHandle {
     fn start(task_id: String, mailbox: UiEventMailbox) -> Result<Self> {
         let creds = doubao_asr::load_credentials()?;
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let cancel = CancellationToken::new();
+        let thread_cancel = cancel.clone();
         let join = std::thread::Builder::new()
             .name("doubao_asr_session".to_string())
-            .spawn(move || run_doubao_session(task_id, mailbox, creds, rx))
+            .spawn(move || run_doubao_session(task_id, mailbox, creds, rx, thread_cancel))
             .map_err(|e| anyhow!("spawn doubao session failed: {e}"))?;
         Ok(Self {
             tx,
+            cancel,
             join: Some(join),
         })
     }
@@ -421,7 +539,16 @@ impl DoubaoSessionHandle {
     }
 
     fn cancel(mut self) {
-        let _ = self.tx.send(DoubaoCommand::Cancel);
+        self.cancel.cancel();
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
+}
+
+impl Drop for DoubaoSessionHandle {
+    fn drop(&mut self) {
+        self.cancel.cancel();
         if let Some(join) = self.join.take() {
             let _ = join.join();
         }
@@ -433,6 +560,7 @@ fn run_doubao_session(
     mailbox: UiEventMailbox,
     creds: doubao_asr::DoubaoCredentials,
     mut rx: tokio::sync::mpsc::UnboundedReceiver<DoubaoCommand>,
+    cancel: CancellationToken,
 ) -> Result<String> {
     let task_id_for_trace = task_id.clone();
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -442,21 +570,27 @@ fn run_doubao_session(
     let result = rt.block_on(async move {
         let req = doubao_asr::build_websocket_request(&creds)?;
 
-        let (ws, resp) = tokio_tungstenite::connect_async(req)
-            .await
-            .context("connect doubao websocket failed")?;
+        let connect = tokio_tungstenite::connect_async(req);
+        tokio::pin!(connect);
+        let (ws, resp) = tokio::select! {
+            _ = cancel.cancelled() => return Err(anyhow!("cancelled")),
+            result = &mut connect => result.context("connect doubao websocket failed")?,
+        };
         let logid = resp
             .headers()
             .get("X-Tt-Logid")
             .and_then(|v| v.to_str().ok())
             .map(ToOwned::to_owned);
         let (mut write, mut read) = ws.split();
-        write
-            .send(tokio_tungstenite::tungstenite::Message::Binary(
+        let init_frame = tokio_tungstenite::tungstenite::Message::Binary(
                 doubao_asr::build_full_client_request_frame()?,
-            ))
-            .await
-            .context("send doubao init frame failed")?;
+            );
+        tokio::select! {
+            _ = cancel.cancelled() => return Err(anyhow!("cancelled")),
+            result = write.send(init_frame) => {
+                result.context("send doubao init frame failed")?;
+            }
+        }
 
         let mut final_text = String::new();
         let mut finishing = false;
@@ -464,6 +598,9 @@ fn run_doubao_session(
         let mut stats = DoubaoSessionStats::default();
         loop {
             tokio::select! {
+                _ = cancel.cancelled() => {
+                    return Err(anyhow!("cancelled"));
+                }
                 _ = async {
                     if let Some(deadline) = finish_deadline {
                         tokio::time::sleep_until(deadline).await;
@@ -479,12 +616,15 @@ fn run_doubao_session(
                     match cmd? {
                         DoubaoCommand::Chunk { sequence, pcm, is_last } => {
                             if should_send_doubao_audio_frame(&pcm, is_last) {
-                                write
-                                    .send(tokio_tungstenite::tungstenite::Message::Binary(
-                                        doubao_asr::build_audio_frame(sequence, &pcm, is_last)?,
-                                    ))
-                                    .await
-                                    .context("send doubao audio frame failed")?;
+                                let frame = tokio_tungstenite::tungstenite::Message::Binary(
+                                    doubao_asr::build_audio_frame(sequence, &pcm, is_last)?,
+                                );
+                                tokio::select! {
+                                    _ = cancel.cancelled() => return Err(anyhow!("cancelled")),
+                                    result = write.send(frame) => {
+                                        result.context("send doubao audio frame failed")?;
+                                    }
+                                }
                                 stats.sent_frames += 1;
                                 stats.sent_audio_bytes += pcm.len();
                                 if pcm.is_empty() {
@@ -501,7 +641,10 @@ fn run_doubao_session(
                             }
                             if is_last {
                                 stats.last_frame_marked = true;
-                                write.flush().await.ok();
+                                tokio::select! {
+                                    _ = cancel.cancelled() => return Err(anyhow!("cancelled")),
+                                    _ = write.flush() => {}
+                                }
                                 finishing = true;
                                 finish_deadline = Some(
                                     tokio::time::Instant::now()
@@ -517,11 +660,10 @@ fn run_doubao_session(
                                         + std::time::Duration::from_secs(DOUBAO_FINISH_TIMEOUT_SECS),
                                 );
                             }
-                            write.flush().await.ok();
-                        }
-                        DoubaoCommand::Cancel => {
-                            write.close().await.ok();
-                            return Err(anyhow!("cancelled"));
+                            tokio::select! {
+                                _ = cancel.cancelled() => return Err(anyhow!("cancelled")),
+                                _ = write.flush() => {}
+                            }
                         }
                     }
                 }
@@ -713,7 +855,6 @@ fn send_failed(mailbox: &UiEventMailbox, task_id: &str, code: &str, message: imp
         None,
         Some(code.to_string()),
     ));
-    mailbox.send(UiEvent::state_failed(task_id, "Transcribe", code, message));
 }
 
 #[cfg(test)]
@@ -755,7 +896,7 @@ mod tests {
     #[test]
     fn second_start_replaces_existing_streaming_session() {
         let (mailbox, rx) = UiEventMailbox::for_test();
-        let actor = TranscriptionActor::new(mailbox);
+        let actor = TranscriptionActor::new(mailbox).expect("actor");
 
         actor
             .start_session("task-1", remote_streaming_config())
@@ -770,7 +911,10 @@ mod tests {
         actor
             .send_audio_chunk("task-1", 1, vec![0, 0], false)
             .expect("old chunk sends");
-        actor.finish_session("task-1").expect("old finish sends");
+        let error = actor
+            .finish_session("task-1")
+            .expect_err("old finish must be rejected as stale");
+        assert!(error.to_string().contains("E_STREAMING_SESSION_STALE"));
         std::thread::sleep(Duration::from_millis(50));
 
         assert!(actor.is_session_started("task-2"));
@@ -780,7 +924,7 @@ mod tests {
     #[test]
     fn start_session_returns_after_actor_marks_session_started() {
         let (mailbox, _rx) = UiEventMailbox::for_test();
-        let actor = TranscriptionActor::new(mailbox);
+        let actor = TranscriptionActor::new(mailbox).expect("actor");
 
         actor
             .start_session("task-1", remote_streaming_config())
@@ -790,20 +934,40 @@ mod tests {
     }
 
     #[test]
+    fn cancellation_is_idempotent_after_actor_shutdown() {
+        let (mailbox, _rx) = UiEventMailbox::for_test();
+        let actor = TranscriptionActor::new(mailbox).expect("actor");
+        actor
+            .start_session("task-1", remote_streaming_config())
+            .expect("start succeeds");
+
+        actor.cancel_session("task-1").expect("cancel succeeds");
+        actor.shutdown().expect("shutdown succeeds");
+
+        actor
+            .cancel_session("task-1")
+            .expect("repeated cancel is a no-op");
+        actor.shutdown().expect("repeated shutdown is a no-op");
+    }
+
+    #[test]
     fn missing_streaming_session_finish_is_stale() {
         let (mailbox, rx) = UiEventMailbox::for_test();
-        let actor = TranscriptionActor::new(mailbox);
+        let actor = TranscriptionActor::new(mailbox).expect("actor");
 
-        actor.finish_session("task-1").expect("finish sends");
+        let error = actor
+            .finish_session("task-1")
+            .expect_err("missing finish must be rejected");
+        assert!(error.to_string().contains("E_STREAMING_SESSION_MISSING"));
         std::thread::sleep(Duration::from_millis(50));
 
         assert_no_failed_events(&rx);
     }
 
     #[test]
-    fn empty_streaming_finish_sends_empty_event_without_failure() {
+    fn empty_streaming_finish_sends_stage_completion_without_failure() {
         let (mailbox, rx) = UiEventMailbox::for_test();
-        let actor = TranscriptionActor::new(mailbox);
+        let actor = TranscriptionActor::new(mailbox).expect("actor");
 
         actor
             .start_session("task-1", remote_streaming_config())
@@ -815,8 +979,10 @@ mod tests {
         assert!(
             events
                 .iter()
-                .any(|event| event.kind == "transcription.empty"),
-            "expected empty transcription event: {events:?}"
+                .any(|event| event.kind == "transcription.stage"
+                    && event.status.as_deref() == Some("completed")
+                    && event.message == "empty"),
+            "expected empty stage completion: {events:?}"
         );
         assert!(
             events

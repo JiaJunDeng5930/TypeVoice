@@ -4,8 +4,7 @@ use std::sync::{
 };
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
-use typevoice_platform::overlay_layout;
+use tauri::{AppHandle, Emitter};
 
 pub const UI_EVENT_CHANNEL: &str = "ui_event";
 
@@ -34,8 +33,6 @@ impl UiEventStatus {
 #[serde(rename_all = "camelCase")]
 pub struct UiEvent {
     pub kind: String,
-    pub effect: String,
-    pub event_id: String,
     pub sequence: u64,
     pub task_id: Option<String>,
     pub stage: Option<String>,
@@ -45,14 +42,6 @@ pub struct UiEvent {
     pub error_code: Option<String>,
     pub payload: Option<serde_json::Value>,
     pub ts_ms: i64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct OverlayState {
-    visible: bool,
-    status: String,
-    detail: Option<String>,
-    ts_ms: i64,
 }
 
 impl UiEvent {
@@ -75,8 +64,6 @@ impl UiEvent {
     ) -> Self {
         Self {
             kind: "transcription.stage".to_string(),
-            effect: "displayOnly".to_string(),
-            event_id: new_event_id(),
             sequence: next_sequence(),
             task_id: Some(task_id.into()),
             stage: Some(stage.into()),
@@ -96,8 +83,6 @@ impl UiEvent {
     ) -> Self {
         Self {
             kind: "diagnostic.error".to_string(),
-            effect: "displayOnly".to_string(),
-            event_id: new_event_id(),
             sequence: next_sequence(),
             task_id: Some(task_id.into()),
             stage: None,
@@ -110,61 +95,9 @@ impl UiEvent {
         }
     }
 
-    pub fn completed(
-        task_id: impl Into<String>,
-        kind: impl Into<String>,
-        message: impl Into<String>,
-        payload: serde_json::Value,
-    ) -> Self {
-        Self::completed_with_effect(task_id, kind, message, payload, "displayOnly")
-    }
-
-    pub fn transcription_empty(task_id: impl Into<String>) -> Self {
-        Self::completed(
-            task_id,
-            "transcription.empty",
-            "no speech detected",
-            serde_json::json!({}),
-        )
-    }
-
-    pub fn state_completed(
-        task_id: impl Into<String>,
-        kind: impl Into<String>,
-        message: impl Into<String>,
-        payload: serde_json::Value,
-    ) -> Self {
-        Self::completed_with_effect(task_id, kind, message, payload, "displayOnly")
-    }
-
-    fn completed_with_effect(
-        task_id: impl Into<String>,
-        kind: impl Into<String>,
-        message: impl Into<String>,
-        payload: serde_json::Value,
-        effect: impl Into<String>,
-    ) -> Self {
-        Self {
-            kind: kind.into(),
-            effect: effect.into(),
-            event_id: new_event_id(),
-            sequence: next_sequence(),
-            task_id: Some(task_id.into()),
-            stage: None,
-            status: Some("completed".to_string()),
-            message: message.into(),
-            elapsed_ms: None,
-            error_code: None,
-            payload: Some(payload),
-            ts_ms: now_ms(),
-        }
-    }
-
     pub fn workflow_state(payload: impl Serialize) -> Self {
         Self {
             kind: "workflow.state".to_string(),
-            effect: "displayOnly".to_string(),
-            event_id: new_event_id(),
             sequence: next_sequence(),
             task_id: None,
             stage: Some("Workflow".to_string()),
@@ -177,13 +110,16 @@ impl UiEvent {
         }
     }
 
-    pub fn audio_level(recording_id: impl Into<String>, rms: f64, peak: f64) -> Self {
+    pub fn audio_level(
+        task_id: impl Into<String>,
+        recording_id: impl Into<String>,
+        rms: f64,
+        peak: f64,
+    ) -> Self {
         Self {
             kind: "audio.level".to_string(),
-            effect: "displayOnly".to_string(),
-            event_id: new_event_id(),
             sequence: next_sequence(),
-            task_id: None,
+            task_id: Some(task_id.into()),
             stage: Some("Record".to_string()),
             status: Some("recording".to_string()),
             message: "audio level".to_string(),
@@ -206,8 +142,6 @@ impl UiEvent {
     ) -> Self {
         Self {
             kind: "transcription.partial".to_string(),
-            effect: "displayOnly".to_string(),
-            event_id: new_event_id(),
             sequence: next_sequence(),
             task_id: Some(task_id.into()),
             stage: Some("Transcribe".to_string()),
@@ -220,45 +154,6 @@ impl UiEvent {
                 "text": text.into(),
                 "sequence": sequence,
             })),
-            ts_ms: now_ms(),
-        }
-    }
-
-    pub fn state_failed(
-        task_id: impl Into<String>,
-        stage: impl Into<String>,
-        code: impl Into<String>,
-        message: impl Into<String>,
-    ) -> Self {
-        Self {
-            kind: "workflow.task.failed".to_string(),
-            effect: "displayOnly".to_string(),
-            event_id: new_event_id(),
-            sequence: next_sequence(),
-            task_id: Some(task_id.into()),
-            stage: Some(stage.into()),
-            status: Some("failed".to_string()),
-            message: message.into(),
-            elapsed_ms: None,
-            error_code: Some(code.into()),
-            payload: None,
-            ts_ms: now_ms(),
-        }
-    }
-
-    pub fn state_cancelled(task_id: impl Into<String>, stage: impl Into<String>) -> Self {
-        Self {
-            kind: "workflow.task.cancelled".to_string(),
-            effect: "displayOnly".to_string(),
-            event_id: new_event_id(),
-            sequence: next_sequence(),
-            task_id: Some(task_id.into()),
-            stage: Some(stage.into()),
-            status: Some("cancelled".to_string()),
-            message: "cancelled".to_string(),
-            elapsed_ms: None,
-            error_code: None,
-            payload: None,
             ts_ms: now_ms(),
         }
     }
@@ -276,11 +171,7 @@ impl UiEventMailbox {
             .name("ui_event_actor".to_string())
             .spawn(move || {
                 while let Ok(event) = rx.recv() {
-                    let overlay = overlay_state_from_event(&event);
                     let _ = app.emit(UI_EVENT_CHANNEL, event);
-                    if let Some(state) = overlay {
-                        apply_overlay_state(&app, state);
-                    }
                 }
             })
             .expect("failed to start ui event actor");
@@ -298,76 +189,11 @@ impl UiEventMailbox {
     }
 }
 
-fn overlay_state_from_event(event: &UiEvent) -> Option<OverlayState> {
-    if event.kind != "workflow.state" {
-        return None;
-    }
-    if !overlay_enabled() {
-        return Some(OverlayState {
-            visible: false,
-            status: "Ready".to_string(),
-            detail: None,
-            ts_ms: now_ms(),
-        });
-    }
-    let payload = event.payload.as_ref()?.as_object()?;
-    let phase = payload
-        .get("phase")
-        .and_then(|v| v.as_str())
-        .unwrap_or("idle");
-    let diagnostic_code = payload
-        .get("diagnosticCode")
-        .and_then(|v| v.as_str())
-        .filter(|v| !v.trim().is_empty())
-        .map(ToOwned::to_owned);
-    let (visible, status, detail) = match phase {
-        "recording" => (true, "Listening".to_string(), None),
-        "transcribing" => (true, "Creating text".to_string(), None),
-        "transcribed" => (true, "Text ready".to_string(), None),
-        "rewriting" => (true, "Improving text".to_string(), None),
-        "rewritten" => (true, "Text improved".to_string(), None),
-        "inserting" => (true, "Pasting text".to_string(), None),
-        _ => (false, "Ready".to_string(), diagnostic_code),
-    };
-    Some(OverlayState {
-        visible,
-        status,
-        detail,
-        ts_ms: now_ms(),
-    })
-}
-
-fn overlay_enabled() -> bool {
-    let Ok(dir) = crate::data_dir::data_dir() else {
-        return false;
-    };
-    let Ok(s) = crate::settings::load_settings_strict(&dir) else {
-        return false;
-    };
-    s.hotkeys_show_overlay.unwrap_or(false)
-}
-
-fn apply_overlay_state(app: &AppHandle, state: OverlayState) {
-    if let Some(w) = app.get_webview_window("overlay") {
-        if state.visible {
-            let _ = overlay_layout::apply_overlay_layout(&w);
-            let _ = w.show();
-        } else {
-            let _ = w.hide();
-        }
-    }
-    let _ = app.emit("tv_overlay_state", state);
-}
-
 fn now_ms() -> i64 {
     match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
         Ok(dur) => dur.as_millis() as i64,
         Err(_) => 0,
     }
-}
-
-fn new_event_id() -> String {
-    uuid::Uuid::new_v4().to_string()
 }
 
 fn next_sequence() -> u64 {

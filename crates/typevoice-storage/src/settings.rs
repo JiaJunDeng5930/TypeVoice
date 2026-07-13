@@ -1,12 +1,15 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    sync::{LazyLock, Mutex},
 };
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::obs::Span;
+
+static SETTINGS_IO: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 pub const DEFAULT_ASR_PROVIDER: &str = "doubao";
 pub const DEFAULT_REMOTE_ASR_URL: &str = "https://api.server/transcribe";
@@ -285,6 +288,11 @@ pub fn settings_path(data_dir: &Path) -> PathBuf {
 }
 
 pub fn load_settings(data_dir: &Path) -> Result<Settings> {
+    let _guard = SETTINGS_IO.lock().unwrap();
+    load_settings_unlocked(data_dir)
+}
+
+fn load_settings_unlocked(data_dir: &Path) -> Result<Settings> {
     let p = settings_path(data_dir);
     if !p.exists() {
         return Ok(Settings::default());
@@ -295,6 +303,11 @@ pub fn load_settings(data_dir: &Path) -> Result<Settings> {
 }
 
 pub fn load_settings_strict(data_dir: &Path) -> Result<Settings> {
+    let _guard = SETTINGS_IO.lock().unwrap();
+    load_settings_strict_unlocked(data_dir)
+}
+
+fn load_settings_strict_unlocked(data_dir: &Path) -> Result<Settings> {
     let p = settings_path(data_dir);
     if !p.exists() {
         return Err(anyhow!(
@@ -372,6 +385,38 @@ pub fn resolve_record_input_spec(s: &Settings) -> String {
 }
 
 pub fn save_settings(data_dir: &Path, settings: &Settings) -> Result<()> {
+    let _guard = SETTINGS_IO.lock().unwrap();
+    let mut next = settings.clone();
+    if let Ok(current) = load_settings_strict_unlocked(data_dir) {
+        copy_last_working(&current, &mut next);
+    }
+    save_settings_unlocked(data_dir, &next)
+}
+
+pub fn update_record_last_working(
+    data_dir: &Path,
+    endpoint_id: Option<String>,
+    friendly_name: Option<String>,
+    dshow_spec: String,
+    timestamp_ms: i64,
+) -> Result<()> {
+    let _guard = SETTINGS_IO.lock().unwrap();
+    let mut settings = load_settings_strict_unlocked(data_dir)?;
+    settings.record_last_working_endpoint_id = endpoint_id;
+    settings.record_last_working_friendly_name = friendly_name;
+    settings.record_last_working_dshow_spec = Some(dshow_spec);
+    settings.record_last_working_ts_ms = Some(timestamp_ms);
+    save_settings_unlocked(data_dir, &settings)
+}
+
+fn copy_last_working(source: &Settings, target: &mut Settings) {
+    target.record_last_working_endpoint_id = source.record_last_working_endpoint_id.clone();
+    target.record_last_working_friendly_name = source.record_last_working_friendly_name.clone();
+    target.record_last_working_dshow_spec = source.record_last_working_dshow_spec.clone();
+    target.record_last_working_ts_ms = source.record_last_working_ts_ms;
+}
+
+fn save_settings_unlocked(data_dir: &Path, settings: &Settings) -> Result<()> {
     let span = Span::start(data_dir, None, "Settings", "SETTINGS.save", None);
     std::fs::create_dir_all(data_dir).context("create data dir failed")?;
     let p = settings_path(data_dir);
@@ -526,9 +571,43 @@ mod tests {
     use super::{
         apply_patch, normalize_hotkey_primary, resolve_asr_provider, resolve_hotkey_config,
         resolve_overlay_config, resolve_overlay_position, resolve_remote_asr_concurrency,
-        resolve_remote_asr_model, resolve_remote_asr_url, OverlayWorkArea, Settings, SettingsPatch,
+        resolve_remote_asr_model, resolve_remote_asr_url, save_settings,
+        update_record_last_working, OverlayWorkArea, Settings, SettingsPatch,
         DEFAULT_REMOTE_ASR_URL,
     };
+
+    #[test]
+    fn user_settings_save_preserves_runtime_recording_cache() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let initial = Settings {
+            asr_provider: Some("doubao".to_string()),
+            ..Default::default()
+        };
+        save_settings(dir.path(), &initial).expect("initial settings");
+        update_record_last_working(
+            dir.path(),
+            Some("endpoint-new".to_string()),
+            Some("Microphone".to_string()),
+            "audio=Microphone".to_string(),
+            42,
+        )
+        .expect("runtime cache update");
+
+        let stale_user_snapshot = Settings {
+            asr_provider: Some("remote".to_string()),
+            ..initial
+        };
+        save_settings(dir.path(), &stale_user_snapshot).expect("user settings save");
+        let saved = super::load_settings_strict(dir.path()).expect("saved settings");
+
+        assert_eq!(saved.asr_provider.as_deref(), Some("remote"));
+        assert_eq!(
+            saved.record_last_working_endpoint_id.as_deref(),
+            Some("endpoint-new")
+        );
+        assert_eq!(saved.record_last_working_ts_ms, Some(42));
+        assert!(crate::obs::flush(2_000), "settings trace flush timeout");
+    }
 
     #[test]
     fn apply_patch_is_partial_and_can_clear() {

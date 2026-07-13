@@ -3,33 +3,23 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   appendTranscript,
-  textFromRewriteCompleted,
-  textFromTranscriptionCompleted,
   textFromTranscriptionPartial,
 } from "./domain/overlaySession";
 import {
   EMPTY_WORKFLOW_VIEW,
-  isWorkflowCommandReply,
   overlayViewFromWorkflow,
   shouldAcceptWorkflowProjection,
   workflowDisplayText,
   workflowProjectionFromPayload,
   workflowProjectionRevision,
-  workflowViewFromPayload,
 } from "./domain/workflowView";
 import { defaultTauriGateway } from "./infra/runtimePorts";
 import type {
   OverlayConfig,
   Settings,
   UiEvent,
-  WorkflowCommandReply,
   WorkflowView,
 } from "./types";
-
-type GlobalHotkeyEvent = {
-  action: "primary";
-  tsMs?: number;
-};
 
 const DEFAULT_OVERLAY_CONFIG: OverlayConfig = {
   background_opacity: 0.78,
@@ -44,7 +34,6 @@ export default function OverlayApp() {
   const [workflow, setWorkflow] = useState<WorkflowView>(EMPTY_WORKFLOW_VIEW);
   const workflowRef = useRef<WorkflowView>(EMPTY_WORKFLOW_VIEW);
   const latestWorkflowRevisionRef = useRef<number | null>(null);
-  const lastDispositionRef = useRef<WorkflowCommandReply["disposition"] | null>(null);
   const [draftText, setDraftText] = useState("");
   const [liveText, setLiveText] = useState("");
   const [config, setConfig] = useState<OverlayConfig>(DEFAULT_OVERLAY_CONFIG);
@@ -105,11 +94,6 @@ export default function OverlayApp() {
     const next = workflowProjectionFromPayload(payload);
     if (!next) throw new Error("workflow_snapshot returned a malformed projection");
     acceptWorkflowView(next);
-  }, [acceptWorkflowView]);
-
-  const processCommandReply = useCallback((reply: WorkflowCommandReply) => {
-    lastDispositionRef.current = reply.disposition;
-    acceptWorkflowView(reply.view);
   }, [acceptWorkflowView]);
 
   useEffect(() => {
@@ -178,24 +162,6 @@ export default function OverlayApp() {
     };
   }, [overlayView.detail, overlayView.status, overlayView.visible]);
 
-  const runPrimaryFromAlt = useCallback(async () => {
-    if (latestWorkflowRevisionRef.current === null) return;
-    const current = workflowRef.current;
-    if (current.mode === "ready") setLiveText("");
-    try {
-      const payload = await defaultTauriGateway.invoke<unknown>("workflow_command", {
-        req: { command: "primary", actionKey: current.actionKey },
-      });
-      const parsed = workflowViewFromPayload(payload);
-      if (!parsed || !isWorkflowCommandReply(parsed)) {
-        throw new Error("workflow_command returned a malformed reply");
-      }
-      processCommandReply(parsed);
-    } catch {
-      await refreshWorkflowSnapshot();
-    }
-  }, [processCommandReply, refreshWorkflowSnapshot]);
-
   useEffect(() => {
     let cancelled = false;
     const unlistenFns: Array<() => void> = [];
@@ -226,41 +192,11 @@ export default function OverlayApp() {
 
         if (!eventBelongsToCurrentProjection(event, workflowRef.current)) return;
 
-        if (event.kind === "transcription.completed") {
-          const result = textFromTranscriptionCompleted(event);
-          if (result.asrText.trim()) {
-            setDraftText((previous) => appendTranscript(previous, result.asrText));
-          }
-          setLiveText("");
-          return;
-        }
-
-        if (event.kind === "transcription.empty") {
-          setLiveText("");
-          return;
-        }
-
-        if (event.kind === "rewrite.completed") {
-          const result = textFromRewriteCompleted(event);
-          if (result.finalText.trim()) setDraftText(result.finalText);
-          setLiveText("");
-          return;
-        }
-
         if (event.status === "failed" || event.status === "cancelled") {
           setLiveText("");
         }
       });
       if (!track(stopUiEvents)) return;
-
-      const stopHotkey = await defaultTauriGateway.listen<GlobalHotkeyEvent>(
-        "tv_global_hotkey",
-        (event) => {
-          if (!event || event.action !== "primary") return;
-          void runPrimaryFromAlt();
-        },
-      );
-      if (!track(stopHotkey)) return;
 
       await refreshWorkflowSnapshot();
     })();
@@ -269,7 +205,7 @@ export default function OverlayApp() {
       cancelled = true;
       for (const fn of unlistenFns) fn();
     };
-  }, [acceptWorkflowView, refreshWorkflowSnapshot, runPrimaryFromAlt]);
+  }, [acceptWorkflowView, refreshWorkflowSnapshot]);
 
   return (
     <SubtitleOverlay

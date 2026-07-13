@@ -7,8 +7,10 @@ use std::{
     },
 };
 
-use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
+use typevoice_core::workflow::AsrPlan;
+
+pub use typevoice_core::workflow::{TranscriptionMetrics, TranscriptionResult};
 
 use crate::obs::{metrics, schema::MetricsRecord};
 use crate::ports::{PortError, PortResult};
@@ -59,49 +61,47 @@ impl ProviderKind {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TranscriptionMetrics {
-    pub rtf: f64,
-    pub device_used: String,
-    pub preprocess_ms: u128,
-    pub asr_ms: u128,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TranscriptionResult {
-    pub transcript_id: String,
-    pub asr_text: String,
-    pub final_text: String,
-    pub metrics: TranscriptionMetrics,
-    pub history_id: String,
-}
-
-impl TranscriptionResult {
-    pub fn new(
-        transcript_id: impl Into<String>,
-        asr_text: impl Into<String>,
-        metrics: TranscriptionMetrics,
-    ) -> Self {
-        let transcript_id = transcript_id.into();
-        let asr_text = asr_text.into();
-        Self {
-            transcript_id: transcript_id.clone(),
-            asr_text: asr_text.clone(),
-            final_text: asr_text,
-            metrics,
-            history_id: transcript_id,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct TranscriptionInput {
     pub task_id: Option<String>,
     pub input_path: PathBuf,
     pub record_elapsed_ms: u128,
     pub record_label: String,
+}
+
+pub struct PreparedTranscription {
+    data_dir: PathBuf,
+    task_id: String,
+    input: TranscriptionInput,
+    options: TranscriptionOptions,
+    wav_path: PathBuf,
+    preprocess_ms: u128,
+    cleaned: bool,
+}
+
+impl PreparedTranscription {
+    pub fn preprocess_ms(&self) -> u128 {
+        self.preprocess_ms
+    }
+
+    pub fn cleanup(&mut self) -> PortResult<()> {
+        self.cleanup_artifacts()?;
+        self.cleaned = true;
+        Ok(())
+    }
+
+    fn cleanup_artifacts(&self) -> PortResult<()> {
+        pipeline::cleanup_audio_artifacts(&self.input.input_path, &self.wav_path, &self.data_dir)
+            .map_err(|error| PortError::from_message("E_AUDIO_CLEANUP", error.to_string()))
+    }
+}
+
+impl Drop for PreparedTranscription {
+    fn drop(&mut self) {
+        if !self.cleaned {
+            let _ = self.cleanup_artifacts();
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -124,19 +124,28 @@ struct ActiveTranscription {
 #[derive(Clone)]
 pub struct TranscriptionService {
     inner: Arc<Mutex<Option<ActiveTranscription>>>,
+    fixed_options: Option<TranscriptionOptions>,
 }
 
 impl TranscriptionService {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(None)),
+            fixed_options: None,
+        }
+    }
+
+    pub fn from_plan(plan: &AsrPlan) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(None)),
+            fixed_options: Some(TranscriptionOptions::from_plan(plan)),
         }
     }
 
     pub fn cancel(&self, task_id: Option<&str>) -> PortResult<()> {
         let active = {
-            let g = self.inner.lock().unwrap();
-            let Some(active) = g.as_ref().cloned() else {
+            let mut g = self.inner.lock().unwrap();
+            let Some(active) = g.as_ref() else {
                 return Ok(());
             };
             if let Some(expected) = task_id {
@@ -144,7 +153,7 @@ impl TranscriptionService {
                     return Ok(());
                 }
             }
-            active
+            g.take().expect("active transcription checked above")
         };
         cancel_active_transcription(&active, false);
         Ok(())
@@ -154,9 +163,20 @@ impl TranscriptionService {
         &self,
         input: TranscriptionInput,
     ) -> PortResult<TranscriptionResult> {
+        let prepared = self.prepare_audio(input).await?;
+        self.transcribe_prepared(prepared).await
+    }
+
+    pub async fn prepare_audio(
+        &self,
+        input: TranscriptionInput,
+    ) -> PortResult<PreparedTranscription> {
         let data_dir = data_dir::data_dir()
             .map_err(|e| PortError::from_message("E_DATA_DIR", e.to_string()))?;
-        let opts = TranscriptionOptions::from_settings(&data_dir)?;
+        let opts = match &self.fixed_options {
+            Some(options) => options.clone(),
+            None => TranscriptionOptions::from_settings(&data_dir)?,
+        };
         let task_id = input
             .task_id
             .as_deref()
@@ -167,21 +187,21 @@ impl TranscriptionService {
         self.replace_active_task(task_id.clone());
 
         let result = self
-            .transcribe_audio_inner(&data_dir, task_id.clone(), input, opts)
+            .prepare_audio_inner(&data_dir, task_id.clone(), input, opts)
             .await;
-        if !self.clear_active(&task_id) {
+        if result.is_err() && !self.clear_active(&task_id) {
             return Err(PortError::new("E_TASK_STALE", "stale transcription task"));
         }
         result
     }
 
-    async fn transcribe_audio_inner(
+    async fn prepare_audio_inner(
         &self,
         data_dir: &Path,
         task_id: String,
         input: TranscriptionInput,
         opts: TranscriptionOptions,
-    ) -> PortResult<TranscriptionResult> {
+    ) -> PortResult<PreparedTranscription> {
         emit_stage_metric(
             data_dir,
             &task_id,
@@ -266,8 +286,41 @@ impl TranscriptionService {
             None,
         );
 
+        Ok(PreparedTranscription {
+            data_dir: data_dir.to_path_buf(),
+            task_id,
+            input,
+            options: opts,
+            wav_path,
+            preprocess_ms,
+            cleaned: false,
+        })
+    }
+
+    pub async fn transcribe_prepared(
+        &self,
+        prepared: PreparedTranscription,
+    ) -> PortResult<TranscriptionResult> {
+        let task_id = prepared.task_id.clone();
+        let result = self.transcribe_prepared_inner(prepared).await;
+        if !self.clear_active(&task_id) {
+            return Err(PortError::new("E_TASK_STALE", "stale transcription task"));
+        }
+        result
+    }
+
+    async fn transcribe_prepared_inner(
+        &self,
+        prepared: PreparedTranscription,
+    ) -> PortResult<TranscriptionResult> {
+        let data_dir = prepared.data_dir.clone();
+        let task_id = prepared.task_id.clone();
+        let opts = prepared.options.clone();
+        let wav_path = prepared.wav_path.clone();
+        let preprocess_ms = prepared.preprocess_ms;
+
         emit_stage_metric(
-            data_dir,
+            &data_dir,
             &task_id,
             "Transcribe",
             MetricStageStatus::Started,
@@ -276,14 +329,13 @@ impl TranscriptionService {
             None,
         );
         let transcript = match self
-            .run_transcriber(data_dir, &task_id, &wav_path, &opts)
+            .run_transcriber(&data_dir, &task_id, &wav_path, &opts)
             .await
         {
             Ok(v) => v,
             Err(e) => {
-                let _ = pipeline::cleanup_audio_artifacts(&input.input_path, &wav_path, data_dir);
                 emit_stage_metric(
-                    data_dir,
+                    &data_dir,
                     &task_id,
                     "Transcribe",
                     if e.code == "E_CANCELLED" {
@@ -298,9 +350,8 @@ impl TranscriptionService {
                 return Err(e);
             }
         };
-        let _ = pipeline::cleanup_audio_artifacts(&input.input_path, &wav_path, data_dir);
         emit_stage_metric(
-            data_dir,
+            &data_dir,
             &task_id,
             "Transcribe",
             MetricStageStatus::Completed,
@@ -317,7 +368,7 @@ impl TranscriptionService {
         };
         let result = TranscriptionResult::new(&task_id, transcript.text.clone(), metrics);
         emit_perf_metrics(
-            data_dir,
+            &data_dir,
             &task_id,
             opts.provider,
             &opts.preprocess,
@@ -502,6 +553,21 @@ impl Default for TranscriptionService {
 }
 
 impl TranscriptionOptions {
+    fn from_plan(plan: &AsrPlan) -> Self {
+        Self {
+            provider: ProviderKind::from_settings_value(&plan.provider),
+            remote_url: plan.remote_url.clone(),
+            remote_model: plan.remote_model.clone(),
+            remote_concurrency: plan.remote_concurrency,
+            preprocess: pipeline::PreprocessConfig {
+                silence_trim_enabled: plan.silence_trim_enabled,
+                silence_threshold_db: f64::from(plan.silence_threshold_db),
+                silence_trim_start_ms: plan.silence_start_ms,
+                silence_trim_end_ms: plan.silence_end_ms,
+            },
+        }
+    }
+
     fn from_settings(data_dir: &Path) -> PortResult<Self> {
         let s = settings::load_settings_strict(data_dir)
             .map_err(|e| PortError::from_message("E_SETTINGS_INVALID", e.to_string()))?;
@@ -727,5 +793,40 @@ mod tests {
 
         assert!(active.token.is_cancelled());
         assert!(!active.stale.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn prepared_transcription_drop_cleans_managed_artifacts() {
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let input_path = data_dir.path().join("recordings").join("input.wav");
+        let wav_path = data_dir.path().join("preprocess").join("prepared.wav");
+        std::fs::create_dir_all(input_path.parent().unwrap()).expect("recordings dir");
+        std::fs::create_dir_all(wav_path.parent().unwrap()).expect("preprocess dir");
+        std::fs::write(&input_path, b"input").expect("input fixture");
+        std::fs::write(&wav_path, b"prepared").expect("prepared fixture");
+
+        drop(PreparedTranscription {
+            data_dir: data_dir.path().to_path_buf(),
+            task_id: "run-drop".to_string(),
+            input: TranscriptionInput {
+                task_id: Some("run-drop".to_string()),
+                input_path: input_path.clone(),
+                record_elapsed_ms: 1,
+                record_label: "fixture".to_string(),
+            },
+            options: TranscriptionOptions {
+                provider: ProviderKind::Remote,
+                remote_url: "https://example.invalid".to_string(),
+                remote_model: None,
+                remote_concurrency: 1,
+                preprocess: pipeline::PreprocessConfig::default(),
+            },
+            wav_path: wav_path.clone(),
+            preprocess_ms: 1,
+            cleaned: false,
+        });
+
+        assert!(!input_path.exists());
+        assert!(!wav_path.exists());
     }
 }

@@ -1,14 +1,15 @@
 use std::path::Path;
 use std::sync::Mutex;
 
+#[cfg(any(windows, test))]
+use std::collections::BTreeSet;
+
 use serde::Serialize;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::obs::Span;
 use crate::settings::Settings;
 
-#[cfg(windows)]
-const GLOBAL_HOTKEY_EVENT: &str = "tv_global_hotkey";
 #[cfg(any(windows, test))]
 const ALT_TAP_MAX_MS: i64 = 350;
 
@@ -33,27 +34,10 @@ pub struct HotkeyAvailability {
     pub reason_code: Option<String>,
 }
 
-#[cfg(windows)]
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct GlobalHotkeyEvent {
-    action: &'static str,
-    ts_ms: i64,
-}
-
 #[cfg(any(windows, test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HotkeyAction {
     Primary,
-}
-
-#[cfg(windows)]
-impl HotkeyAction {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Primary => "primary",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -101,6 +85,7 @@ enum KeyState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct KeySignal {
     key: KeyKind,
+    key_code: u32,
     state: KeyState,
     ts_ms: i64,
 }
@@ -110,7 +95,10 @@ struct KeySignal {
 struct HotkeyDetector {
     primary: KeyKind,
     primary_down_at_ms: Option<i64>,
+    primary_candidate_key_code: Option<u32>,
     primary_clean: bool,
+    held_primary: BTreeSet<u32>,
+    held_non_primary: BTreeSet<u32>,
 }
 
 #[cfg(any(windows, test))]
@@ -119,7 +107,10 @@ impl HotkeyDetector {
         Self {
             primary,
             primary_down_at_ms: None,
+            primary_candidate_key_code: None,
             primary_clean: false,
+            held_primary: BTreeSet::new(),
+            held_non_primary: BTreeSet::new(),
         }
     }
 
@@ -127,17 +118,35 @@ impl HotkeyDetector {
         if signal.key == self.primary {
             return match signal.state {
                 KeyState::Down => {
-                    if self.primary_down_at_ms.is_none() {
+                    let fresh_down = self.held_primary.insert(signal.key_code);
+                    if fresh_down
+                        && self.held_primary.len() == 1
+                        && self.primary_down_at_ms.is_none()
+                    {
                         self.primary_down_at_ms = Some(signal.ts_ms);
-                        self.primary_clean = true;
+                        self.primary_candidate_key_code = Some(signal.key_code);
+                        self.primary_clean = self.held_non_primary.is_empty();
+                    } else if fresh_down {
+                        self.primary_clean = false;
                     }
                     None
                 }
                 KeyState::Up => {
+                    if !self.held_primary.remove(&signal.key_code) {
+                        return None;
+                    }
+                    if self.primary_candidate_key_code != Some(signal.key_code) {
+                        self.primary_clean = false;
+                        return None;
+                    }
                     let started_at = self.primary_down_at_ms.take()?;
+                    self.primary_candidate_key_code = None;
                     let clean = self.primary_clean;
                     self.primary_clean = false;
-                    if clean && signal.ts_ms.saturating_sub(started_at) <= ALT_TAP_MAX_MS {
+                    if self.held_primary.is_empty()
+                        && clean
+                        && signal.ts_ms.saturating_sub(started_at) <= ALT_TAP_MAX_MS
+                    {
                         Some(HotkeyAction::Primary)
                     } else {
                         None
@@ -145,8 +154,16 @@ impl HotkeyDetector {
                 }
             };
         }
-        if signal.state == KeyState::Down && self.primary_down_at_ms.is_some() {
-            self.primary_clean = false;
+        match signal.state {
+            KeyState::Down => {
+                self.held_non_primary.insert(signal.key_code);
+                if self.primary_down_at_ms.is_some() {
+                    self.primary_clean = false;
+                }
+            }
+            KeyState::Up => {
+                self.held_non_primary.remove(&signal.key_code);
+            }
         }
         None
     }
@@ -260,7 +277,6 @@ impl PlatformKeyboardListener {
     #[cfg(windows)]
     fn start(app: AppHandle, primary: KeyKind) -> anyhow::Result<Self> {
         use std::sync::mpsc;
-        use tauri::Emitter;
         use windows_sys::Win32::System::Threading::GetCurrentThreadId;
         use windows_sys::Win32::UI::WindowsAndMessaging::{
             DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage,
@@ -326,6 +342,7 @@ impl PlatformKeyboardListener {
                     };
                     let signal = KeySignal {
                         key,
+                        key_code: info.vkCode,
                         state,
                         ts_ms: now_ms(),
                     };
@@ -350,13 +367,14 @@ impl PlatformKeyboardListener {
                 let mut detector = HotkeyDetector::new(primary);
                 while let Ok(signal) = signal_rx.recv() {
                     if let Some(action) = detector.apply(signal) {
-                        let _ = app.emit(
-                            GLOBAL_HOTKEY_EVENT,
-                            GlobalHotkeyEvent {
-                                action: action.as_str(),
-                                ts_ms: now_ms(),
-                            },
-                        );
+                        match action {
+                            HotkeyAction::Primary => {
+                                let controller = app.state::<std::sync::Arc<
+                                    typevoice_engine::workflow_controller::WorkflowController,
+                                >>();
+                                let _ = controller.inner().command_from_hotkey();
+                            }
+                        }
                     }
                 }
             })?;
@@ -464,7 +482,19 @@ mod tests {
     use crate::settings::Settings;
 
     fn signal(key: KeyKind, state: KeyState, ts_ms: i64) -> KeySignal {
-        KeySignal { key, state, ts_ms }
+        let key_code = match key {
+            KeyKind::Alt => 18,
+            KeyKind::Ctrl => 17,
+            KeyKind::Shift => 16,
+            KeyKind::Function(number) => 111 + u32::from(number),
+            KeyKind::Other => 65,
+        };
+        KeySignal {
+            key,
+            key_code,
+            state,
+            ts_ms,
+        }
     }
 
     #[test]
@@ -544,6 +574,27 @@ mod tests {
     }
 
     #[test]
+    fn modifier_held_before_alt_is_ignored() {
+        let mut detector = HotkeyDetector::new(KeyKind::Alt);
+        assert_eq!(
+            detector.apply(signal(KeyKind::Ctrl, KeyState::Down, 1000)),
+            None
+        );
+        assert_eq!(
+            detector.apply(signal(KeyKind::Alt, KeyState::Down, 1020)),
+            None
+        );
+        assert_eq!(
+            detector.apply(signal(KeyKind::Alt, KeyState::Up, 1100)),
+            None
+        );
+        assert_eq!(
+            detector.apply(signal(KeyKind::Ctrl, KeyState::Up, 1120)),
+            None
+        );
+    }
+
+    #[test]
     fn repeated_alt_down_keeps_first_press_time() {
         let mut detector = HotkeyDetector::new(KeyKind::Alt);
         assert_eq!(
@@ -556,6 +607,37 @@ mod tests {
         );
         assert_eq!(
             detector.apply(signal(KeyKind::Alt, KeyState::Up, 1300)),
+            Some(HotkeyAction::Primary)
+        );
+    }
+
+    #[test]
+    fn overlapping_primary_keys_cannot_rearm_from_repeat() {
+        let mut detector = HotkeyDetector::new(KeyKind::Alt);
+        let left_alt = |state, ts_ms| KeySignal {
+            key: KeyKind::Alt,
+            key_code: 164,
+            state,
+            ts_ms,
+        };
+        let right_alt = |state, ts_ms| KeySignal {
+            key: KeyKind::Alt,
+            key_code: 165,
+            state,
+            ts_ms,
+        };
+        for signal in [
+            left_alt(KeyState::Down, 1000),
+            right_alt(KeyState::Down, 1010),
+            left_alt(KeyState::Up, 1020),
+            right_alt(KeyState::Down, 1030),
+            right_alt(KeyState::Up, 1040),
+        ] {
+            assert_eq!(detector.apply(signal), None);
+        }
+        assert_eq!(detector.apply(left_alt(KeyState::Down, 1100)), None);
+        assert_eq!(
+            detector.apply(left_alt(KeyState::Up, 1150)),
             Some(HotkeyAction::Primary)
         );
     }

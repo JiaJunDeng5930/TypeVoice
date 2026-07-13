@@ -1,142 +1,14 @@
-use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use std::future::Future;
 
+#[cfg(test)]
+use crate::export;
+#[cfg(test)]
 use crate::ports::{PortError, PortResult};
-use crate::{data_dir, export, obs, settings};
+#[cfg(test)]
+use typevoice_core::workflow::InsertResult;
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InsertTextRequest {
-    pub transcript_id: Option<String>,
-    pub text: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct InsertResult {
-    pub copied: bool,
-    pub auto_paste_attempted: bool,
-    pub auto_paste_ok: bool,
-    pub error_code: Option<String>,
-    pub error_message: Option<String>,
-}
-
-impl InsertResult {
-    pub fn copy_only() -> Self {
-        Self {
-            copied: true,
-            auto_paste_attempted: false,
-            auto_paste_ok: true,
-            error_code: None,
-            error_message: None,
-        }
-    }
-
-    pub fn pasted() -> Self {
-        Self {
-            copied: true,
-            auto_paste_attempted: true,
-            auto_paste_ok: true,
-            error_code: None,
-            error_message: None,
-        }
-    }
-
-    pub fn paste_failed(code: &str, message: impl Into<String>) -> Self {
-        Self {
-            copied: true,
-            auto_paste_attempted: true,
-            auto_paste_ok: false,
-            error_code: Some(code.to_string()),
-            error_message: Some(message.into()),
-        }
-    }
-}
-
-pub async fn insert_text(req: InsertTextRequest) -> PortResult<InsertResult> {
-    insert_text_after_focus(req, None).await
-}
-
-pub async fn insert_text_after_focus(
-    req: InsertTextRequest,
-    target_hwnd: Option<isize>,
-) -> PortResult<InsertResult> {
-    let dir =
-        data_dir::data_dir().map_err(|e| PortError::from_message("E_DATA_DIR", e.to_string()))?;
-    let span = obs::Span::start(
-        &dir,
-        req.transcript_id.as_deref(),
-        "Cmd",
-        "CMD.insert_text",
-        Some(serde_json::json!({
-            "chars": req.text.chars().count(),
-            "has_transcript_id": req.transcript_id.as_deref().map(|v| !v.is_empty()).unwrap_or(false),
-        })),
-    );
-
-    let result = run_insertion_contract(
-        &req.text,
-        |text| export::copy_text_to_clipboard(text).map_err(|e| PortError::new(&e.code, e.message)),
-        || {
-            let current_settings = settings::load_settings_strict(&dir)
-                .map_err(|e| PortError::from_message("E_SETTINGS_INVALID", e.to_string()))?;
-            Ok(settings::resolve_auto_paste_enabled(&current_settings))
-        },
-        |text| async move {
-            let _ = export::focus_window_best_effort(target_hwnd);
-            tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-            export::auto_paste_text(text).await
-        },
-    )
-    .await;
-    let result = match result {
-        Ok(result) => result,
-        Err(error) => {
-            if error.code != "E_SETTINGS_INVALID" {
-                span.err("insert", &error.code, &error.message, None);
-            }
-            return Err(error);
-        }
-    };
-
-    if !result.auto_paste_attempted {
-        span.ok(Some(serde_json::json!({
-            "copied": true,
-            "auto_paste_enabled": false,
-            "auto_paste_attempted": false,
-        })));
-        return Ok(result);
-    }
-
-    if result.auto_paste_ok {
-        span.ok(Some(serde_json::json!({
-            "copied": true,
-            "auto_paste_enabled": true,
-            "auto_paste_attempted": true,
-            "auto_paste_ok": true,
-        })));
-    } else {
-        span.err(
-            "insert",
-            result
-                .error_code
-                .as_deref()
-                .unwrap_or("E_EXPORT_PASTE_FAILED"),
-            result
-                .error_message
-                .as_deref()
-                .unwrap_or("native input failed"),
-            Some(serde_json::json!({
-                "copied": true,
-                "auto_paste_enabled": true,
-                "auto_paste_attempted": true,
-            })),
-        );
-    }
-
-    Ok(result)
-}
-
+#[cfg(test)]
 async fn run_insertion_contract<'a, Copy, ResolveAutoPaste, Paste, PasteFuture>(
     text: &'a str,
     copy: Copy,

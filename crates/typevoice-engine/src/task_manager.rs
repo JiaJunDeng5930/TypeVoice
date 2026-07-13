@@ -2,6 +2,7 @@ use std::path::Path;
 
 use crate::{context_capture, context_pack};
 use anyhow::{anyhow, Result};
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub struct TaskManager {
@@ -27,8 +28,11 @@ impl TaskManager {
         &self,
         data_dir: &Path,
         context_cfg: &context_capture::ContextConfig,
+        cancellation: &CancellationToken,
     ) -> Result<context_pack::ContextSnapshot> {
-        let capture_id = self.ctx.capture_hotkey_context_now(data_dir, context_cfg)?;
+        let capture_id =
+            self.ctx
+                .capture_hotkey_context_now(data_dir, context_cfg, cancellation)?;
         self.ctx
             .take_hotkey_context_once(&capture_id)
             .ok_or_else(|| anyhow!("failed to retrieve hotkey context payload"))

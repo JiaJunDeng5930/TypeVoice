@@ -9,9 +9,10 @@ use std::{
     },
     time::{Duration, Instant},
 };
+use tokio_util::sync::CancellationToken;
 
 use crate::pcm::pcm_peak_abs;
-use crate::record_input_cache::RecordInputCacheState;
+use crate::record_input_cache::CachedRecordInput;
 use crate::subprocess::CommandNoConsoleExt;
 use crate::transcription_actor::{StreamingSessionConfig, TranscriptionActor};
 use crate::ui_events::{UiEvent, UiEventMailbox};
@@ -135,8 +136,12 @@ impl RecordingRegistry {
             })
             .collect();
         for id in expired_ids {
-            if let Some(asset) = g.assets.remove(&id) {
-                let _ = std::fs::remove_file(&asset.output_path);
+            let removed = g
+                .assets
+                .get(&id)
+                .is_some_and(|asset| remove_recording_file(&asset.output_path).is_ok());
+            if removed {
+                g.assets.remove(&id);
             }
         }
     }
@@ -146,21 +151,50 @@ impl RecordingRegistry {
         g.assets.remove(asset_id)
     }
 
+    pub fn take_assets_for_task(&self, task_id: &str) -> Vec<RecordedAsset> {
+        let mut g = self.inner.lock().unwrap();
+        let asset_ids = g
+            .assets
+            .iter()
+            .filter(|(_, asset)| asset.task_id.as_deref() == Some(task_id))
+            .map(|(asset_id, _)| asset_id.clone())
+            .collect::<Vec<_>>();
+        asset_ids
+            .into_iter()
+            .filter_map(|asset_id| g.assets.remove(&asset_id))
+            .collect()
+    }
+
+    pub fn restore_asset(&self, asset: RecordedAsset) {
+        self.inner
+            .lock()
+            .unwrap()
+            .assets
+            .insert(asset.asset_id.clone(), asset);
+    }
+
     pub fn start_recording(
         &self,
         mailbox: &UiEventMailbox,
         transcriber: Option<&TranscriptionActor>,
         streaming_config: Option<StreamingSessionConfig>,
-        record_input_cache: &RecordInputCacheState,
+        cached_input: &CachedRecordInput,
         task_id: Option<String>,
+        cancellation: &CancellationToken,
     ) -> Result<String, CaptureError> {
+        if cancellation.is_cancelled() {
+            return Err(CaptureError::new(
+                "E_CANCELLED",
+                "recording start was cancelled",
+            ));
+        }
         let dir =
             data_dir::data_dir().map_err(|e| CaptureError::new("E_DATA_DIR", e.to_string()))?;
         let span = obs::Span::start(
             &dir,
             task_id.as_deref(),
-            "Cmd",
-            "CMD.record_transcribe_start",
+            "Recording",
+            "run.recording_begin",
             None,
         );
         if !cfg!(windows) {
@@ -172,12 +206,13 @@ impl RecordingRegistry {
             return Err(err);
         }
         self.cleanup_expired_assets(Duration::from_secs(120));
-        let stale_active = {
-            let mut g = self.inner.lock().unwrap();
-            g.active.take()
-        };
-        if let Some(mut active) = stale_active {
-            discard_active_recording(&mut active);
+        if self.inner.lock().unwrap().active.is_some() {
+            let err = CaptureError::new(
+                "E_RECORD_ALREADY_ACTIVE",
+                "a recording process is still owned by the previous run",
+            );
+            span.err("state", &err.code, &err.render(), None);
+            return Err(err);
         }
 
         let tmp = recording_tmp_dir(&dir);
@@ -185,33 +220,16 @@ impl RecordingRegistry {
             .map_err(|e| CaptureError::new("E_RECORD_TMP_CREATE", e.to_string()))?;
         let session_id = uuid::Uuid::new_v4().to_string();
         let output_path = tmp.join(format!("recording-{session_id}.wav"));
-        let cached_input = match record_input_cache.get_last_ok() {
-            Some(v) => v,
-            None => {
-                let snapshot = record_input_cache.snapshot();
-                let message = "record input cache is not ready; wait for cache refresh and retry";
-                span.err(
-                    "config",
-                    "E_RECORD_INPUT_CACHE_NOT_READY",
-                    message,
-                    Some(serde_json::json!({
-                        "refresh_in_progress": snapshot.refresh_in_progress,
-                        "pending_reason": snapshot.pending_reason,
-                        "last_error": snapshot.last_error.as_ref().map(|v| serde_json::json!({
-                            "code": v.code,
-                            "message": v.message,
-                            "ts_ms": v.ts_ms,
-                            "reason": v.reason,
-                        })),
-                    })),
-                );
-                return Err(CaptureError::new("E_RECORD_INPUT_CACHE_NOT_READY", message));
-            }
-        };
         let resolved_input = cached_input.resolved.clone();
         let input_spec = resolved_input.spec.clone();
         let ffmpeg = pipeline::ffmpeg_cmd()
             .map_err(|e| CaptureError::new("E_FFMPEG_NOT_FOUND", e.to_string()))?;
+        if cancellation.is_cancelled() {
+            return Err(CaptureError::new(
+                "E_CANCELLED",
+                "recording start was cancelled",
+            ));
+        }
 
         let mut child = match std::process::Command::new(&ffmpeg)
             .args(ffmpeg_record_args(
@@ -235,20 +253,26 @@ impl RecordingRegistry {
             }
         };
 
+        let finish_on_eof = Arc::new(AtomicBool::new(false));
         let stdout = match child.stdout.take() {
             Some(v) => v,
             None => {
                 let err =
                     CaptureError::new("E_RECORD_START_FAILED", "recorder stdout not available");
                 span.err("process", &err.code, &err.render(), None);
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = std::fs::remove_file(&output_path);
+                self.restore_active(ActiveRecording {
+                    session_id,
+                    task_id,
+                    output_path,
+                    child: Some(child),
+                    started_at: Instant::now(),
+                    meter_join: None,
+                    finish_on_eof,
+                });
                 return Err(err);
             }
         };
-        let finish_on_eof = Arc::new(AtomicBool::new(false));
-        let meter_join = spawn_meter_thread(
+        let meter_join = match spawn_meter_thread(
             mailbox.clone(),
             transcriber.cloned(),
             task_id.clone(),
@@ -256,9 +280,45 @@ impl RecordingRegistry {
             stdout,
             streaming_config.map(|config| config.chunk_bytes),
             finish_on_eof.clone(),
-        );
+        ) {
+            Ok(join) => join,
+            Err(err) => {
+                span.err("process", &err.code, &err.render(), None);
+                self.restore_active(ActiveRecording {
+                    session_id,
+                    task_id,
+                    output_path,
+                    child: Some(child),
+                    started_at: Instant::now(),
+                    meter_join: None,
+                    finish_on_eof,
+                });
+                return Err(err);
+            }
+        };
+        let mut active = ActiveRecording {
+            session_id: session_id.clone(),
+            task_id,
+            output_path: output_path.clone(),
+            child: Some(child),
+            started_at: Instant::now(),
+            meter_join: Some(meter_join),
+            finish_on_eof,
+        };
 
-        std::thread::sleep(Duration::from_millis(120));
+        for _ in 0..12 {
+            if cancellation.is_cancelled() {
+                let err = CaptureError::new("E_CANCELLED", "recording start was cancelled");
+                span.err("process", &err.code, &err.render(), None);
+                self.restore_active(active);
+                return Err(err);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let child = active
+            .child
+            .as_mut()
+            .expect("new recording owns its recorder process");
         match child.try_wait() {
             Ok(Some(status)) => {
                 let stderr_tail = child.stderr.as_mut().and_then(read_last_stderr_line);
@@ -273,8 +333,7 @@ impl RecordingRegistry {
                 }
                 let err = CaptureError::new("E_RECORD_START_FAILED", message);
                 span.err("process", &err.code, &err.render(), None);
-                let _ = std::fs::remove_file(&output_path);
-                let _ = meter_join.join();
+                self.restore_active(active);
                 return Err(err);
             }
             Ok(None) => {}
@@ -284,26 +343,12 @@ impl RecordingRegistry {
                     format!("failed to probe recorder process: {e}"),
                 );
                 span.err("process", &err.code, &err.render(), None);
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = std::fs::remove_file(&output_path);
-                let _ = meter_join.join();
+                self.restore_active(active);
                 return Err(err);
             }
         }
 
-        {
-            let mut g = self.inner.lock().unwrap();
-            g.active = Some(ActiveRecording {
-                session_id: session_id.clone(),
-                task_id,
-                output_path: output_path.clone(),
-                child: Some(child),
-                started_at: Instant::now(),
-                meter_join: Some(meter_join),
-                finish_on_eof,
-            });
-        }
+        self.restore_active(active);
         span.ok(Some(serde_json::json!({
             "session_id": session_id,
             "output_path": output_path,
@@ -319,27 +364,40 @@ impl RecordingRegistry {
         Ok(session_id)
     }
 
-    pub fn stop_recording(&self, session_id: &str) -> Result<RecordingStopOutcome, CaptureError> {
+    pub fn stop_recording(
+        &self,
+        session_id: &str,
+        cancellation: &CancellationToken,
+    ) -> Result<RecordingStopOutcome, CaptureError> {
         let dir =
             data_dir::data_dir().map_err(|e| CaptureError::new("E_DATA_DIR", e.to_string()))?;
-        let span = obs::Span::start(
-            &dir,
-            None,
-            "Cmd",
-            "CMD.record_transcribe_stop.capture",
-            Some(serde_json::json!({"has_session_id": !session_id.trim().is_empty()})),
-        );
         self.cleanup_expired_assets(Duration::from_secs(120));
         let mut active = {
             let mut g = self.inner.lock().unwrap();
             match g.active.take() {
                 Some(active) => active,
                 None => {
+                    let span = obs::Span::start(
+                        &dir,
+                        None,
+                        "Recording",
+                        "run.recording_finish",
+                        Some(serde_json::json!({
+                            "has_session_id": !session_id.trim().is_empty()
+                        })),
+                    );
                     span.ok(Some(serde_json::json!({"stale": true})));
                     return Ok(RecordingStopOutcome::Stale);
                 }
             }
         };
+        let span = obs::Span::start(
+            &dir,
+            active.task_id.as_deref(),
+            "Recording",
+            "run.recording_finish",
+            Some(serde_json::json!({"has_session_id": !session_id.trim().is_empty()})),
+        );
 
         if !session_id.trim().is_empty() && active.session_id != session_id {
             let mut g = self.inner.lock().unwrap();
@@ -348,47 +406,72 @@ impl RecordingRegistry {
             return Ok(RecordingStopOutcome::Stale);
         }
 
-        let child = active
-            .child
-            .as_mut()
-            .ok_or_else(|| CaptureError::new("E_RECORD_STOP_FAILED", "recorder process missing"))?;
-        active.finish_on_eof.store(true, Ordering::SeqCst);
-        if let Some(stdin) = child.stdin.as_mut() {
-            let _ = std::io::Write::write_all(stdin, b"q\n");
-            let _ = std::io::Write::flush(stdin);
+        if active.child.is_none() {
+            let err = CaptureError::new("E_RECORD_STOP_FAILED", "recorder process missing");
+            span.err("process", &err.code, &err.render(), None);
+            self.restore_active(active);
+            return Err(err);
         }
+        active.finish_on_eof.store(true, Ordering::SeqCst);
+        let status_result = {
+            let child = active
+                .child
+                .as_mut()
+                .expect("recording process checked above");
+            if let Some(stdin) = child.stdin.as_mut() {
+                let _ = std::io::Write::write_all(stdin, b"q\n");
+                let _ = std::io::Write::flush(stdin);
+            }
 
-        let mut status = None;
-        for _ in 0..100 {
-            match child.try_wait() {
-                Ok(Some(s)) => {
-                    status = Some(s);
+            let mut status = None;
+            let mut wait_error = None;
+            for _ in 0..100 {
+                if cancellation.is_cancelled() {
+                    active.finish_on_eof.store(false, Ordering::SeqCst);
+                    wait_error = Some(
+                        match terminate_child_bounded(child, Duration::from_millis(100)) {
+                            Ok(_) => {
+                                CaptureError::new("E_CANCELLED", "recording stop was cancelled")
+                            }
+                            Err(error) => error,
+                        },
+                    );
                     break;
                 }
-                Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-                Err(_) => break,
-            }
-        }
-        if status.is_none() {
-            let _ = child.kill();
-            status = child.wait().ok();
-        }
-        let status = match status {
-            Some(s) => s,
-            None => {
-                let stderr_tail = child.stderr.as_mut().and_then(read_last_stderr_line);
-                let mut message = "recorder process wait failed".to_string();
-                if let Some(line) = stderr_tail.as_deref() {
-                    message.push_str("; stderr=");
-                    message.push_str(line);
+                match child.try_wait() {
+                    Ok(Some(value)) => {
+                        status = Some(value);
+                        break;
+                    }
+                    Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+                    Err(error) => {
+                        wait_error = Some(CaptureError::new(
+                            "E_RECORD_STOP_FAILED",
+                            format!("failed to query recorder process: {error}"),
+                        ));
+                        break;
+                    }
                 }
-                join_meter_thread(&mut active);
-                let err = CaptureError::new("E_RECORD_STOP_FAILED", message);
+            }
+            match (status, wait_error) {
+                (Some(status), _) => Ok(status),
+                (_, Some(error)) => Err(error),
+                (None, None) => terminate_child_bounded(child, Duration::from_millis(100)),
+            }
+        };
+        let status = match status_result {
+            Ok(status) => status,
+            Err(err) => {
                 span.err("process", &err.code, &err.render(), None);
+                self.restore_active(active);
                 return Err(err);
             }
         };
-        let stderr_tail = child.stderr.as_mut().and_then(read_last_stderr_line);
+        let stderr_tail = active
+            .child
+            .as_mut()
+            .and_then(|child| child.stderr.as_mut())
+            .and_then(read_last_stderr_line);
         if !status.success() {
             let mut message = format!("recorder exited with {status}");
             if let Some(line) = stderr_tail.as_deref() {
@@ -396,7 +479,11 @@ impl RecordingRegistry {
                 message.push_str(line);
             }
             join_meter_thread(&mut active);
-            let _ = std::fs::remove_file(&active.output_path);
+            if let Err(cleanup_error) = remove_recording_file(&active.output_path) {
+                span.err("io", &cleanup_error.code, &cleanup_error.render(), None);
+                self.restore_active(active);
+                return Err(cleanup_error);
+            }
             let err = CaptureError::new("E_RECORD_STOP_FAILED", message);
             span.err("process", &err.code, &err.render(), None);
             return Err(err);
@@ -428,25 +515,37 @@ impl RecordingRegistry {
     pub fn abort_recording(&self, session_id: Option<String>) -> Result<(), CaptureError> {
         let dir =
             data_dir::data_dir().map_err(|e| CaptureError::new("E_DATA_DIR", e.to_string()))?;
-        let span = obs::Span::start(
-            &dir,
-            None,
-            "Cmd",
-            "CMD.record_transcribe_cancel.capture",
-            Some(serde_json::json!({
-                "has_session_id": session_id.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false),
-            })),
-        );
         let mut active = {
             let mut g = self.inner.lock().unwrap();
             match g.active.take() {
                 Some(v) => v,
                 None => {
+                    let span = obs::Span::start(
+                        &dir,
+                        None,
+                        "Recording",
+                        "run.recording_abort",
+                        Some(serde_json::json!({
+                            "has_session_id": session_id
+                                .as_ref()
+                                .map(|s| !s.trim().is_empty())
+                                .unwrap_or(false),
+                        })),
+                    );
                     span.ok(Some(serde_json::json!({"aborted": false})));
                     return Ok(());
                 }
             }
         };
+        let span = obs::Span::start(
+            &dir,
+            active.task_id.as_deref(),
+            "Recording",
+            "run.recording_abort",
+            Some(serde_json::json!({
+                "has_session_id": session_id.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false),
+            })),
+        );
         if let Some(expected) = session_id {
             if !expected.trim().is_empty() && active.session_id != expected {
                 let mut g = self.inner.lock().unwrap();
@@ -463,11 +562,18 @@ impl RecordingRegistry {
                 let _ = std::io::Write::write_all(stdin, b"q\n");
                 let _ = std::io::Write::flush(stdin);
             }
-            let _ = child.kill();
-            let _ = child.wait();
+            if let Err(err) = terminate_child_bounded(child, Duration::from_millis(100)) {
+                span.err("process", &err.code, &err.render(), None);
+                self.restore_active(active);
+                return Err(err);
+            }
         }
         join_meter_thread(&mut active);
-        let _ = std::fs::remove_file(&active.output_path);
+        if let Err(err) = remove_recording_file(&active.output_path) {
+            span.err("io", &err.code, &err.render(), None);
+            self.restore_active(active);
+            return Err(err);
+        }
         span.ok(Some(serde_json::json!({"aborted": true})));
         Ok(())
     }
@@ -490,6 +596,12 @@ impl RecordingRegistry {
         let mut g = self.inner.lock().unwrap();
         g.assets.insert(asset_id, asset.clone());
         asset
+    }
+
+    fn restore_active(&self, active: ActiveRecording) {
+        let mut guard = self.inner.lock().unwrap();
+        debug_assert!(guard.active.is_none());
+        guard.active = Some(active);
     }
 
     #[cfg(test)]
@@ -547,168 +659,169 @@ fn spawn_meter_thread(
     mut stdout: ChildStdout,
     chunk_bytes: Option<usize>,
     finish_on_eof: Arc<AtomicBool>,
-) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(move || {
-        const WINDOW_SAMPLES: usize = 800;
-        let mut read_buf = [0_u8; 4096];
-        let mut chunk = Vec::with_capacity(chunk_bytes.unwrap_or(0).max(1));
-        let mut sequence = STREAMING_FIRST_AUDIO_SEQUENCE;
-        let mut carry_low_byte: Option<u8> = None;
-        let mut sum_sq = 0.0_f64;
-        let mut max_abs = 0_i32;
-        let mut sample_count = 0_usize;
-        let task_id = task_id.unwrap_or_else(|| recording_id.clone());
-        let mut stdout_read_bytes = 0_usize;
-        let mut stdout_read_iterations = 0_usize;
-        let mut sent_frames = 0_usize;
-        let mut sent_bytes = 0_usize;
-        let mut non_silent_frames = 0_usize;
-        let mut first_sequence: Option<u64> = None;
-        let mut last_sequence: Option<u64> = None;
-        let mut send_errors = 0_usize;
+) -> Result<std::thread::JoinHandle<()>, CaptureError> {
+    std::thread::Builder::new()
+        .name(format!("recording_meter_{recording_id}"))
+        .spawn(move || {
+            const WINDOW_SAMPLES: usize = 800;
+            let mut read_buf = [0_u8; 4096];
+            let mut chunk = Vec::with_capacity(chunk_bytes.unwrap_or(0).max(1));
+            let mut sequence = STREAMING_FIRST_AUDIO_SEQUENCE;
+            let mut carry_low_byte: Option<u8> = None;
+            let mut levels = LevelAccumulator::default();
+            let task_id = task_id.unwrap_or_else(|| recording_id.clone());
+            let mut stdout_read_bytes = 0_usize;
+            let mut stdout_read_iterations = 0_usize;
+            let mut sent_frames = 0_usize;
+            let mut sent_bytes = 0_usize;
+            let mut non_silent_frames = 0_usize;
+            let mut first_sequence: Option<u64> = None;
+            let mut last_sequence: Option<u64> = None;
+            let mut send_errors = 0_usize;
 
-        loop {
-            let n = match stdout.read(&mut read_buf) {
-                Ok(0) => break,
-                Ok(v) => v,
-                Err(_) => break,
-            };
-            stdout_read_bytes += n;
-            stdout_read_iterations += 1;
-            if let (Some(transcriber), Some(chunk_bytes)) = (transcriber.as_ref(), chunk_bytes) {
-                chunk.extend_from_slice(&read_buf[..n]);
-                while chunk.len() >= chunk_bytes && chunk_bytes > 0 {
-                    let rest = chunk.split_off(chunk_bytes);
-                    let pcm = std::mem::replace(&mut chunk, rest);
+            loop {
+                let n = match stdout.read(&mut read_buf) {
+                    Ok(0) => break,
+                    Ok(v) => v,
+                    Err(_) => break,
+                };
+                stdout_read_bytes += n;
+                stdout_read_iterations += 1;
+                if let (Some(transcriber), Some(chunk_bytes)) = (transcriber.as_ref(), chunk_bytes)
+                {
+                    chunk.extend_from_slice(&read_buf[..n]);
+                    while chunk.len() >= chunk_bytes && chunk_bytes > 0 {
+                        let rest = chunk.split_off(chunk_bytes);
+                        let pcm = std::mem::replace(&mut chunk, rest);
+                        sent_frames += 1;
+                        sent_bytes += pcm.len();
+                        non_silent_frames += usize::from(pcm_peak_abs(&pcm) > 0);
+                        first_sequence.get_or_insert(sequence);
+                        last_sequence = Some(sequence);
+                        if transcriber
+                            .send_audio_chunk(&task_id, sequence, pcm, false)
+                            .is_err()
+                        {
+                            send_errors += 1;
+                        }
+                        sequence += 1;
+                    }
+                }
+
+                let mut idx = 0_usize;
+                if let Some(low) = carry_low_byte.take() {
+                    if n > 0 {
+                        let sample = i16::from_le_bytes([low, read_buf[0]]);
+                        levels.push(sample, WINDOW_SAMPLES, &mailbox, &task_id, &recording_id);
+                        idx = 1;
+                    }
+                }
+
+                while idx + 1 < n {
+                    let sample = i16::from_le_bytes([read_buf[idx], read_buf[idx + 1]]);
+                    levels.push(sample, WINDOW_SAMPLES, &mailbox, &task_id, &recording_id);
+                    idx += 2;
+                }
+
+                if idx < n {
+                    carry_low_byte = Some(read_buf[idx]);
+                }
+            }
+
+            if finish_on_eof.load(Ordering::SeqCst) {
+                let Some(transcriber) = transcriber.as_ref() else {
+                    mailbox.send(UiEvent::audio_level(task_id, recording_id, 0.0, 0.0));
+                    return;
+                };
+                if !chunk.is_empty() {
+                    let pcm = std::mem::take(&mut chunk);
                     sent_frames += 1;
                     sent_bytes += pcm.len();
                     non_silent_frames += usize::from(pcm_peak_abs(&pcm) > 0);
                     first_sequence.get_or_insert(sequence);
                     last_sequence = Some(sequence);
                     if transcriber
-                        .send_audio_chunk(&task_id, sequence, pcm, false)
+                        .send_audio_chunk(&task_id, sequence, pcm, true)
                         .is_err()
                     {
                         send_errors += 1;
                     }
-                    sequence += 1;
+                } else {
+                    sent_frames += 1;
+                    first_sequence.get_or_insert(sequence);
+                    last_sequence = Some(sequence);
+                    if transcriber
+                        .send_audio_chunk(&task_id, sequence, Vec::new(), true)
+                        .is_err()
+                    {
+                        send_errors += 1;
+                    }
                 }
             }
-
-            let mut idx = 0_usize;
-            if let Some(low) = carry_low_byte.take() {
-                if n > 0 {
-                    let sample = i16::from_le_bytes([low, read_buf[0]]);
-                    accumulate_sample(
-                        sample,
-                        &mut sum_sq,
-                        &mut max_abs,
-                        &mut sample_count,
-                        WINDOW_SAMPLES,
-                        &mailbox,
-                        &recording_id,
-                    );
-                    idx = 1;
-                }
-            }
-
-            while idx + 1 < n {
-                let sample = i16::from_le_bytes([read_buf[idx], read_buf[idx + 1]]);
-                accumulate_sample(
-                    sample,
-                    &mut sum_sq,
-                    &mut max_abs,
-                    &mut sample_count,
-                    WINDOW_SAMPLES,
-                    &mailbox,
-                    &recording_id,
+            if let Ok(dir) = data_dir::data_dir() {
+                obs::event(
+                    &dir,
+                    Some(&task_id),
+                    "Transcribe",
+                    "ASR.streaming_pcm_source_summary",
+                    "ok",
+                    Some(serde_json::json!({
+                        "recording_id": recording_id,
+                        "stdout_read_bytes": stdout_read_bytes,
+                        "stdout_read_iterations": stdout_read_iterations,
+                        "sent_frames": sent_frames,
+                        "sent_bytes": sent_bytes,
+                        "non_silent_frames": non_silent_frames,
+                        "first_sequence": first_sequence,
+                        "last_sequence": last_sequence,
+                        "pending_tail_bytes": chunk.len(),
+                        "send_errors": send_errors,
+                        "finish_on_eof": finish_on_eof.load(Ordering::SeqCst),
+                    })),
                 );
-                idx += 2;
             }
-
-            if idx < n {
-                carry_low_byte = Some(read_buf[idx]);
-            }
-        }
-
-        if finish_on_eof.load(Ordering::SeqCst) {
-            let Some(transcriber) = transcriber.as_ref() else {
-                mailbox.send(UiEvent::audio_level(recording_id, 0.0, 0.0));
-                return;
-            };
-            if !chunk.is_empty() {
-                let pcm = std::mem::take(&mut chunk);
-                sent_frames += 1;
-                sent_bytes += pcm.len();
-                non_silent_frames += usize::from(pcm_peak_abs(&pcm) > 0);
-                first_sequence.get_or_insert(sequence);
-                last_sequence = Some(sequence);
-                if transcriber
-                    .send_audio_chunk(&task_id, sequence, pcm, true)
-                    .is_err()
-                {
-                    send_errors += 1;
-                }
-            } else {
-                sent_frames += 1;
-                first_sequence.get_or_insert(sequence);
-                last_sequence = Some(sequence);
-                if transcriber
-                    .send_audio_chunk(&task_id, sequence, Vec::new(), true)
-                    .is_err()
-                {
-                    send_errors += 1;
-                }
-            }
-            let _ = transcriber.finish_session(&task_id);
-        }
-        if let Ok(dir) = data_dir::data_dir() {
-            obs::event(
-                &dir,
-                Some(&task_id),
-                "Transcribe",
-                "ASR.streaming_pcm_source_summary",
-                "ok",
-                Some(serde_json::json!({
-                    "recording_id": recording_id,
-                    "stdout_read_bytes": stdout_read_bytes,
-                    "stdout_read_iterations": stdout_read_iterations,
-                    "sent_frames": sent_frames,
-                    "sent_bytes": sent_bytes,
-                    "non_silent_frames": non_silent_frames,
-                    "first_sequence": first_sequence,
-                    "last_sequence": last_sequence,
-                    "pending_tail_bytes": chunk.len(),
-                    "send_errors": send_errors,
-                    "finish_on_eof": finish_on_eof.load(Ordering::SeqCst),
-                })),
-            );
-        }
-        mailbox.send(UiEvent::audio_level(recording_id, 0.0, 0.0));
-    })
+            mailbox.send(UiEvent::audio_level(task_id, recording_id, 0.0, 0.0));
+        })
+        .map_err(|error| {
+            CaptureError::new(
+                "E_RECORD_METER_SPAWN",
+                format!("failed to start recording meter: {error}"),
+            )
+        })
 }
 
-fn accumulate_sample(
-    sample: i16,
-    sum_sq: &mut f64,
-    max_abs: &mut i32,
-    sample_count: &mut usize,
-    window_samples: usize,
-    mailbox: &UiEventMailbox,
-    recording_id: &str,
-) {
-    let sample_i32 = i32::from(sample);
-    let normalized = f64::from(sample_i32) / 32768.0;
-    *sum_sq += normalized * normalized;
-    *max_abs = (*max_abs).max(sample_i32.abs());
-    *sample_count += 1;
-    if *sample_count >= window_samples {
-        let rms = (*sum_sq / *sample_count as f64).sqrt();
-        let peak = *max_abs as f64 / 32768.0;
-        mailbox.send(UiEvent::audio_level(recording_id.to_string(), rms, peak));
-        *sum_sq = 0.0;
-        *max_abs = 0;
-        *sample_count = 0;
+#[derive(Default)]
+struct LevelAccumulator {
+    sum_sq: f64,
+    max_abs: i32,
+    sample_count: usize,
+}
+
+impl LevelAccumulator {
+    fn push(
+        &mut self,
+        sample: i16,
+        window_samples: usize,
+        mailbox: &UiEventMailbox,
+        task_id: &str,
+        recording_id: &str,
+    ) {
+        let sample_i32 = i32::from(sample);
+        let normalized = f64::from(sample_i32) / 32768.0;
+        self.sum_sq += normalized * normalized;
+        self.max_abs = self.max_abs.max(sample_i32.abs());
+        self.sample_count += 1;
+        if self.sample_count >= window_samples {
+            let rms = (self.sum_sq / self.sample_count as f64).sqrt();
+            let peak = self.max_abs as f64 / 32768.0;
+            mailbox.send(UiEvent::audio_level(
+                task_id.to_string(),
+                recording_id.to_string(),
+                rms,
+                peak,
+            ));
+            *self = Self::default();
+        }
     }
 }
 
@@ -718,17 +831,44 @@ fn join_meter_thread(active: &mut ActiveRecording) {
     }
 }
 
-fn discard_active_recording(active: &mut ActiveRecording) {
-    if let Some(child) = active.child.as_mut() {
-        if let Some(stdin) = child.stdin.as_mut() {
-            let _ = std::io::Write::write_all(stdin, b"q\n");
-            let _ = std::io::Write::flush(stdin);
+fn terminate_child_bounded(
+    child: &mut Child,
+    timeout: Duration,
+) -> Result<std::process::ExitStatus, CaptureError> {
+    let _ = child.kill();
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) if Instant::now() >= deadline => {
+                return Err(CaptureError::new(
+                    "E_RECORD_ABORT_TIMEOUT",
+                    "recorder process did not exit before the cleanup deadline",
+                ));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+            Err(error) => {
+                return Err(CaptureError::new(
+                    "E_RECORD_ABORT_FAILED",
+                    format!("failed to query recorder process: {error}"),
+                ));
+            }
         }
-        let _ = child.kill();
-        let _ = child.wait();
     }
-    join_meter_thread(active);
-    let _ = std::fs::remove_file(&active.output_path);
+}
+
+fn remove_recording_file(path: &Path) -> Result<(), CaptureError> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(CaptureError::new(
+            "E_RECORD_CLEANUP_FAILED",
+            format!(
+                "failed to remove recording artifact {}: {error}",
+                path.display()
+            ),
+        )),
+    }
 }
 
 fn read_last_stderr_line(stderr: &mut ChildStderr) -> Option<String> {
@@ -785,7 +925,9 @@ mod tests {
         let registry = RecordingRegistry::new();
         registry.open_test_session("session-2").expect("open");
 
-        let outcome = registry.stop_recording("session-1").expect("stale stop");
+        let outcome = registry
+            .stop_recording("session-1", &CancellationToken::new())
+            .expect("stale stop");
 
         assert!(matches!(outcome, RecordingStopOutcome::Stale));
         assert_eq!(
@@ -833,6 +975,30 @@ mod tests {
         assert_eq!(asset.record_elapsed_ms, 20);
         assert!(registry.take_asset(&asset.asset_id).is_some());
         assert!(registry.take_asset(&asset.asset_id).is_none());
+    }
+
+    #[test]
+    fn cleanup_can_drain_late_assets_by_run() {
+        let registry = RecordingRegistry::new();
+        registry.complete_session(
+            "session-a".to_string(),
+            Some("run-a".to_string()),
+            PathBuf::from("a.wav"),
+            20,
+        );
+        registry.complete_session(
+            "session-b".to_string(),
+            Some("run-b".to_string()),
+            PathBuf::from("b.wav"),
+            30,
+        );
+
+        let drained = registry.take_assets_for_task("run-a");
+
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].task_id.as_deref(), Some("run-a"));
+        assert!(registry.take_assets_for_task("run-a").is_empty());
+        assert_eq!(registry.take_assets_for_task("run-b").len(), 1);
     }
 
     #[test]
