@@ -2,7 +2,7 @@
 
 目标：为自用工具定义轻量、可复现的验收机制。
 
-状态：本文件记录当前 quick/full 分级；现有实现尚未证明测试选择器执行了非零 workspace 状态合同，也没有分别执行 Windows platform input 与 Linux AT-SPI。目标补充 gate 见 `architecture.md` T22/T23，在实现前不得把一次手工自动粘贴或单一 OS 的 Skipped 结果表述为跨平台 PASS。
+状态：本文件记录当前 quick/full 分级。T22 已实现：quick/full 都执行显式合同计划；所有 Cargo 测试选择和 full 的前端合同都先验证非零匹配，full 明确覆盖 workspace、engine 与 frontend，主 CI 直接调用同一 counted full gate。T23 的真实 per-platform runner 已接入；当前 Linux 证据来自本地 WSL 私有 D-Bus/AT-SPI 会话中的生产 adapter 与 GTK 控件全文读回，Windows 真实输入证据只能由隔离的 hosted 或 dedicated interactive runner 产生。单平台通过或另一平台 `NotRun`/`Skipped` 都不能表述为跨平台 `PASS`。
 
 ## 1. 分级与时间预算
 
@@ -22,6 +22,8 @@
 必须包含：
 
 - Rust 后端编译检查。
+- Workspace 与 engine 哨兵合同；执行前列举测试并拒绝 0-match。
+- 前端构建合同。
 - 可调试性契约检查。
 - FFmpeg 预处理参数契约检查。
 - FFmpeg 预处理取消验证。
@@ -37,7 +39,9 @@
 
 - Rust 后端编译检查。
 - 可调试性契约检查。
-- 全部 Rust 单元测试。
+- 全部 Rust 单元测试；执行前列举 workspace 测试并拒绝 0-match。
+- Engine T01-T21 架构合同；显式选择并拒绝 0-match。
+- 前端合同测试；要求报告非零测试数。
 - 三条 fixture 的 FFmpeg 预处理验证。
 - FFmpeg 预处理取消验证。
 
@@ -46,7 +50,13 @@
 - 控制台摘要。
 - 追加一条结构化记录到 `metrics/verify.jsonl`。
 
-## 5. 手工验证
+## 5. T23 平台插入验证
+
+- `cargo xtask verify insertion-contract` 只执行当前 OS 对应的 ignored integration contract，Windows 与 Linux 结果分别记录；普通 workspace 单元测试不会产生原生输入。
+- runner 必须设置 `TYPEVOICE_T23_ISOLATED=1`。Linux CI 还必须使用私有 Xvfb、D-Bus 与 AT-SPI registry；Windows CI 必须对 `windows-latest` 隔离 VM 另设 `TYPEVOICE_T23_WINDOWS_VM=1`，缺少这些条件时必须失败，不能回退到 mock 后记为 `Passed`。
+- 两端都由独立 child 创建受控编辑控件，父测试只调用生产 `capture_insertion_target` 与 `auto_paste_text`，并以控件实际读回完整 Unicode 文本作为通过条件。单平台 `Passed` 与另一平台 `NotRun`/`Skipped` 不构成跨平台 `PASS`。
+
+## 6. 手工验证
 
 - 启动桌面应用。
 - 选择 Doubao 或远程 HTTP ASR provider。

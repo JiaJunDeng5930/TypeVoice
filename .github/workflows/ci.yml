@@ -47,31 +47,8 @@ jobs:
         run: cargo test --locked --workspace -- --skip target_contract_
       - name: Prepare Linux FFmpeg toolchain
         run: cargo xtask toolchain ffmpeg --platform linux-x86_64
-      - name: Xtask quick verify
-        run: cargo xtask verify quick
-      - name: Target engine architecture contracts
-        id: target_engine_contracts
-        continue-on-error: true
-        run: cargo test --locked -p typevoice-engine target_contract_
-      - name: Target desktop hotkey contract
-        id: target_desktop_contracts
-        continue-on-error: true
-        run: cargo test --locked -p typevoice-desktop target_contract_t03_hotkey_edge_primary
-      - name: Target frontend architecture contracts
-        id: target_frontend_contracts
-        continue-on-error: true
-        working-directory: apps/desktop
-        run: npm run test:contracts
-      - name: Enforce target architecture contracts
-        if: always()
-        env:
-          ENGINE_OUTCOME: ${{ steps.target_engine_contracts.outcome }}
-          DESKTOP_OUTCOME: ${{ steps.target_desktop_contracts.outcome }}
-          FRONTEND_OUTCOME: ${{ steps.target_frontend_contracts.outcome }}
-        run: |
-          test "$ENGINE_OUTCOME" = success
-          test "$DESKTOP_OUTCOME" = success
-          test "$FRONTEND_OUTCOME" = success
+      - name: Xtask full verify
+        run: cargo xtask verify full
 
   insertion-linux:
     runs-on: ubuntu-latest
@@ -84,14 +61,20 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            at-spi2-core \
+            dbus-x11 \
             libglib2.0-dev \
             libgtk-3-dev \
             libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            patchelf
+            patchelf \
+            xauth \
+            xvfb
       - name: Linux insertion contract
-        run: cargo xtask verify insertion-contract
+        env:
+          TYPEVOICE_T23_ISOLATED: "1"
+        run: env -u WAYLAND_DISPLAY -u AT_SPI_BUS_ADDRESS GDK_BACKEND=x11 NO_AT_BRIDGE=0 dbus-run-session -- xvfb-run -a cargo xtask verify insertion-contract
 
   insertion-windows:
     runs-on: windows-latest
@@ -101,6 +84,9 @@ jobs:
         with:
           toolchain: stable
       - name: Windows insertion contract
+        env:
+          TYPEVOICE_T23_ISOLATED: "1"
+          TYPEVOICE_T23_WINDOWS_VM: "1"
         run: cargo xtask verify insertion-contract
 
   web:

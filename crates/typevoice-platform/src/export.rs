@@ -93,10 +93,10 @@ pub async fn auto_paste_text(target: &InsertionTarget, text: &str) -> Result<(),
 }
 
 #[cfg(test)]
-pub(crate) async fn native_input_contract_probe(text: &str) -> bool {
+pub(crate) async fn native_input_contract_probe(text: &str) -> Result<(), ExportError> {
     #[cfg(windows)]
     {
-        windows::native_input_contract_probe(text)
+        windows::native_input_contract_probe(text).await
     }
     #[cfg(target_os = "linux")]
     {
@@ -105,8 +105,192 @@ pub(crate) async fn native_input_contract_probe(text: &str) -> bool {
     #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = text;
-        false
+        Err(ExportError::new(
+            "E_EXPORT_NATIVE_CONTRACT_UNSUPPORTED",
+            "native input contract is only supported on Linux and Windows",
+        ))
     }
+}
+
+#[cfg(test)]
+const NATIVE_CONTRACT_ISOLATED_ENV: &str = "TYPEVOICE_T23_ISOLATED";
+#[cfg(test)]
+const NATIVE_CONTRACT_HELPER_ENV: &str = "TYPEVOICE_T23_HELPER";
+#[cfg(test)]
+const NATIVE_CONTRACT_TEXT_ENV: &str = "TYPEVOICE_T23_TEXT";
+#[cfg(test)]
+const NATIVE_CONTRACT_READY_ENV: &str = "TYPEVOICE_T23_READY_PATH";
+#[cfg(test)]
+const NATIVE_CONTRACT_SUCCESS_ENV: &str = "TYPEVOICE_T23_SUCCESS_PATH";
+#[cfg(all(test, windows))]
+const NATIVE_CONTRACT_WINDOWS_VM_ENV: &str = "TYPEVOICE_T23_WINDOWS_VM";
+
+#[cfg(test)]
+struct NativeContractChild {
+    child: std::process::Child,
+    ready_path: std::path::PathBuf,
+    success_path: std::path::PathBuf,
+    _temp: tempfile::TempDir,
+}
+
+#[cfg(test)]
+impl NativeContractChild {
+    fn spawn(test_name: &str, text: &str) -> Result<Self, ExportError> {
+        if std::env::var(NATIVE_CONTRACT_ISOLATED_ENV).as_deref() != Ok("1") {
+            return Err(ExportError::new(
+                "E_EXPORT_NATIVE_CONTRACT_NOT_ISOLATED",
+                format!(
+                    "set {NATIVE_CONTRACT_ISOLATED_ENV}=1 only inside an isolated native-input environment"
+                ),
+            ));
+        }
+        #[cfg(windows)]
+        if std::env::var(NATIVE_CONTRACT_WINDOWS_VM_ENV).as_deref() != Ok("1") {
+            return Err(ExportError::new(
+                "E_EXPORT_NATIVE_CONTRACT_NOT_ISOLATED",
+                format!(
+                    "Windows SendInput E2E requires explicit {NATIVE_CONTRACT_WINDOWS_VM_ENV}=1 for an isolated interactive VM"
+                ),
+            ));
+        }
+        let temp = tempfile::tempdir().map_err(|error| {
+            ExportError::new(
+                "E_EXPORT_NATIVE_CONTRACT_SETUP",
+                format!("create native input contract temp dir failed: {error}"),
+            )
+        })?;
+        let ready_path = temp.path().join("ready");
+        let success_path = temp.path().join("success");
+        let executable = std::env::current_exe().map_err(|error| {
+            ExportError::new(
+                "E_EXPORT_NATIVE_CONTRACT_SETUP",
+                format!("resolve current test executable failed: {error}"),
+            )
+        })?;
+        let child = std::process::Command::new(executable)
+            .args([
+                "--ignored",
+                "--exact",
+                test_name,
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(NATIVE_CONTRACT_HELPER_ENV, "1")
+            .env(NATIVE_CONTRACT_TEXT_ENV, text)
+            .env(NATIVE_CONTRACT_READY_ENV, &ready_path)
+            .env(NATIVE_CONTRACT_SUCCESS_ENV, &success_path)
+            .spawn()
+            .map_err(|error| {
+                ExportError::new(
+                    "E_EXPORT_NATIVE_CONTRACT_SETUP",
+                    format!("spawn native input target failed: {error}"),
+                )
+            })?;
+        Ok(Self {
+            child,
+            ready_path,
+            success_path,
+            _temp: temp,
+        })
+    }
+
+    #[cfg(windows)]
+    fn id(&self) -> u32 {
+        self.child.id()
+    }
+
+    async fn wait_ready(&mut self) -> Result<(), ExportError> {
+        self.wait_for_path(&self.ready_path.clone(), "target readiness")
+            .await
+    }
+
+    async fn wait_success(&mut self) -> Result<(), ExportError> {
+        self.wait_for_path(&self.success_path.clone(), "native text readback")
+            .await?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if let Some(status) = self.child.try_wait().map_err(|error| {
+                ExportError::new(
+                    "E_EXPORT_NATIVE_CONTRACT_CHILD",
+                    format!("query native input target failed: {error}"),
+                )
+            })? {
+                return if status.success() {
+                    Ok(())
+                } else {
+                    Err(ExportError::new(
+                        "E_EXPORT_NATIVE_CONTRACT_CHILD",
+                        format!("native input target exited with {status}"),
+                    ))
+                };
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(ExportError::new(
+                    "E_EXPORT_NATIVE_CONTRACT_TIMEOUT",
+                    "native input target did not exit after successful readback",
+                ));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
+    async fn wait_for_path(
+        &mut self,
+        path: &std::path::Path,
+        step: &str,
+    ) -> Result<(), ExportError> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            if path.is_file() {
+                return Ok(());
+            }
+            if let Some(status) = self.child.try_wait().map_err(|error| {
+                ExportError::new(
+                    "E_EXPORT_NATIVE_CONTRACT_CHILD",
+                    format!("query native input target failed: {error}"),
+                )
+            })? {
+                return Err(ExportError::new(
+                    "E_EXPORT_NATIVE_CONTRACT_CHILD",
+                    format!("native input target exited during {step} with {status}"),
+                ));
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(ExportError::new(
+                    "E_EXPORT_NATIVE_CONTRACT_TIMEOUT",
+                    format!("timed out waiting for {step}"),
+                ));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for NativeContractChild {
+    fn drop(&mut self) {
+        if self.child.try_wait().ok().flatten().is_none() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+}
+
+#[cfg(test)]
+fn native_contract_helper_config() -> (String, std::path::PathBuf, std::path::PathBuf) {
+    assert_eq!(
+        std::env::var(NATIVE_CONTRACT_HELPER_ENV).as_deref(),
+        Ok("1"),
+        "native input target helpers may only be launched by the T23 parent test"
+    );
+    let text = std::env::var(NATIVE_CONTRACT_TEXT_ENV).expect("T23 helper text");
+    let ready_path = std::env::var_os(NATIVE_CONTRACT_READY_ENV)
+        .map(std::path::PathBuf::from)
+        .expect("T23 helper ready path");
+    let success_path = std::env::var_os(NATIVE_CONTRACT_SUCCESS_ENV)
+        .map(std::path::PathBuf::from)
+        .expect("T23 helper success path");
+    (text, ready_path, success_path)
 }
 
 #[cfg(windows)]
@@ -116,12 +300,26 @@ fn utf16_code_units(text: &str) -> Vec<u16> {
 
 #[cfg(windows)]
 mod windows {
+    #[cfg(test)]
+    use super::{native_contract_helper_config, NativeContractChild};
     use super::{utf16_code_units, ExportError};
     use std::mem::{self, size_of};
+    #[cfg(test)]
+    use std::{fs, ptr, thread, time::Duration};
     use windows_sys::Win32::Foundation::{GetLastError, HWND};
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+    #[cfg(test)]
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, GetFocus, SetFocus, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+    };
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
+    };
+    #[cfg(test)]
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DestroyWindow, DispatchMessageW, GetWindowTextLengthW, GetWindowTextW,
+        PeekMessageW, ShowWindow, TranslateMessage, ES_AUTOVSCROLL, ES_MULTILINE, MSG, PM_REMOVE,
+        SW_SHOW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, IsWindow,
@@ -226,22 +424,125 @@ mod windows {
     }
 
     #[cfg(test)]
-    pub(super) fn native_input_contract_probe(text: &str) -> bool {
-        let calls = std::cell::Cell::new(0_u32);
-        let valid_unicode_input = std::cell::Cell::new(false);
-        let (expected, sent) = dispatch_unicode_inputs(text, |inputs| {
-            calls.set(calls.get() + 1);
-            valid_unicode_input.set(
-                !inputs.is_empty()
-                    && inputs.len() == super::utf16_code_units(text).len() * 2
-                    && inputs.iter().all(|input| {
-                        let keyboard = unsafe { input.Anonymous.ki };
-                        keyboard.wVk == 0 && keyboard.dwFlags & KEYEVENTF_UNICODE != 0
-                    }),
+    pub(super) async fn native_input_contract_probe(text: &str) -> Result<(), ExportError> {
+        let mut child =
+            NativeContractChild::spawn("export::windows::t23_native_input_target_helper", text)?;
+        child.wait_ready().await?;
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let target = loop {
+            if let Ok(target) = capture_insertion_target() {
+                if target.foreground_pid == child.id() && target.focus_pid == child.id() {
+                    break target;
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(ExportError::new(
+                    "E_EXPORT_NATIVE_CONTRACT_TIMEOUT",
+                    "isolated Win32 edit target did not become the focused insertion target",
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        if modifier_key_is_down() {
+            return Err(ExportError::new(
+                "E_EXPORT_NATIVE_CONTRACT_INPUT_STATE",
+                "isolated Windows input desktop has a pressed modifier key",
+            ));
+        }
+        super::auto_paste_text(&target, text).await?;
+        child.wait_success().await
+    }
+
+    #[cfg(test)]
+    fn modifier_key_is_down() -> bool {
+        [VK_SHIFT, VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN]
+            .into_iter()
+            .any(|key| unsafe { GetAsyncKeyState(i32::from(key)) } as u16 & 0x8000 != 0)
+    }
+
+    #[cfg(test)]
+    #[test]
+    #[ignore = "spawned by the isolated Windows T23 parent test"]
+    fn t23_native_input_target_helper() {
+        let (expected, ready_path, success_path) = native_contract_helper_config();
+        let class_name = "EDIT\0".encode_utf16().collect::<Vec<_>>();
+        let empty = [0_u16];
+        let hwnd = unsafe {
+            CreateWindowExW(
+                0,
+                class_name.as_ptr(),
+                empty.as_ptr(),
+                WS_OVERLAPPEDWINDOW | WS_VISIBLE | ES_MULTILINE as u32 | ES_AUTOVSCROLL as u32,
+                100,
+                100,
+                640,
+                240,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null(),
+            )
+        };
+        assert!(!hwnd.is_null(), "create isolated Win32 edit target");
+        unsafe {
+            ShowWindow(hwnd, SW_SHOW);
+        }
+
+        let focus_deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            pump_window_messages();
+            unsafe {
+                SetForegroundWindow(hwnd);
+                SetFocus(hwnd);
+            }
+            if unsafe { GetForegroundWindow() == hwnd && GetFocus() == hwnd } {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < focus_deadline,
+                "isolated Win32 edit target could not acquire foreground focus"
             );
-            inputs.len() as u32
-        });
-        calls.get() == 1 && expected == sent && valid_unicode_input.get()
+            thread::sleep(Duration::from_millis(20));
+        }
+        fs::write(&ready_path, b"ready").expect("write T23 ready marker");
+
+        let input_deadline = std::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            pump_window_messages();
+            let actual = read_window_text(hwnd).replace("\r\n", "\n");
+            if actual == expected {
+                fs::write(&success_path, b"success").expect("write T23 success marker");
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < input_deadline,
+                "Win32 edit target did not receive the expected Unicode text: {actual:?}"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        unsafe {
+            DestroyWindow(hwnd);
+        }
+    }
+
+    #[cfg(test)]
+    fn pump_window_messages() {
+        let mut message: MSG = unsafe { mem::zeroed() };
+        while unsafe { PeekMessageW(&mut message, ptr::null_mut(), 0, 0, PM_REMOVE) } != 0 {
+            unsafe {
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn read_window_text(hwnd: HWND) -> String {
+        let length = unsafe { GetWindowTextLengthW(hwnd) };
+        assert!(length >= 0, "read Win32 edit target length");
+        let mut buffer = vec![0_u16; length as usize + 1];
+        let copied = unsafe { GetWindowTextW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32) };
+        String::from_utf16_lossy(&buffer[..copied.max(0) as usize])
     }
 
     fn dispatch_unicode_inputs<Send>(text: &str, send: Send) -> (u32, u32)
@@ -323,10 +624,16 @@ mod windows {
 #[cfg(target_os = "linux")]
 mod linux {
     use super::ExportError;
+    #[cfg(test)]
+    use super::{native_contract_helper_config, NativeContractChild};
     use atspi::proxy::accessible::ObjectRefExt;
     use atspi::proxy::proxy_ext::ProxyExt;
     use atspi::{AccessibilityConnection, Interface, ObjectRefOwned, State};
+    #[cfg(test)]
+    use gtk::prelude::*;
     use std::{cmp, future::Future};
+    #[cfg(test)]
+    use std::{fs, time::Duration};
 
     const MAX_TRAVERSE_NODES: usize = 2048;
 
@@ -416,8 +723,8 @@ mod linux {
             Err(_) => 0,
         };
 
-        let ok = dispatch_editable_insert(insert_pos, text, |position, text, character_count| {
-            editable.insert_text(position, text, character_count)
+        let ok = dispatch_editable_insert(insert_pos, text, |position, text, byte_length| {
+            editable.insert_text(position, text, byte_length)
         })
         .await
         .map_err(|e| {
@@ -446,28 +753,94 @@ mod linux {
         Call: FnOnce(i32, &'a str, i32) -> CallFuture,
         CallFuture: Future<Output = Result<bool, CallError>>,
     {
-        call(insert_pos, text, utf8_char_count_i32(text)).await
+        call(insert_pos, text, utf8_byte_len_i32(text)).await
     }
 
-    fn utf8_char_count_i32(text: &str) -> i32 {
-        let n = text.chars().count();
+    fn utf8_byte_len_i32(text: &str) -> i32 {
+        let n = text.len();
         cmp::min(n, i32::MAX as usize) as i32
     }
 
     #[cfg(test)]
-    pub(super) async fn native_input_contract_probe(text: &str) -> bool {
-        let calls = std::cell::Cell::new(0_u32);
-        let observed = std::cell::RefCell::new(None);
-        let inserted = dispatch_editable_insert(7, text, |position, actual, character_count| {
-            calls.set(calls.get() + 1);
-            *observed.borrow_mut() = Some((position, actual.to_string(), character_count));
-            std::future::ready(Ok::<bool, ()>(true))
-        })
-        .await;
-        let expected_count = text.chars().count() as i32;
-        calls.get() == 1
-            && inserted == Ok(true)
-            && observed.borrow().as_ref() == Some(&(7, text.to_string(), expected_count))
+    #[test]
+    fn editable_text_length_uses_utf8_bytes() {
+        assert_eq!(utf8_byte_len_i32("TypeVoice 世界\n"), 17);
+    }
+
+    #[cfg(test)]
+    pub(super) async fn native_input_contract_probe(text: &str) -> Result<(), ExportError> {
+        let mut child =
+            NativeContractChild::spawn("export::linux::t23_native_input_target_helper", text)?;
+        child.wait_ready().await?;
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let target = loop {
+            match capture_insertion_target().await {
+                Ok(target) => break target,
+                Err(_) if std::time::Instant::now() < deadline => {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                Err(error) => {
+                    return Err(ExportError::new(
+                        "E_EXPORT_NATIVE_CONTRACT_TIMEOUT",
+                        format!(
+                            "isolated GTK target did not register with AT-SPI: {}",
+                            error.message
+                        ),
+                    ));
+                }
+            }
+        };
+        super::auto_paste_text(&target, text).await?;
+        child.wait_success().await
+    }
+
+    #[cfg(test)]
+    #[test]
+    #[ignore = "spawned by the isolated Linux T23 parent test"]
+    fn t23_native_input_target_helper() {
+        let (expected, ready_path, success_path) = native_contract_helper_config();
+        gtk::init().expect("initialize GTK for T23 target");
+        let window = gtk::Window::new(gtk::WindowType::Toplevel);
+        window.set_title("TypeVoice T23 isolated target");
+        window.set_default_size(640, 240);
+        let text_view = gtk::TextView::new();
+        window.add(&text_view);
+        window.show_all();
+        window.present();
+        text_view.grab_focus();
+        while gtk::events_pending() {
+            gtk::main_iteration();
+        }
+        fs::write(&ready_path, b"ready").expect("write T23 ready marker");
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        let success_marker = success_path.clone();
+        gtk::glib::timeout_add_local(Duration::from_millis(20), move || {
+            let actual = text_view
+                .buffer()
+                .and_then(|buffer| {
+                    buffer
+                        .text(&buffer.start_iter(), &buffer.end_iter(), true)
+                        .map(|text| text.to_string())
+                })
+                .unwrap_or_default();
+            if actual == expected {
+                fs::write(&success_marker, b"success").expect("write T23 success marker");
+                gtk::main_quit();
+                return gtk::glib::ControlFlow::Break;
+            }
+            if std::time::Instant::now() >= deadline {
+                eprintln!("T23 GTK readback mismatch: expected={expected:?}, actual={actual:?}");
+                gtk::main_quit();
+                return gtk::glib::ControlFlow::Break;
+            }
+            gtk::glib::ControlFlow::Continue
+        });
+        gtk::main();
+        assert!(
+            success_path.is_file(),
+            "GTK target did not receive the expected text through AT-SPI"
+        );
     }
 
     async fn find_focused_editable_object(
@@ -530,7 +903,7 @@ mod linux {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
     use super::utf16_code_units;
 

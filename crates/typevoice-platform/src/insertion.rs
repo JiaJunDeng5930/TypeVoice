@@ -163,15 +163,29 @@ mod tests {
 
     #[cfg(windows)]
     #[tokio::test]
+    #[ignore = "requires an isolated interactive Windows desktop"]
     async fn target_contract_t23_insertion_port_contract_windows() {
         assert_shared_insertion_port_contract().await;
-        assert!(export::native_input_contract_probe("TypeVoice 世界\n").await);
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            export::native_input_contract_probe("TypeVoice 世界\n"),
+        )
+        .await
+        .expect("native Windows input contract timed out")
+        .expect("native Windows input contract failed");
     }
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
+    #[ignore = "requires an isolated Linux display and accessibility bus"]
     async fn target_contract_t23_insertion_port_contract_linux() {
         assert_shared_insertion_port_contract().await;
-        assert!(export::native_input_contract_probe("TypeVoice 世界\n").await);
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            export::native_input_contract_probe("TypeVoice 世界\n"),
+        )
+        .await
+        .expect("native Linux input contract timed out")
+        .expect("native Linux input contract failed");
     }
 }

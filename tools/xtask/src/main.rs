@@ -792,8 +792,7 @@ fn run_verify_contracts(level: VerifyLevel, root: &Path, desktop_dir: &Path) -> 
 }
 
 fn run_counted_cargo_tests(cwd: &Path, label: &str, args: &[&str]) -> Result<usize> {
-    let mut list_args = args.to_vec();
-    list_args.extend(["--", "--list"]);
+    let list_args = cargo_test_list_args(args);
     let listing = run_output(cwd, "cargo", &list_args)?;
     let stdout = String::from_utf8_lossy(&listing.stdout);
     let stderr = String::from_utf8_lossy(&listing.stderr);
@@ -801,6 +800,19 @@ fn run_counted_cargo_tests(cwd: &Path, label: &str, args: &[&str]) -> Result<usi
     println!("INFO: {label} selected {count} test(s)");
     run_native(cwd, "cargo", args)?;
     Ok(count)
+}
+
+fn cargo_test_list_args<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    if let Some(separator) = args.iter().position(|arg| *arg == "--") {
+        let mut list_args = args[..=separator].to_vec();
+        list_args.push("--list");
+        list_args.extend_from_slice(&args[separator + 1..]);
+        list_args
+    } else {
+        let mut list_args = args.to_vec();
+        list_args.extend(["--", "--list"]);
+        list_args
+    }
 }
 
 fn validate_cargo_test_listing(
@@ -881,7 +893,15 @@ fn run_insertion_contract_gate() -> Result<()> {
         if spec.platform != current {
             continue;
         }
-        let args = ["test", "--locked", "-p", spec.package, spec.filter];
+        let args = [
+            "test",
+            "--locked",
+            "-p",
+            spec.package,
+            spec.filter,
+            "--",
+            "--ignored",
+        ];
         match run_counted_cargo_tests(&root, spec.filter, &args) {
             Ok(_) => states[index] = PlatformGateState::Passed,
             Err(error) => {
@@ -2319,6 +2339,31 @@ mod tests {
             .expect("nonzero contract selection");
 
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn contract_runner_lists_ignored_tests_without_executing_them() {
+        let args = [
+            "test",
+            "-p",
+            "typevoice-platform",
+            "target_contract_t23",
+            "--",
+            "--ignored",
+        ];
+
+        assert_eq!(
+            cargo_test_list_args(&args),
+            [
+                "test",
+                "-p",
+                "typevoice-platform",
+                "target_contract_t23",
+                "--",
+                "--list",
+                "--ignored",
+            ]
+        );
     }
 
     #[test]
