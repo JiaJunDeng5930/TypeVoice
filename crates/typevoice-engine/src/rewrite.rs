@@ -1,5 +1,6 @@
 use std::time::Instant;
 
+use tokio_util::sync::CancellationToken;
 use typevoice_core::workflow::{ContextPlan, RewritePlan};
 
 pub use typevoice_core::workflow::RewriteResult;
@@ -18,6 +19,7 @@ pub async fn rewrite_text_with_plan(
     req: RewriteTextRequest,
     plan: &RewritePlan,
     context: &ContextPlan,
+    token: &CancellationToken,
 ) -> PortResult<RewriteResult> {
     let data_dir =
         data_dir::data_dir().map_err(|e| PortError::from_message("E_DATA_DIR", e.to_string()))?;
@@ -102,9 +104,16 @@ pub async fn rewrite_text_with_plan(
             glossary: glossary_ref,
             policy: &policy,
         },
+        token,
     )
     .await
-    .map_err(|e| PortError::from_message("E_LLM_FAILED", e.to_string()))?;
+    .map_err(|error| {
+        if token.is_cancelled() || error.to_string().starts_with("E_CANCELLED:") {
+            PortError::new("E_CANCELLED", "run cancelled")
+        } else {
+            PortError::from_message("E_LLM_FAILED", error.to_string())
+        }
+    })?;
     Ok(RewriteResult {
         transcript_id: task_id.to_string(),
         final_text,

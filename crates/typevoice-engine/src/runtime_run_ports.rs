@@ -3,9 +3,11 @@ use std::{
         atomic::{AtomicU32, AtomicUsize, Ordering},
         Arc, Mutex,
     },
+    task::{Context, Poll},
     time::{Duration, Instant},
 };
 
+use futures_util::FutureExt;
 use tokio_util::sync::CancellationToken;
 use typevoice_core::{
     context_pack::{ContextBudget, ContextSnapshot},
@@ -72,6 +74,7 @@ impl RunPortsFactory for RuntimeRunPortsFactory {
             state: Arc::new(Mutex::new(RuntimePortState::default())),
             operations: OperationTracker::default(),
             effects: EffectTracker::default(),
+            children: RunChildRegistry::default(),
         })
     }
 }
@@ -100,6 +103,7 @@ struct RuntimeRunPorts {
     state: Arc<Mutex<RuntimePortState>>,
     operations: OperationTracker,
     effects: EffectTracker,
+    children: RunChildRegistry,
 }
 
 #[derive(Clone, Default)]
@@ -154,9 +158,92 @@ struct OperationLease {
     idle: Arc<tokio::sync::Notify>,
 }
 
-struct TrackedOutput<T> {
-    value: T,
-    lease: OperationLease,
+#[derive(Clone, Default)]
+struct RunChildRegistry {
+    task_handles: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+    thread_handles: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
+}
+
+impl RunChildRegistry {
+    fn spawn_blocking<T, F>(
+        &self,
+        operations: &OperationTracker,
+        join_error_code: &'static str,
+        operation: F,
+    ) -> PortFuture<T>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> Result<T, WorkflowError> + Send + 'static,
+    {
+        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+        let lease = operations.begin();
+        let handle = tokio::task::spawn_blocking(move || {
+            let result = operation();
+            drop(lease);
+            let _ = result_tx.send(result);
+        });
+        self.task_handles.lock().unwrap().push(handle);
+        Box::pin(async move {
+            result_rx.await.map_err(|_| {
+                WorkflowError::new(join_error_code, "run child exited without a result")
+            })?
+        })
+    }
+
+    fn track_thread(&self, handle: std::thread::JoinHandle<()>) {
+        self.thread_handles.lock().unwrap().push(handle);
+    }
+
+    fn abort_tasks(&self) {
+        for handle in self.task_handles.lock().unwrap().iter() {
+            handle.abort();
+        }
+    }
+
+    fn reap_finished(&self) -> bool {
+        let finished_tasks = {
+            let mut handles = self.task_handles.lock().unwrap();
+            let mut finished = Vec::new();
+            let mut index = 0;
+            while index < handles.len() {
+                if handles[index].is_finished() {
+                    finished.push(handles.swap_remove(index));
+                } else {
+                    index += 1;
+                }
+            }
+            finished
+        };
+        for mut handle in finished_tasks {
+            let mut context = Context::from_waker(futures_util::task::noop_waker_ref());
+            if matches!(handle.poll_unpin(&mut context), Poll::Pending) {
+                self.task_handles.lock().unwrap().push(handle);
+            }
+        }
+
+        let finished_threads = {
+            let mut handles = self.thread_handles.lock().unwrap();
+            let mut finished = Vec::new();
+            let mut index = 0;
+            while index < handles.len() {
+                if handles[index].is_finished() {
+                    finished.push(handles.swap_remove(index));
+                } else {
+                    index += 1;
+                }
+            }
+            finished
+        };
+        for handle in finished_threads {
+            let _ = handle.join();
+        }
+        self.is_empty()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.task_handles.lock().unwrap().is_empty()
+            && self.thread_handles.lock().unwrap().is_empty()
+    }
 }
 
 impl Drop for OperationLease {
@@ -182,7 +269,7 @@ impl RunPorts for RuntimeRunPorts {
         let target_rx = if self.seed.insertion.auto_paste {
             let lease = self.operations.begin();
             let (target_tx, target_rx) = std::sync::mpsc::sync_channel(1);
-            std::thread::Builder::new()
+            let worker = std::thread::Builder::new()
                 .name(format!("insertion_target_{}", self.run_id))
                 .spawn(move || {
                     let _lease = lease;
@@ -200,6 +287,7 @@ impl RunPorts for RuntimeRunPorts {
                     let _ = target_tx.send(result);
                 })
                 .map_err(|error| WorkflowError::new("E_EXPORT_TARGET_WORKER", error.to_string()))?;
+            self.children.track_thread(worker);
             Some(target_rx)
         } else {
             None
@@ -222,7 +310,7 @@ impl RunPorts for RuntimeRunPorts {
         let pending_session = match (actor.as_ref(), streaming_config.clone()) {
             (Some(actor), Some(config)) => Some(
                 actor
-                    .start_session_pending(&self.run_id, config)
+                    .start_session_pending(&self.run_id, config, token.clone())
                     .map_err(|error| workflow_error("E_STREAMING_START", error))?,
             ),
             _ => None,
@@ -237,7 +325,7 @@ impl RunPorts for RuntimeRunPorts {
         let worker_token = start_token.clone();
         let lease = self.operations.begin();
         let (start_tx, start_rx) = std::sync::mpsc::sync_channel(1);
-        std::thread::Builder::new()
+        let recording_worker = std::thread::Builder::new()
             .name(format!("recording_begin_{}", self.run_id))
             .spawn(move || {
                 let _lease = lease;
@@ -252,6 +340,7 @@ impl RunPorts for RuntimeRunPorts {
                 let _ = start_tx.send(result);
             })
             .map_err(|error| WorkflowError::new("E_RECORD_START_WORKER", error.to_string()))?;
+        self.children.track_thread(recording_worker);
         let remaining = begin_deadline.saturating_sub(begin_started.elapsed());
         let session_id = match start_rx.recv_timeout(remaining) {
             Ok(result) => result.map_err(|error| WorkflowError::new(&error.code, error.message))?,
@@ -330,9 +419,10 @@ impl RunPorts for RuntimeRunPorts {
         let task_manager = self.task_manager.clone();
         let state = self.state.clone();
         let operations = self.operations.clone();
+        let children = self.children.clone();
         let config = context_config(&self.seed.context, self.seed.rewrite.supports_vision);
         let cancellation = self.state.lock().unwrap().cancellation.clone();
-        Box::pin(async move {
+        children.spawn_blocking(&operations, "E_CONTEXT_JOIN", move || {
             let cancellation = cancellation.ok_or_else(|| {
                 WorkflowError::new(
                     "E_RUN_CANCELLATION_MISSING",
@@ -340,14 +430,9 @@ impl RunPorts for RuntimeRunPorts {
                 )
             })?;
             let dir = data_dir::data_dir().map_err(|error| workflow_error("E_DATA_DIR", error))?;
-            let lease = operations.begin();
-            let snapshot = tauri::async_runtime::spawn_blocking(move || {
-                let _lease = lease;
-                task_manager.capture_hotkey_context(&dir, &config, &cancellation)
-            })
-            .await
-            .map_err(|error| WorkflowError::new("E_CONTEXT_JOIN", error.to_string()))?
-            .map_err(|error| workflow_error("E_CONTEXT_CAPTURE", error))?;
+            let snapshot = task_manager
+                .capture_hotkey_context(&dir, &config, &cancellation)
+                .map_err(|error| workflow_error("E_CONTEXT_CAPTURE", error))?;
             let mut guard = state.lock().unwrap();
             guard.context = Some(snapshot);
             Ok(())
@@ -358,7 +443,8 @@ impl RunPorts for RuntimeRunPorts {
         let recording = self.recording.clone();
         let state = self.state.clone();
         let operations = self.operations.clone();
-        Box::pin(async move {
+        let children = self.children.clone();
+        children.spawn_blocking(&operations, "E_RECORD_STOP_JOIN", move || {
             let session_id = state
                 .lock()
                 .unwrap()
@@ -374,14 +460,9 @@ impl RunPorts for RuntimeRunPorts {
                 )
             })?;
             let stop_recording = recording.clone();
-            let lease = operations.begin();
-            let outcome = tauri::async_runtime::spawn_blocking(move || {
-                let _lease = lease;
-                stop_recording.stop_recording(&session_id, &cancellation)
-            })
-            .await
-            .map_err(|error| WorkflowError::new("E_RECORD_STOP_JOIN", error.to_string()))?
-            .map_err(|error| WorkflowError::new(&error.code, error.message))?;
+            let outcome = stop_recording
+                .stop_recording(&session_id, &cancellation)
+                .map_err(|error| WorkflowError::new(&error.code, error.message))?;
             match outcome {
                 RecordingStopOutcome::Completed(asset) => {
                     let asset = recording.take_asset(&asset.asset_id).unwrap_or(asset);
@@ -407,29 +488,31 @@ impl RunPorts for RuntimeRunPorts {
         let transcriber = self.transcriber.clone();
         let state = self.state.clone();
         let operations = self.operations.clone();
-        Box::pin(async move {
+        let children = self.children.clone();
+        let cancellation = self.state.lock().unwrap().cancellation.clone();
+        children.spawn_blocking(&operations, "E_PREPROCESS_JOIN", move || {
             let asset = state.lock().unwrap().asset.clone().ok_or_else(|| {
                 WorkflowError::new("E_RECORD_ASSET_MISSING", "recorded asset is missing")
             })?;
-            let lease = operations.begin();
-            let prepare = tauri::async_runtime::spawn(async move {
-                transcriber
-                    .prepare_audio(TranscriptionInput {
+            let cancellation = cancellation.ok_or_else(|| {
+                WorkflowError::new(
+                    "E_RUN_CANCELLATION_MISSING",
+                    "run cancellation token is missing",
+                )
+            })?;
+            let prepared = transcriber
+                .prepare_audio(
+                    TranscriptionInput {
                         task_id: Some(run_id),
                         input_path: asset.output_path,
                         record_elapsed_ms: asset.record_elapsed_ms,
                         record_label: "ffmpeg".to_string(),
-                    })
-                    .await
-                    .map(|value| TrackedOutput { value, lease })
-            });
-            let tracked = prepare
-                .await
-                .map_err(|error| WorkflowError::new("E_PREPROCESS_JOIN", error.to_string()))?
+                    },
+                    cancellation,
+                )
                 .map_err(|error| WorkflowError::new(&error.code, error.message))?;
-            let elapsed = tracked.value.preprocess_ms();
-            state.lock().unwrap().prepared = Some(tracked.value);
-            drop(tracked.lease);
+            let elapsed = prepared.preprocess_ms();
+            state.lock().unwrap().prepared = Some(prepared);
             Ok(elapsed)
         })
     }
@@ -440,33 +523,34 @@ impl RunPorts for RuntimeRunPorts {
         let transcriber = self.transcriber.clone();
         let state = self.state.clone();
         let operations = self.operations.clone();
-        Box::pin(async move {
-            if let Some(actor) = actor {
-                let task_id = run_id.clone();
-                let lease = operations.begin();
-                return tauri::async_runtime::spawn_blocking(move || {
-                    let _lease = lease;
-                    actor.finish_session(&task_id)
-                })
-                .await
-                .map_err(|error| WorkflowError::new("E_STREAMING_FINISH_JOIN", error.to_string()))?
-                .map_err(|error| workflow_error("E_STREAMING_TRANSCRIBE_FINISH", error));
-            }
+        let children = self.children.clone();
+        if let Some(actor) = actor {
+            let task_id = run_id.clone();
+            return children.spawn_blocking(&operations, "E_STREAMING_FINISH_JOIN", move || {
+                actor
+                    .finish_session(&task_id)
+                    .map_err(|error| workflow_error("E_STREAMING_TRANSCRIBE_FINISH", error))
+            });
+        }
 
-            let prepared = state.lock().unwrap().prepared.take().ok_or_else(|| {
-                WorkflowError::new(
-                    "E_PREPROCESSED_AUDIO_MISSING",
-                    "preprocessed transcription input is missing",
-                )
-            })?;
-            let lease = operations.begin();
-            tauri::async_runtime::spawn(async move {
-                let _lease = lease;
-                transcriber.transcribe_prepared(prepared).await
-            })
-            .await
-            .map_err(|error| WorkflowError::new("E_TRANSCRIBE_JOIN", error.to_string()))?
-            .map_err(|error| WorkflowError::new(&error.code, error.message))
+        let prepared = match state.lock().unwrap().prepared.take() {
+            Some(prepared) => prepared,
+            None => {
+                return Box::pin(async {
+                    Err(WorkflowError::new(
+                        "E_PREPROCESSED_AUDIO_MISSING",
+                        "preprocessed transcription input is missing",
+                    ))
+                });
+            }
+        };
+        let lease = operations.begin();
+        Box::pin(async move {
+            let _lease = lease;
+            transcriber
+                .transcribe_prepared(prepared)
+                .await
+                .map_err(|error| WorkflowError::new(&error.code, error.message))
         })
     }
 
@@ -479,8 +563,16 @@ impl RunPorts for RuntimeRunPorts {
         let context_plan = self.seed.context.clone();
         let context = self.state.lock().unwrap().context.clone();
         let operations = self.operations.clone();
+        let cancellation = self.state.lock().unwrap().cancellation.clone();
+        let lease = operations.begin();
         Box::pin(async move {
-            let _lease = operations.begin();
+            let _lease = lease;
+            let cancellation = cancellation.ok_or_else(|| {
+                WorkflowError::new(
+                    "E_RUN_CANCELLATION_MISSING",
+                    "run cancellation token is missing",
+                )
+            })?;
             rewrite::rewrite_text_with_plan(
                 context,
                 RewriteTextRequest {
@@ -489,6 +581,7 @@ impl RunPorts for RuntimeRunPorts {
                 },
                 &rewrite_plan,
                 &context_plan,
+                &cancellation,
             )
             .await
             .map_err(|error| WorkflowError::new(&error.code, error.message))
@@ -520,7 +613,8 @@ impl RunPorts for RuntimeRunPorts {
         let run_id = self.run_id.clone();
         let operations = self.operations.clone();
         let effects = self.effects.clone();
-        Box::pin(async move {
+        let children = self.children.clone();
+        children.spawn_blocking(&operations, "E_HISTORY_JOIN", move || {
             let dir = data_dir::data_dir().map_err(|error| workflow_error("E_DATA_DIR", error))?;
             let metrics = result.metrics.clone().unwrap_or_default();
             let rewritten_text = if result.final_text != result.asr_text {
@@ -541,37 +635,24 @@ impl RunPorts for RuntimeRunPorts {
                 preprocess_ms: metrics.preprocess_ms as i64,
                 asr_ms: metrics.asr_ms as i64,
             };
-            let lease = operations.begin();
-            tauri::async_runtime::spawn_blocking(move || {
-                let _lease = lease;
-                let result = history::append(&dir.join("history.sqlite3"), &item);
-                if result.is_ok() {
-                    effects.history_commit_count.store(1, Ordering::Release);
-                }
-                result
-            })
-            .await
-            .map_err(|error| WorkflowError::new("E_HISTORY_JOIN", error.to_string()))?
-            .map_err(|error| workflow_error("E_HISTORY_APPEND", error))
+            let result = history::append(&dir.join("history.sqlite3"), &item);
+            if result.is_ok() {
+                effects.history_commit_count.store(1, Ordering::Release);
+            }
+            result.map_err(|error| workflow_error("E_HISTORY_APPEND", error))
         })
     }
 
     fn copy_text(&self, text: String) -> PortFuture<()> {
         let operations = self.operations.clone();
         let effects = self.effects.clone();
-        Box::pin(async move {
-            let lease = operations.begin();
-            tauri::async_runtime::spawn_blocking(move || {
-                let _lease = lease;
-                let result = export::copy_text_to_clipboard(&text);
-                if result.is_ok() {
-                    effects.copy_count.store(1, Ordering::Release);
-                }
-                result
-            })
-            .await
-            .map_err(|error| WorkflowError::new("E_EXPORT_COPY_JOIN", error.to_string()))?
-            .map_err(|error| WorkflowError::new(&error.code, error.message))
+        let children = self.children.clone();
+        children.spawn_blocking(&operations, "E_EXPORT_COPY_JOIN", move || {
+            let result = export::copy_text_to_clipboard(&text);
+            if result.is_ok() {
+                effects.copy_count.store(1, Ordering::Release);
+            }
+            result.map_err(|error| WorkflowError::new(&error.code, error.message))
         })
     }
 
@@ -603,26 +684,33 @@ impl RunPorts for RuntimeRunPorts {
     }
 
     fn shutdown(&self) -> PortFuture<bool> {
-        self.cleanup(false)
+        self.cleanup(ShutdownMode::Graceful)
     }
 
     fn force_shutdown(&self) -> PortFuture<bool> {
-        self.cleanup(true)
+        self.cleanup(ShutdownMode::Force)
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ShutdownMode {
+    Graceful,
+    Force,
+}
+
 impl RuntimeRunPorts {
-    fn cleanup(&self, wait_for_operations: bool) -> PortFuture<bool> {
+    fn cleanup(&self, mode: ShutdownMode) -> PortFuture<bool> {
         let run_id = self.run_id.clone();
         let recording = self.recording.clone();
         let transcriber = self.transcriber.clone();
         let actor = self.actor.lock().unwrap().clone();
         let state = self.state.clone();
         let operations = self.operations.clone();
+        let children = self.children.clone();
         Box::pin(async move {
             {
                 let mut guard = state.lock().unwrap();
-                if guard.shutdown_complete && operations.is_idle() {
+                if guard.shutdown_complete && operations.is_idle() && children.is_empty() {
                     return Ok(true);
                 }
                 if guard.cleanup_in_progress {
@@ -631,6 +719,12 @@ impl RuntimeRunPorts {
                 guard.cleanup_in_progress = true;
             }
             let _attempt = CleanupAttempt::new(state.clone());
+            if let Some(cancellation) = state.lock().unwrap().cancellation.clone() {
+                cancellation.cancel();
+            }
+            if mode == ShutdownMode::Force {
+                children.abort_tasks();
+            }
             let released = run_cleanup_sweep(
                 &run_id,
                 &recording,
@@ -638,11 +732,15 @@ impl RuntimeRunPorts {
                 actor.as_ref(),
                 &state,
                 &operations,
+                &children,
             )
             .await?;
-            if !wait_for_operations {
+            if mode == ShutdownMode::Graceful {
                 if !released || !operations.is_idle() {
                     return Ok(false);
+                }
+                while !children.reap_finished() {
+                    tokio::task::yield_now().await;
                 }
                 state.lock().unwrap().shutdown_complete = true;
                 return Ok(true);
@@ -650,6 +748,9 @@ impl RuntimeRunPorts {
             if !operations.is_idle() {
                 operations.wait_idle().await;
             }
+            while !children.reap_finished() {
+                tokio::task::yield_now().await;
+            }
             let released = run_cleanup_sweep(
                 &run_id,
                 &recording,
@@ -657,9 +758,16 @@ impl RuntimeRunPorts {
                 actor.as_ref(),
                 &state,
                 &operations,
+                &children,
             )
             .await?;
-            if released && operations.is_idle() {
+            if !operations.is_idle() {
+                operations.wait_idle().await;
+            }
+            while !children.reap_finished() {
+                tokio::task::yield_now().await;
+            }
+            if released && operations.is_idle() && children.is_empty() {
                 state.lock().unwrap().shutdown_complete = true;
                 Ok(true)
             } else {
@@ -692,74 +800,73 @@ async fn run_cleanup_sweep(
     actor: Option<&TranscriptionActor>,
     state: &Arc<Mutex<RuntimePortState>>,
     operations: &OperationTracker,
+    children: &RunChildRegistry,
 ) -> Result<bool, WorkflowError> {
     let run_id = run_id.to_string();
     let recording = recording.clone();
     let transcriber = transcriber.clone();
     let actor = actor.cloned();
     let state = state.clone();
-    let lease = operations.begin();
-    tauri::async_runtime::spawn_blocking(move || {
-        let _lease = lease;
-        let (session_id, asset, mut prepared) = {
-            let mut guard = state.lock().unwrap();
-            (
-                guard.recording_session_id.take(),
-                guard.asset.take(),
-                guard.prepared.take(),
-            )
-        };
-        let mut released = recording.abort_recording(session_id).is_ok();
-        if transcriber.cancel(Some(&run_id)).is_err() {
-            released = false;
-        }
-        if let Some(actor) = actor {
-            let _ = actor.cancel_session(&run_id);
-            if actor.shutdown().is_err() {
+    children
+        .spawn_blocking(operations, "E_CLEANUP_JOIN", move || {
+            let (session_id, asset, mut prepared) = {
+                let mut guard = state.lock().unwrap();
+                (
+                    guard.recording_session_id.take(),
+                    guard.asset.take(),
+                    guard.prepared.take(),
+                )
+            };
+            let mut released = recording.abort_recording(session_id).is_ok();
+            if transcriber.cancel(Some(&run_id)).is_err() {
                 released = false;
             }
-        }
-        let mut registry_assets = recording.take_assets_for_task(&run_id);
-        let data_dir = data_dir::data_dir().ok();
-        if let Some(dir) = data_dir.as_ref() {
-            for asset in registry_assets.drain(..) {
-                if pipeline::cleanup_input_audio_artifact(&asset.output_path, dir).is_err() {
+            if let Some(actor) = actor {
+                let _ = actor.cancel_session(&run_id);
+                if actor.shutdown().is_err() {
+                    released = false;
+                }
+            }
+            let mut registry_assets = recording.take_assets_for_task(&run_id);
+            let data_dir = data_dir::data_dir().ok();
+            if let Some(dir) = data_dir.as_ref() {
+                for asset in registry_assets.drain(..) {
+                    if pipeline::cleanup_input_audio_artifact(&asset.output_path, dir).is_err() {
+                        recording.restore_asset(asset);
+                        released = false;
+                    }
+                }
+                if let Some(asset) = asset {
+                    if pipeline::cleanup_input_audio_artifact(&asset.output_path, dir).is_err() {
+                        state.lock().unwrap().asset = Some(asset);
+                        released = false;
+                    }
+                }
+                if pipeline::cleanup_preprocess_audio_artifact(dir, &run_id).is_err() {
+                    released = false;
+                }
+            } else {
+                for asset in registry_assets {
                     recording.restore_asset(asset);
-                    released = false;
                 }
-            }
-            if let Some(asset) = asset {
-                if pipeline::cleanup_input_audio_artifact(&asset.output_path, dir).is_err() {
+                if let Some(asset) = asset {
                     state.lock().unwrap().asset = Some(asset);
+                }
+                released = false;
+            }
+            if let Some(prepared) = prepared.as_mut() {
+                if prepared.cleanup().is_err() {
                     released = false;
                 }
             }
-            if pipeline::cleanup_preprocess_audio_artifact(dir, &run_id).is_err() {
-                released = false;
+            if !released {
+                if let Some(prepared) = prepared {
+                    state.lock().unwrap().prepared = Some(prepared);
+                }
             }
-        } else {
-            for asset in registry_assets {
-                recording.restore_asset(asset);
-            }
-            if let Some(asset) = asset {
-                state.lock().unwrap().asset = Some(asset);
-            }
-            released = false;
-        }
-        if let Some(prepared) = prepared.as_mut() {
-            if prepared.cleanup().is_err() {
-                released = false;
-            }
-        }
-        if !released {
-            if let Some(prepared) = prepared {
-                state.lock().unwrap().prepared = Some(prepared);
-            }
-        }
-        released
-    })
-    .await
-    .map_err(|error| WorkflowError::new("E_CLEANUP_JOIN", error.to_string()))
+            Ok(released)
+        })
+        .await
 }
 
 fn context_config(plan: &ContextPlan, supports_vision: bool) -> context_capture::ContextConfig {
@@ -822,6 +929,102 @@ mod tests {
                 .expect("tracker reaches idle");
             release.join().expect("lease thread");
             assert!(tracker.is_idle());
+        });
+    }
+
+    #[test]
+    fn dropped_port_future_keeps_blocking_child_owned_until_cancellation_and_join() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let tracker = OperationTracker::default();
+            let children = RunChildRegistry::default();
+            let token = CancellationToken::new();
+            let child_token = token.clone();
+            let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let child_started = started.clone();
+            let child_finished = finished.clone();
+            let result = children.spawn_blocking(&tracker, "E_TEST_CHILD", move || {
+                child_started.store(true, Ordering::Release);
+                while !child_token.is_cancelled() {
+                    std::thread::yield_now();
+                }
+                child_finished.store(true, Ordering::Release);
+                Ok(())
+            });
+            tokio::time::timeout(Duration::from_secs(1), async {
+                while !started.load(Ordering::Acquire) {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("blocking child starts");
+
+            drop(result);
+            token.cancel();
+            children.abort_tasks();
+            tokio::time::timeout(Duration::from_secs(1), tracker.wait_idle())
+                .await
+                .expect("cancelled child releases its operation lease");
+            while !children.reap_finished() {
+                tokio::task::yield_now().await;
+            }
+
+            assert!(finished.load(Ordering::Acquire));
+            assert!(tracker.is_idle());
+            assert!(children.is_empty());
+        });
+    }
+
+    #[test]
+    fn force_abort_never_claims_a_running_blocking_child_was_released() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let tracker = OperationTracker::default();
+            let children = RunChildRegistry::default();
+            let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let child_started = started.clone();
+            let child_release = release.clone();
+            let result = children.spawn_blocking(&tracker, "E_TEST_CHILD", move || {
+                child_started.store(true, Ordering::Release);
+                while !child_release.load(Ordering::Acquire) {
+                    std::thread::yield_now();
+                }
+                Ok(())
+            });
+            tokio::time::timeout(Duration::from_secs(1), async {
+                while !started.load(Ordering::Acquire) {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("blocking child starts");
+
+            drop(result);
+            children.abort_tasks();
+            assert!(
+                tokio::time::timeout(Duration::from_millis(10), tracker.wait_idle())
+                    .await
+                    .is_err(),
+                "abort cannot prove that an already-running blocking child exited"
+            );
+            assert!(!children.reap_finished());
+
+            release.store(true, Ordering::Release);
+            tokio::time::timeout(Duration::from_secs(1), tracker.wait_idle())
+                .await
+                .expect("released blocking child settles");
+            while !children.reap_finished() {
+                tokio::task::yield_now().await;
+            }
+            assert!(children.is_empty());
         });
     }
 }

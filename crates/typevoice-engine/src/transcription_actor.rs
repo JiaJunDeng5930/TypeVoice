@@ -54,6 +54,7 @@ enum ActorMessage {
     Start {
         task_id: String,
         config: StreamingSessionConfig,
+        token: CancellationToken,
         ack: mpsc::Sender<StartAck>,
     },
     AudioChunk {
@@ -128,6 +129,7 @@ impl TranscriptionActor {
                         ActorMessage::Start {
                             task_id,
                             config,
+                            token,
                             ack,
                         } => {
                             if let Some(mut active) = session.take() {
@@ -136,14 +138,12 @@ impl TranscriptionActor {
                                 started_for_thread.lock().unwrap().remove(&stale_task_id);
                                 cancel_tokens_for_thread.lock().unwrap().remove(&stale_task_id);
                             }
-                            match ActorSession::start(task_id.clone(), config, &mailbox) {
+                            match ActorSession::start(task_id.clone(), config, token, &mailbox) {
                                 Ok(next) => {
-                                    if let Some(token) = next.cancel_token() {
-                                        cancel_tokens_for_thread
-                                            .lock()
-                                            .unwrap()
-                                            .insert(task_id.clone(), token);
-                                    }
+                                    cancel_tokens_for_thread
+                                        .lock()
+                                        .unwrap()
+                                        .insert(task_id.clone(), next.cancel_token());
                                     started_for_thread.lock().unwrap().insert(task_id.clone());
                                     session = Some(next);
                                     let _ = ack.send(Ok(()));
@@ -263,20 +263,27 @@ impl TranscriptionActor {
         })
     }
 
-    pub fn start_session(&self, task_id: &str, config: StreamingSessionConfig) -> Result<()> {
-        self.start_session_pending(task_id, config)?.wait()
+    pub fn start_session(
+        &self,
+        task_id: &str,
+        config: StreamingSessionConfig,
+        token: CancellationToken,
+    ) -> Result<()> {
+        self.start_session_pending(task_id, config, token)?.wait()
     }
 
     pub fn start_session_pending(
         &self,
         task_id: &str,
         config: StreamingSessionConfig,
+        token: CancellationToken,
     ) -> Result<PendingSessionStart> {
         let (ack_tx, ack_rx) = mpsc::channel::<StartAck>();
         self.tx
             .send(ActorMessage::Start {
                 task_id: task_id.to_string(),
                 config,
+                token,
                 ack: ack_tx,
             })
             .map_err(|e| anyhow!("E_STREAMING_ACTOR_SEND: {e}"))?;
@@ -375,18 +382,21 @@ struct ActorSession {
     started_at: Instant,
     text: String,
     doubao: Option<DoubaoSessionHandle>,
+    cancel: CancellationToken,
 }
 
 impl ActorSession {
     fn start(
         task_id: String,
         config: StreamingSessionConfig,
+        cancel: CancellationToken,
         mailbox: &UiEventMailbox,
     ) -> Result<Self> {
         let doubao = if config.provider == StreamingProviderKind::Doubao {
             Some(DoubaoSessionHandle::start(
                 task_id.clone(),
                 mailbox.clone(),
+                cancel.clone(),
             )?)
         } else {
             None
@@ -403,6 +413,7 @@ impl ActorSession {
             started_at: Instant::now(),
             text: String::new(),
             doubao,
+            cancel,
         })
     }
 
@@ -462,13 +473,14 @@ impl ActorSession {
     }
 
     fn cancel(&mut self) {
+        self.cancel.cancel();
         if let Some(doubao) = self.doubao.take() {
             doubao.cancel();
         }
     }
 
-    fn cancel_token(&self) -> Option<CancellationToken> {
-        self.doubao.as_ref().map(|handle| handle.cancel.clone())
+    fn cancel_token(&self) -> CancellationToken {
+        self.cancel.clone()
     }
 }
 
@@ -502,10 +514,9 @@ enum DoubaoCommand {
 }
 
 impl DoubaoSessionHandle {
-    fn start(task_id: String, mailbox: UiEventMailbox) -> Result<Self> {
+    fn start(task_id: String, mailbox: UiEventMailbox, cancel: CancellationToken) -> Result<Self> {
         let creds = doubao_asr::load_credentials()?;
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let cancel = CancellationToken::new();
         let thread_cancel = cancel.clone();
         let join = std::thread::Builder::new()
             .name("doubao_asr_session".to_string())
@@ -548,8 +559,8 @@ impl DoubaoSessionHandle {
 
 impl Drop for DoubaoSessionHandle {
     fn drop(&mut self) {
-        self.cancel.cancel();
         if let Some(join) = self.join.take() {
+            self.cancel.cancel();
             let _ = join.join();
         }
     }
@@ -894,17 +905,68 @@ mod tests {
     }
 
     #[test]
+    fn completed_doubao_session_does_not_cancel_the_run_token() {
+        for result in [Ok("done".to_string()), Err(anyhow!("provider failed"))] {
+            let run_token = CancellationToken::new();
+            let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+            let join = std::thread::spawn(move || result);
+            let session = DoubaoSessionHandle {
+                tx,
+                cancel: run_token.clone(),
+                join: Some(join),
+            };
+
+            let _ = session.finish();
+
+            assert!(
+                !run_token.is_cancelled(),
+                "normal join completion must not cancel the run token"
+            );
+        }
+    }
+
+    #[test]
+    fn dropping_unfinished_doubao_session_cancels_the_run_token() {
+        let run_token = CancellationToken::new();
+        let thread_token = run_token.clone();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let join = std::thread::spawn(move || {
+            while !thread_token.is_cancelled() {
+                std::thread::yield_now();
+            }
+            Ok(String::new())
+        });
+        let session = DoubaoSessionHandle {
+            tx,
+            cancel: run_token.clone(),
+            join: Some(join),
+        };
+
+        drop(session);
+
+        assert!(run_token.is_cancelled());
+    }
+
+    #[test]
     fn second_start_replaces_existing_streaming_session() {
         let (mailbox, rx) = UiEventMailbox::for_test();
         let actor = TranscriptionActor::new(mailbox).expect("actor");
 
         actor
-            .start_session("task-1", remote_streaming_config())
+            .start_session(
+                "task-1",
+                remote_streaming_config(),
+                CancellationToken::new(),
+            )
             .expect("first start sends");
         wait_until(|| actor.is_session_started("task-1"));
 
         actor
-            .start_session("task-2", remote_streaming_config())
+            .start_session(
+                "task-2",
+                remote_streaming_config(),
+                CancellationToken::new(),
+            )
             .expect("second start sends");
         wait_until(|| actor.is_session_started("task-2") && !actor.is_session_started("task-1"));
 
@@ -927,7 +989,11 @@ mod tests {
         let actor = TranscriptionActor::new(mailbox).expect("actor");
 
         actor
-            .start_session("task-1", remote_streaming_config())
+            .start_session(
+                "task-1",
+                remote_streaming_config(),
+                CancellationToken::new(),
+            )
             .expect("start succeeds");
 
         assert!(actor.is_session_started("task-1"));
@@ -937,11 +1003,13 @@ mod tests {
     fn cancellation_is_idempotent_after_actor_shutdown() {
         let (mailbox, _rx) = UiEventMailbox::for_test();
         let actor = TranscriptionActor::new(mailbox).expect("actor");
+        let run_token = CancellationToken::new();
         actor
-            .start_session("task-1", remote_streaming_config())
+            .start_session("task-1", remote_streaming_config(), run_token.clone())
             .expect("start succeeds");
 
         actor.cancel_session("task-1").expect("cancel succeeds");
+        assert!(run_token.is_cancelled());
         actor.shutdown().expect("shutdown succeeds");
 
         actor
@@ -970,7 +1038,11 @@ mod tests {
         let actor = TranscriptionActor::new(mailbox).expect("actor");
 
         actor
-            .start_session("task-1", remote_streaming_config())
+            .start_session(
+                "task-1",
+                remote_streaming_config(),
+                CancellationToken::new(),
+            )
             .expect("start succeeds");
         actor.finish_session("task-1").expect("finish sends");
         std::thread::sleep(Duration::from_millis(50));
