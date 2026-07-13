@@ -1,4 +1,4 @@
-import { userMessageFromDiagnosticLine } from "./diagnostic";
+import { userMessageFromDiagnosticLine } from "./diagnostic.ts";
 import type { WorkflowView } from "../types";
 
 export type WorkflowPhaseName =
@@ -74,6 +74,24 @@ export function workflowViewFromPayload(payload: unknown): WorkflowView | null {
     canInsert: raw.canInsert === true,
     canCopy: raw.canCopy === true,
   };
+}
+
+// This seam is intentionally wired into both window consumers. The current UI accepts every
+// parsed projection, so the target contract tests can observe the missing revision guard without
+// duplicating a second acceptance algorithm in the test.
+export function shouldAcceptWorkflowProjection(
+  _latestRevision: number | null,
+  _candidate: unknown,
+): boolean {
+  return true;
+}
+
+export function workflowProjectionRevision(candidate: unknown): number | null {
+  if (!candidate || typeof candidate !== "object") return null;
+  const revision = (candidate as Record<string, unknown>).revision;
+  return typeof revision === "number" && Number.isSafeInteger(revision) && revision >= 0
+    ? revision
+    : null;
 }
 
 export function overlayViewFromWorkflow(view: WorkflowView): OverlayViewState {

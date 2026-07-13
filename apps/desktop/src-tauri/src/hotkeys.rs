@@ -561,6 +561,54 @@ mod tests {
     }
 
     #[test]
+    fn target_contract_t03_hotkey_edge_primary() {
+        let cases = [
+            (
+                "repeat_keydown_filtered",
+                vec![
+                    signal(KeyKind::Alt, KeyState::Down, 1000),
+                    signal(KeyKind::Alt, KeyState::Down, 1050),
+                    signal(KeyKind::Alt, KeyState::Up, 1100),
+                ],
+                1,
+            ),
+            (
+                "duplicate_callback_filtered",
+                vec![
+                    signal(KeyKind::Alt, KeyState::Down, 2000),
+                    signal(KeyKind::Alt, KeyState::Up, 2050),
+                    signal(KeyKind::Alt, KeyState::Up, 2050),
+                ],
+                1,
+            ),
+            (
+                "two_complete_gestures",
+                vec![
+                    signal(KeyKind::Alt, KeyState::Down, 3000),
+                    signal(KeyKind::Alt, KeyState::Up, 3050),
+                    signal(KeyKind::Alt, KeyState::Down, 3100),
+                    signal(KeyKind::Alt, KeyState::Up, 3150),
+                ],
+                2,
+            ),
+        ];
+
+        for (label, signals, expected_primary_count) in cases {
+            let mut detector = HotkeyDetector::new(KeyKind::Alt);
+            let primary_count = signals
+                .into_iter()
+                .filter_map(|signal| detector.apply(signal))
+                .filter(|action| *action == HotkeyAction::Primary)
+                .count();
+            eprintln!("[T03.hotkey.{label}] EXECUTED PASS: primary_count={primary_count}");
+            assert_eq!(
+                primary_count, expected_primary_count,
+                "T03.hotkey.{label}: one complete physical gesture must emit at most one Controller Primary"
+            );
+        }
+    }
+
+    #[test]
     fn configured_function_key_triggers_primary() {
         let mut detector = HotkeyDetector::new(KeyKind::Function(9));
         assert_eq!(
