@@ -321,7 +321,7 @@ impl WorkflowController {
                 action_key == &derive_action_key(&state.mode, state.last_run.as_ref())
             }
             WorkflowIntent::Cancel { target_run_id } => {
-                Some(target_run_id.as_str())
+                target_run_id.as_deref()
                     == active_run(&state.mode).map(|active| active.run_id.as_str())
             }
         }

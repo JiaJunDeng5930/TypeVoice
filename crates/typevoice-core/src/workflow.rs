@@ -624,7 +624,7 @@ pub struct WorkflowView {
 )]
 pub enum WorkflowIntent {
     Primary { action_key: String },
-    Cancel { target_run_id: RunId },
+    Cancel { target_run_id: Option<RunId> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -704,7 +704,7 @@ mod tests {
         assert!(serde_json::from_value::<WorkflowIntent>(serde_json::json!({
             "kind": "cancel"
         }))
-        .is_err());
+        .is_ok());
     }
 
     #[test]

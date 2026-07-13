@@ -14,7 +14,7 @@ use typevoice_engine::workflow_controller::WorkflowController;
 )]
 pub enum WorkflowCommandRequest {
     Primary { action_key: String },
-    Cancel { target_run_id: RunId },
+    Cancel { target_run_id: Option<RunId> },
 }
 
 impl From<WorkflowCommandRequest> for WorkflowIntent {
@@ -84,11 +84,11 @@ mod tests {
             unknown.expect_err("unknown command field must fail").code,
             "E_WORKFLOW_INTENT_INVALID"
         );
-        assert_eq!(
-            missing_cancel_target
-                .expect_err("Cancel without targetRunId must fail")
-                .code,
-            "E_WORKFLOW_INTENT_INVALID"
-        );
+        assert!(matches!(
+            missing_cancel_target.expect("Ready Cancel(None) must remain representable"),
+            WorkflowCommandRequest::Cancel {
+                target_run_id: None
+            }
+        ));
     }
 }
