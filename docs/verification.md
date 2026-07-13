@@ -2,6 +2,8 @@
 
 目标：为自用工具定义轻量、可复现的验收机制。
 
+状态：本文件记录当前 quick/full 分级；现有实现尚未证明测试选择器执行了非零 workspace 状态合同，也没有分别执行 Windows platform input 与 Linux AT-SPI。目标补充 gate 见 `architecture.md` T22/T23，在实现前不得把一次手工自动粘贴或单一 OS 的 Skipped 结果表述为跨平台 PASS。
+
 ## 1. 分级与时间预算
 
 - `quick`：快速验证，单次 <= 60 秒，用于每个新 commit 前后。
