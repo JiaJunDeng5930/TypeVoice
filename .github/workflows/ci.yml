@@ -43,12 +43,53 @@ jobs:
         run: cargo check --locked --workspace
       - name: Cargo clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
-      - name: Cargo test
-        run: cargo test --locked --workspace
+      - name: Cargo test (existing contracts)
+        run: cargo test --locked --workspace -- --skip target_contract_
       - name: Prepare Linux FFmpeg toolchain
         run: cargo xtask toolchain ffmpeg --platform linux-x86_64
       - name: Xtask quick verify
         run: cargo xtask verify quick
+      - name: Target engine architecture contracts
+        id: target_engine_contracts
+        continue-on-error: true
+        run: cargo test --locked -p typevoice-engine target_contract_
+      - name: Target desktop hotkey contract
+        id: target_desktop_contracts
+        continue-on-error: true
+        run: cargo test --locked -p typevoice-desktop target_contract_t03_hotkey_edge_primary
+      - name: Target frontend architecture contracts
+        id: target_frontend_contracts
+        continue-on-error: true
+        working-directory: apps/desktop
+        run: npm run test:contracts
+      - name: Enforce target architecture contracts
+        if: always()
+        env:
+          ENGINE_OUTCOME: ${{ steps.target_engine_contracts.outcome }}
+          DESKTOP_OUTCOME: ${{ steps.target_desktop_contracts.outcome }}
+          FRONTEND_OUTCOME: ${{ steps.target_frontend_contracts.outcome }}
+        run: |
+          test "$ENGINE_OUTCOME" = success
+          test "$DESKTOP_OUTCOME" = success
+          test "$FRONTEND_OUTCOME" = success
+
+  insertion-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9
+        with:
+          toolchain: stable
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libglib2.0-dev \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
       - name: Linux insertion contract
         run: cargo xtask verify insertion-contract
 

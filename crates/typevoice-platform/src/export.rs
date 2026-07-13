@@ -76,7 +76,24 @@ pub fn focus_window_best_effort(hwnd: Option<isize>) -> bool {
     }
 }
 
-#[cfg(any(windows, test))]
+#[cfg(test)]
+pub(crate) async fn native_input_contract_probe(text: &str) -> bool {
+    #[cfg(windows)]
+    {
+        windows::native_input_contract_probe(text)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux::native_input_contract_probe(text).await
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        let _ = text;
+        false
+    }
+}
+
+#[cfg(windows)]
 fn utf16_code_units(text: &str) -> Vec<u16> {
     text.encode_utf16().collect()
 }
@@ -123,9 +140,13 @@ mod windows {
             ));
         }
 
-        let inputs = build_unicode_key_inputs(text);
-        let expected = inputs.len() as u32;
-        let sent = unsafe { SendInput(expected, inputs.as_ptr(), size_of::<INPUT>() as i32) };
+        let (expected, sent) = dispatch_unicode_inputs(text, |inputs| unsafe {
+            SendInput(
+                inputs.len() as u32,
+                inputs.as_ptr(),
+                size_of::<INPUT>() as i32,
+            )
+        });
         if sent != expected {
             let err = unsafe { GetLastError() };
             return Err(ExportError::new(
@@ -137,6 +158,35 @@ mod windows {
             ));
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) fn native_input_contract_probe(text: &str) -> bool {
+        let calls = std::cell::Cell::new(0_u32);
+        let valid_unicode_input = std::cell::Cell::new(false);
+        let (expected, sent) = dispatch_unicode_inputs(text, |inputs| {
+            calls.set(calls.get() + 1);
+            valid_unicode_input.set(
+                !inputs.is_empty()
+                    && inputs.len() == super::utf16_code_units(text).len() * 2
+                    && inputs.iter().all(|input| {
+                        let keyboard = unsafe { input.Anonymous.ki };
+                        keyboard.wVk == 0 && keyboard.dwFlags & KEYEVENTF_UNICODE != 0
+                    }),
+            );
+            inputs.len() as u32
+        });
+        calls.get() == 1 && expected == sent && valid_unicode_input.get()
+    }
+
+    fn dispatch_unicode_inputs<Send>(text: &str, send: Send) -> (u32, u32)
+    where
+        Send: FnOnce(&[INPUT]) -> u32,
+    {
+        let inputs = build_unicode_key_inputs(text);
+        let expected = inputs.len() as u32;
+        let sent = send(&inputs);
+        (expected, sent)
     }
 
     fn build_unicode_key_inputs(text: &str) -> Vec<INPUT> {
@@ -211,7 +261,7 @@ mod linux {
     use atspi::proxy::accessible::ObjectRefExt;
     use atspi::proxy::proxy_ext::ProxyExt;
     use atspi::{AccessibilityConnection, Interface, ObjectRefOwned, State};
-    use std::cmp;
+    use std::{cmp, future::Future};
 
     const MAX_TRAVERSE_NODES: usize = 2048;
 
@@ -263,15 +313,16 @@ mod linux {
             Err(_) => 0,
         };
 
-        let ok = editable
-            .insert_text(insert_pos, text, utf8_char_count_i32(text))
-            .await
-            .map_err(|e| {
-                ExportError::new(
-                    "E_EXPORT_PASTE_FAILED",
-                    format!("EditableText.InsertText call failed: {e}"),
-                )
-            })?;
+        let ok = dispatch_editable_insert(insert_pos, text, |position, text, character_count| {
+            editable.insert_text(position, text, character_count)
+        })
+        .await
+        .map_err(|e| {
+            ExportError::new(
+                "E_EXPORT_PASTE_FAILED",
+                format!("EditableText.InsertText call failed: {e}"),
+            )
+        })?;
 
         if !ok {
             return Err(ExportError::new(
@@ -283,9 +334,37 @@ mod linux {
         Ok(())
     }
 
+    async fn dispatch_editable_insert<'a, Call, CallFuture, CallError>(
+        insert_pos: i32,
+        text: &'a str,
+        call: Call,
+    ) -> Result<bool, CallError>
+    where
+        Call: FnOnce(i32, &'a str, i32) -> CallFuture,
+        CallFuture: Future<Output = Result<bool, CallError>>,
+    {
+        call(insert_pos, text, utf8_char_count_i32(text)).await
+    }
+
     fn utf8_char_count_i32(text: &str) -> i32 {
         let n = text.chars().count();
         cmp::min(n, i32::MAX as usize) as i32
+    }
+
+    #[cfg(test)]
+    pub(super) async fn native_input_contract_probe(text: &str) -> bool {
+        let calls = std::cell::Cell::new(0_u32);
+        let observed = std::cell::RefCell::new(None);
+        let inserted = dispatch_editable_insert(7, text, |position, actual, character_count| {
+            calls.set(calls.get() + 1);
+            *observed.borrow_mut() = Some((position, actual.to_string(), character_count));
+            std::future::ready(Ok::<bool, ()>(true))
+        })
+        .await;
+        let expected_count = text.chars().count() as i32;
+        calls.get() == 1
+            && inserted == Ok(true)
+            && observed.borrow().as_ref() == Some(&(7, text.to_string(), expected_count))
     }
 
     async fn find_focused_editable_object(

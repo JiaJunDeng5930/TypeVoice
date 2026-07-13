@@ -19,6 +19,9 @@ pub mod ui_events;
 pub mod voice_tasks;
 pub mod voice_workflow;
 
+#[cfg(test)]
+mod target_architecture_contracts;
+
 pub struct RuntimeState {
     toolchain: std::sync::Mutex<toolchain::ToolchainStatus>,
 }

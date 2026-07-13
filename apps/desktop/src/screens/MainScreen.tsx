@@ -6,7 +6,9 @@ import { buildDiagnostic, buildUiEventDiagnostic, userMessageFromDiagnostic } fr
 import {
   EMPTY_WORKFLOW_VIEW,
   primaryActionLabel,
+  shouldAcceptWorkflowProjection,
   workflowPhaseName,
+  workflowProjectionRevision,
   workflowViewFromPayload,
 } from "../domain/workflowView";
 import type {
@@ -31,6 +33,7 @@ export function MainScreen({
   onHistoryChanged,
 }: Props) {
   const [workflow, setWorkflow] = useState<WorkflowView>(EMPTY_WORKFLOW_VIEW);
+  const latestWorkflowRevisionRef = useRef<number | null>(null);
   const autoRewriteStartedRef = useRef<Set<string>>(new Set());
   const autoInsertStartedRef = useRef<Set<string>>(new Set());
 
@@ -86,6 +89,8 @@ export function MainScreen({
   }, [pushToast, runAutoInsert, settings?.rewrite_enabled]);
 
   const acceptWorkflowView = useCallback(async (next: WorkflowView, autoContinue: boolean) => {
+    if (!shouldAcceptWorkflowProjection(latestWorkflowRevisionRef.current, next)) return;
+    latestWorkflowRevisionRef.current = workflowProjectionRevision(next);
     setWorkflow(next);
     const phase = workflowPhaseName(next.phase);
     if (!autoContinue) return;

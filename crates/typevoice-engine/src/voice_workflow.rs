@@ -1853,7 +1853,7 @@ impl VoiceWorkflow {
     }
 
     #[cfg(test)]
-    fn open_recording_for_test(
+    pub(crate) fn open_recording_for_test(
         &self,
         session_id: &str,
         recording_session_id: &str,
@@ -1862,7 +1862,7 @@ impl VoiceWorkflow {
     }
 
     #[cfg(test)]
-    fn begin_transcribing_for_test(
+    pub(crate) fn begin_transcribing_for_test(
         &self,
         recording_session_id: &str,
     ) -> WorkflowResult<WorkflowSession> {
@@ -1870,12 +1870,15 @@ impl VoiceWorkflow {
     }
 
     #[cfg(test)]
-    fn complete_transcription_for_test(&self, result: TranscriptionResult) -> WorkflowResult<()> {
+    pub(crate) fn complete_transcription_for_test(
+        &self,
+        result: TranscriptionResult,
+    ) -> WorkflowResult<()> {
         self.complete_transcription(result)
     }
 
     #[cfg(test)]
-    fn open_transcribed_session_for_test(
+    pub(crate) fn open_transcribed_session_for_test(
         &self,
         transcript_id: &str,
         asr_text: &str,
@@ -1884,38 +1887,53 @@ impl VoiceWorkflow {
     }
 
     #[cfg(test)]
-    fn begin_rewrite_for_test(&self, transcript_id: &str) -> WorkflowResult<()> {
+    pub(crate) fn begin_rewrite_for_test(&self, transcript_id: &str) -> WorkflowResult<()> {
         self.begin_rewrite(transcript_id)
     }
 
     #[cfg(test)]
-    fn complete_rewrite_for_test(&self, result: RewriteResult) -> WorkflowResult<()> {
+    pub(crate) fn complete_rewrite_for_test(&self, result: RewriteResult) -> WorkflowResult<()> {
         self.complete_rewrite(result)
     }
 
     #[cfg(test)]
-    fn begin_insert_for_test(&self) -> WorkflowResult<()> {
+    pub(crate) fn begin_insert_for_test(&self) -> WorkflowResult<()> {
         self.begin_insert("task-1")
     }
 
     #[cfg(test)]
-    fn complete_insert_for_test(&self) -> WorkflowResult<()> {
+    pub(crate) fn begin_insert_for_task_for_test(&self, task_id: &str) -> WorkflowResult<()> {
+        self.begin_insert(task_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn complete_insert_for_test(&self) -> WorkflowResult<()> {
         self.complete_insert()
     }
 
     #[cfg(test)]
-    fn cancel_current_recording_for_test(&self) -> WorkflowResult<()> {
+    pub(crate) fn cancel_current_recording_for_test(&self) -> WorkflowResult<()> {
         self.cancel_current_recording_state()
     }
 
     #[cfg(test)]
-    fn store_pending_context_for_test(&self, task_id: &str, snapshot: ContextSnapshot) {
+    pub(crate) fn store_pending_context_for_test(&self, task_id: &str, snapshot: ContextSnapshot) {
         self.store_pending_context(task_id, snapshot);
     }
 
     #[cfg(test)]
-    fn take_pending_context_for_test(&self, task_id: &str) -> Option<ContextSnapshot> {
+    pub(crate) fn take_pending_context_for_test(&self, task_id: &str) -> Option<ContextSnapshot> {
         self.take_pending_context(task_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn prepare_stop_for_test(&self) -> WorkflowResult<WorkflowTaskRequest> {
+        self.prepare_stop_record_transcribe()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_for_test(&self, code: &str, message: &str) {
+        self.mark_failed(WorkflowError::new(code, message));
     }
 }
 

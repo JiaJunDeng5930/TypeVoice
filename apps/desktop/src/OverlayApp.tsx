@@ -12,7 +12,9 @@ import {
   canTogglePrimaryFromOverlay,
   EMPTY_WORKFLOW_VIEW,
   overlayViewFromWorkflow,
+  shouldAcceptWorkflowProjection,
   workflowPhaseName,
+  workflowProjectionRevision,
   workflowViewFromPayload,
 } from "./domain/workflowView";
 import type { OverlayConfig, Settings, UiEvent, WorkflowView } from "./types";
@@ -33,6 +35,7 @@ const DEFAULT_OVERLAY_CONFIG: OverlayConfig = {
 
 export default function OverlayApp() {
   const [workflow, setWorkflow] = useState<WorkflowView>(EMPTY_WORKFLOW_VIEW);
+  const latestWorkflowRevisionRef = useRef<number | null>(null);
   const [draftText, setDraftText] = useState("");
   const [liveText, setLiveText] = useState("");
   const [config, setConfig] = useState<OverlayConfig>(DEFAULT_OVERLAY_CONFIG);
@@ -72,6 +75,8 @@ export default function OverlayApp() {
   const subtitleText = displayText.trim() || overlayView.status;
 
   const acceptWorkflowView = useCallback((next: WorkflowView) => {
+    if (!shouldAcceptWorkflowProjection(latestWorkflowRevisionRef.current, next)) return;
+    latestWorkflowRevisionRef.current = workflowProjectionRevision(next);
     const phase = workflowPhaseName(next.phase);
     const seedText = (next.lastText || next.lastAsrText).trim();
     setWorkflow(next);
