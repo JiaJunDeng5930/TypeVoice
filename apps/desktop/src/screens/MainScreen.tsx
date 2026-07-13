@@ -1,25 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  defaultTauriGateway,
-} from "../infra/runtimePorts";
 import { buildDiagnostic, buildUiEventDiagnostic, userMessageFromDiagnostic } from "../domain/diagnostic";
 import {
   EMPTY_WORKFLOW_VIEW,
+  isWorkflowCommandReply,
   primaryActionLabel,
   shouldAcceptWorkflowProjection,
-  workflowPhaseName,
+  workflowDiagnostic,
+  workflowPresentationPhase,
+  workflowProjectionFromPayload,
   workflowProjectionRevision,
   workflowViewFromPayload,
 } from "../domain/workflowView";
+import { defaultTauriGateway } from "../infra/runtimePorts";
 import type {
   RuntimeToolchainStatus,
   Settings,
-  TranscriptionMetrics,
   UiEvent,
-  WorkflowCommand,
+  WorkflowCommandReply,
+  WorkflowCommandRequest,
   WorkflowView,
 } from "../types";
 import { IconStart, IconStop, IconTranscribing } from "../ui/icons";
+import { PixelButton } from "../ui/PixelButton";
 
 type Props = {
   settings: Settings | null;
@@ -28,97 +30,82 @@ type Props = {
 };
 
 export function MainScreen({
-  settings,
   pushToast,
   onHistoryChanged,
 }: Props) {
   const [workflow, setWorkflow] = useState<WorkflowView>(EMPTY_WORKFLOW_VIEW);
+  const workflowRef = useRef<WorkflowView>(EMPTY_WORKFLOW_VIEW);
   const latestWorkflowRevisionRef = useRef<number | null>(null);
-  const autoRewriteStartedRef = useRef<Set<string>>(new Set());
-  const autoInsertStartedRef = useRef<Set<string>>(new Set());
+  const observedLastRunIdRef = useRef<string | null>(null);
 
-  const runAutoInsert = useCallback(async (view: WorkflowView) => {
-    const phase = workflowPhaseName(view.phase);
-    const transcriptId = optionalString(view.lastTranscriptId);
-    const text = (view.lastText || view.lastAsrText || "").trim();
-    if ((phase !== "transcribed" && phase !== "rewritten") || !transcriptId || !text) return;
-    if (autoInsertStartedRef.current.has(transcriptId)) return;
-    autoInsertStartedRef.current.add(transcriptId);
-    try {
-      await defaultTauriGateway.invoke("workflow_insert", { req: { text } });
-      const refreshed = await defaultTauriGateway.invoke<WorkflowView>("workflow_snapshot");
-      setWorkflow(refreshed);
-      onHistoryChanged();
-    } catch (err) {
-      const diag = buildDiagnostic(err, "Text could not be pasted");
-      pushToast(diag.title, "danger");
-      try {
-        const refreshed = await defaultTauriGateway.invoke<WorkflowView>("workflow_snapshot");
-        setWorkflow(refreshed);
-      } catch (refreshErr) {
-        const refreshDiag = buildDiagnostic(refreshErr, "Recording status unavailable");
-        pushToast(refreshDiag.title, "danger");
-      }
-    }
-  }, [onHistoryChanged, pushToast]);
-
-  const runAutoRewrite = useCallback(async (view: WorkflowView) => {
-    const phase = workflowPhaseName(view.phase);
-    const transcriptId = optionalString(view.lastTranscriptId);
-    const text = (view.lastText || view.lastAsrText || "").trim();
-    if (phase !== "transcribed" || !transcriptId || !text) return;
-    if (autoRewriteStartedRef.current.has(transcriptId)) return;
-    if (settings?.rewrite_enabled !== true) return;
-    autoRewriteStartedRef.current.add(transcriptId);
-    try {
-      await defaultTauriGateway.invoke("workflow_rewrite", { req: { text } });
-      const refreshed = await defaultTauriGateway.invoke<WorkflowView>("workflow_snapshot");
-      setWorkflow(refreshed);
-      await runAutoInsert(refreshed);
-    } catch (err) {
-      const diag = buildDiagnostic(err, "Text improvement failed");
-      pushToast(diag.title, "danger");
-      try {
-        const refreshed = await defaultTauriGateway.invoke<WorkflowView>("workflow_snapshot");
-        setWorkflow(refreshed);
-      } catch (refreshErr) {
-        const refreshDiag = buildDiagnostic(refreshErr, "Recording status unavailable");
-        pushToast(refreshDiag.title, "danger");
-      }
-    }
-  }, [pushToast, runAutoInsert, settings?.rewrite_enabled]);
-
-  const acceptWorkflowView = useCallback(async (next: WorkflowView, autoContinue: boolean) => {
-    if (!shouldAcceptWorkflowProjection(latestWorkflowRevisionRef.current, next)) return;
+  const acceptWorkflowView = useCallback((next: WorkflowView): boolean => {
+    if (!shouldAcceptWorkflowProjection(latestWorkflowRevisionRef.current, next)) return false;
     latestWorkflowRevisionRef.current = workflowProjectionRevision(next);
+    workflowRef.current = next;
     setWorkflow(next);
-    const phase = workflowPhaseName(next.phase);
-    if (!autoContinue) return;
-    if (phase === "transcribed") {
-      if (settings?.rewrite_enabled === true) {
-        await runAutoRewrite(next);
-      } else {
-        await runAutoInsert(next);
-      }
-      return;
-    }
-    if (phase === "rewritten") {
-      await runAutoInsert(next);
-    }
-  }, [runAutoInsert, runAutoRewrite, settings?.rewrite_enabled]);
 
-  useEffect(() => {
-    (async () => {
-      const view = await defaultTauriGateway.invoke<WorkflowView>("workflow_snapshot");
-      await acceptWorkflowView(view, false);
-    })().catch((err) => {
-      const diag = buildDiagnostic(err, "Recording status unavailable");
-      pushToast(diag.title, "danger");
-    });
+    const lastRunId = next.lastRun?.runId ?? null;
+    if (lastRunId && lastRunId !== observedLastRunIdRef.current) {
+      observedLastRunIdRef.current = lastRunId;
+      onHistoryChanged();
+    }
+    return true;
+  }, [onHistoryChanged]);
+
+  const refreshWorkflowSnapshot = useCallback(async () => {
+    const payload = await defaultTauriGateway.invoke<unknown>("workflow_snapshot");
+    const next = workflowProjectionFromPayload(payload);
+    if (!next) throw new Error("workflow_snapshot returned a malformed projection");
+    acceptWorkflowView(next);
+  }, [acceptWorkflowView]);
+
+  const processCommandReply = useCallback((reply: WorkflowCommandReply) => {
+    switch (reply.disposition) {
+      case "applied":
+      case "noOp":
+        break;
+      case "cancelTooLate":
+        pushToast("That action is already finishing", "default");
+        break;
+    }
+    acceptWorkflowView(reply.view);
   }, [acceptWorkflowView, pushToast]);
 
   useEffect(() => {
-    (async () => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+
+    void (async () => {
+      const stop = await defaultTauriGateway.listen<UiEvent>("ui_event", (event) => {
+        if (cancelled || !event || event.kind === "audio.level") return;
+        if (event.kind === "workflow.state") {
+          const next = workflowProjectionFromPayload(event.payload);
+          if (next) acceptWorkflowView(next);
+          return;
+        }
+        handleDisplayEvent(event, pushToast);
+      });
+
+      if (cancelled) {
+        stop();
+        return;
+      }
+      unlisten = stop;
+      await refreshWorkflowSnapshot();
+    })().catch((error) => {
+      if (cancelled) return;
+      const diagnostic = buildDiagnostic(error, "Live recording updates unavailable");
+      pushToast(diagnostic.title, "danger");
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [acceptWorkflowView, pushToast, refreshWorkflowSnapshot]);
+
+  useEffect(() => {
+    void (async () => {
       try {
         const runtime = await defaultTauriGateway.invoke<RuntimeToolchainStatus>("runtime_toolchain_status");
         if (!runtime.ready) pushToast("Local audio tools need repair", "danger");
@@ -127,177 +114,50 @@ export function MainScreen({
     })();
   }, [pushToast]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const unlistenFns: Array<() => void> = [];
-    const trackUnlisten = (fn: () => void) => {
-      if (cancelled) {
-        try {
-          fn();
-        } catch {
-        }
-        return;
-      }
-      unlistenFns.push(fn);
-    };
-
-    (async () => {
-      const unlistenUiEvent = await defaultTauriGateway.listen<UiEvent>("ui_event", async (ev) => {
-        if (!ev || ev.kind === "audio.level") return;
-        if (ev.kind === "transcription.partial") {
-          // Current-session text belongs exclusively to the optional subtitle overlay.
-          return;
-        }
-        if (ev.kind === "workflow.state") {
-          const next = workflowViewFromPayload(ev.payload);
-          if (next) {
-            await acceptWorkflowView(next, true);
-          }
-          return;
-        }
-        if (isDisplayFailureEvent(ev.kind, ev.status)) return;
-        if (ev.kind === "workflow.task.failed") {
-          const diag = buildUiEventDiagnostic(ev, failureTitleFromStage(ev.stage));
-          if (isAsrFailureStage(ev.stage)) {
-            const transcriptId = optionalString(ev.taskId);
-            if (transcriptId) {
-              try {
-                const next = await defaultTauriGateway.invoke<WorkflowView>("workflow_report_asr_failed", {
-                  req: {
-                    transcriptId,
-                    code: optionalString(ev.errorCode) || "E_TRANSCRIBE_FAILED",
-                    message: ev.message,
-                  },
-                });
-                await acceptWorkflowView(next, false);
-              } catch (err) {
-                const diag = buildDiagnostic(err, "Recording update failed");
-                pushToast(diag.title, "danger");
-              }
-            }
-          }
-          pushToast(diag.title, "danger");
-          return;
-        }
-        if (ev.status === "failed") {
-          const diag = buildUiEventDiagnostic(ev, failureTitleFromStage(ev.stage));
-          pushToast(diag.title, "danger");
-          return;
-        }
-        if (ev.status === "cancelled") {
-          pushToast("Cancelled", "default");
-          return;
-        }
-        if (ev.kind === "transcription.empty") {
-          const transcriptId = optionalString(ev.taskId);
-          if (transcriptId) {
-            try {
-              const next = await defaultTauriGateway.invoke<WorkflowView>("workflow_report_asr_empty", {
-                req: { transcriptId },
-              });
-              await acceptWorkflowView(next, false);
-            } catch (err) {
-              const diag = buildDiagnostic(err, "Recording update failed");
-              pushToast(diag.title, "danger");
-              return;
-            }
-          }
-          pushToast("No speech detected", "default");
-          return;
-        }
-        if (ev.kind === "transcription.completed") {
-          const completed = transcriptionCompletedPayload(ev.payload);
-          if (!completed) {
-            pushToast("Speech recognition failed", "danger");
-            return;
-          }
-          try {
-            const next = await defaultTauriGateway.invoke<WorkflowView>("workflow_report_asr_completed", {
-              req: {
-                transcriptId: completed.transcriptId,
-                text: completed.asrText,
-                metrics: completed.metrics,
-              },
-            });
-            await acceptWorkflowView(next, true);
-            pushToast("Text ready", "ok");
-            onHistoryChanged();
-          } catch (err) {
-            const diag = buildDiagnostic(err, "Recording update failed");
-            pushToast(diag.title, "danger");
-          }
-          return;
-        }
-        if (ev.kind === "rewrite.completed") {
-          pushToast("Text improved", "ok");
-          onHistoryChanged();
-          return;
-        }
-        if (ev.kind === "insertion.completed") {
-          const inserted = insertionPayload(ev.payload);
-          if (inserted?.autoPasteAttempted && !inserted.autoPasteOk) {
-            pushToast("Text could not be pasted", "danger");
-          } else {
-            pushToast(inserted?.autoPasteAttempted ? "Text pasted" : "Text copied", "ok");
-          }
-        }
-      });
-      trackUnlisten(unlistenUiEvent);
-    })().catch((err) => {
-      const diag = buildDiagnostic(err, "Live recording updates unavailable");
-      pushToast(diag.title, "danger");
-    });
-
-    return () => {
-      cancelled = true;
-      for (const fn of unlistenFns) {
-        try {
-          fn();
-        } catch {
-        }
-      }
-    };
-  }, [acceptWorkflowView, onHistoryChanged, pushToast]);
-
-  async function sendWorkflowCommand(command: WorkflowCommand) {
+  async function sendWorkflowCommand(request: WorkflowCommandRequest) {
     try {
-      const next = await defaultTauriGateway.invoke<WorkflowView>("workflow_command", { req: { command } });
-      await acceptWorkflowView(next, false);
-    } catch (err) {
-      const diag = buildDiagnostic(err, commandErrorTitle(command));
-      pushToast(diag.title, "danger");
+      const payload = await defaultTauriGateway.invoke<unknown>("workflow_command", { req: request });
+      const parsed = workflowViewFromPayload(payload);
+      if (!parsed || !isWorkflowCommandReply(parsed)) {
+        throw new Error("workflow_command returned a malformed reply");
+      }
+      processCommandReply(parsed);
+    } catch (error) {
+      const diagnostic = buildDiagnostic(error, commandErrorTitle(request.command));
+      pushToast(diagnostic.title, "danger");
       try {
-        const refreshed = await defaultTauriGateway.invoke<WorkflowView>("workflow_snapshot");
-        await acceptWorkflowView(refreshed, false);
-      } catch (refreshErr) {
-        const refreshDiag = buildDiagnostic(refreshErr, "Recording status unavailable");
-        pushToast(refreshDiag.title, "danger");
+        await refreshWorkflowSnapshot();
+      } catch (refreshError) {
+        const refreshDiagnostic = buildDiagnostic(refreshError, "Recording status unavailable");
+        pushToast(refreshDiagnostic.title, "danger");
       }
     }
   }
 
-  const phase = workflowPhaseName(workflow.phase);
-  const hint = primaryActionLabel(workflow.primaryLabel || "START");
-  const buttonCommand: WorkflowCommand = phase === "transcribing" ? "cancel" : "primary";
-  const buttonLabel = phase === "transcribing" ? "Cancel" : phase === "failed" ? "Retry" : hint;
-  const buttonDisabled = phase === "transcribing" ? false : workflow.primaryDisabled;
-  const diagnosticMessage = userMessageFromDiagnostic(workflow.diagnosticCode, workflow.diagnosticLine);
+  const presentationPhase = workflowPresentationPhase(workflow);
+  const buttonLabel = primaryActionLabel(workflow.primaryLabel);
+  const cancelTargetRunId = workflow.cancelEnabled ? workflow.activeRun?.runId ?? null : null;
+  const diagnostic = workflowDiagnostic(workflow);
+  const diagnosticMessage = userMessageFromDiagnostic(diagnostic.code, diagnostic.message);
 
   return (
     <div className="pageSurface mainSurface" aria-live="polite">
       <button
         type="button"
-        className={`mainButton status-${phase}`}
-        onClick={() => void sendWorkflowCommand(buttonCommand)}
-        disabled={buttonDisabled}
+        className={`mainButton status-${presentationPhase}`}
+        onClick={() => void sendWorkflowCommand({
+          command: "primary",
+          actionKey: workflowRef.current.actionKey,
+        })}
+        disabled={workflow.primaryDisabled}
         aria-label={buttonLabel}
-        aria-busy={phase === "transcribing" || phase === "rewriting" || phase === "inserting"}
+        aria-busy={workflow.mode === "processing" || workflow.mode === "cancelling"}
         title={buttonLabel}
       >
         <span className="mainButtonIcon" aria-hidden="true">
-          {phase === "idle" || phase === "transcribed" || phase === "rewritten" || phase === "cancelled" || phase === "failed" ? (
+          {workflow.mode === "ready" ? (
             <IconStart size={28} tone="accent" />
-          ) : phase === "recording" ? (
+          ) : workflow.mode === "recording" ? (
             <IconStop size={28} tone="accent" />
           ) : (
             <IconTranscribing size={28} tone="accent" />
@@ -306,69 +166,75 @@ export function MainScreen({
         <strong>{buttonLabel}</strong>
       </button>
 
-      {workflow.diagnosticLine || workflow.diagnosticCode ? (
+      {cancelTargetRunId ? (
+        <PixelButton
+          tone="danger"
+          onClick={() => void sendWorkflowCommand({
+            command: "cancel",
+            targetRunId: cancelTargetRunId,
+          })}
+          title="Cancel the current recording"
+        >
+          Cancel
+        </PixelButton>
+      ) : null}
+
+      {diagnostic.code || diagnostic.message ? (
         <div className="mainDiag isVisible" role="alert">
-          {workflow.diagnosticCode ? <span>{workflow.diagnosticCode}</span> : null}
-          {diagnosticMessage || ""}
+          {diagnostic.code ? <span>{diagnostic.code}</span> : null}
+          {diagnosticMessage}
         </div>
       ) : null}
     </div>
   );
 }
 
+function handleDisplayEvent(
+  event: UiEvent,
+  pushToast: (msg: string, tone?: "default" | "ok" | "danger") => void,
+) {
+  if (event.kind === "transcription.partial") return;
+  if (event.kind === "workflow.task.failed" || event.status === "failed") {
+    const diagnostic = buildUiEventDiagnostic(event, failureTitleFromStage(event.stage));
+    pushToast(diagnostic.title, "danger");
+    return;
+  }
+  if (event.status === "cancelled") {
+    pushToast("Cancelled", "default");
+    return;
+  }
+  if (event.kind === "transcription.empty") {
+    pushToast("No speech detected", "default");
+    return;
+  }
+  if (event.kind === "transcription.completed") {
+    pushToast("Text ready", "ok");
+    return;
+  }
+  if (event.kind === "rewrite.completed") {
+    pushToast("Text improved", "ok");
+    return;
+  }
+  if (event.kind === "insertion.completed") {
+    const inserted = insertionPayload(event.payload);
+    if (inserted?.autoPasteAttempted && !inserted.autoPasteOk) {
+      pushToast("Text could not be pasted", "danger");
+    } else {
+      pushToast(inserted?.autoPasteAttempted ? "Text pasted" : "Text copied", "ok");
+    }
+  }
+}
+
 function insertionPayload(payload: unknown): {
   autoPasteAttempted: boolean;
   autoPasteOk: boolean;
-  errorCode?: string | null;
 } | null {
   if (!payload || typeof payload !== "object") return null;
   const raw = payload as Record<string, unknown>;
   return {
     autoPasteAttempted: raw.autoPasteAttempted === true,
     autoPasteOk: raw.autoPasteOk === true,
-    errorCode: optionalString(raw.errorCode),
   };
-}
-
-function transcriptionCompletedPayload(payload: unknown): {
-  transcriptId: string;
-  asrText: string;
-  metrics: TranscriptionMetrics;
-} | null {
-  if (!payload || typeof payload !== "object") return null;
-  const raw = payload as Record<string, unknown>;
-  const transcriptId = optionalString(raw.transcriptId);
-  const asrText = String(raw.asrText || "");
-  const metrics = metricsPayload(raw.metrics);
-  if (!transcriptId || !asrText.trim() || !metrics) return null;
-  return { transcriptId, asrText, metrics };
-}
-
-function metricsPayload(payload: unknown): TranscriptionMetrics | null {
-  if (!payload || typeof payload !== "object") return null;
-  const raw = payload as Record<string, unknown>;
-  return {
-    rtf: optionalNumber(raw.rtf) || 0,
-    deviceUsed: String(raw.deviceUsed || ""),
-    preprocessMs: optionalNumber(raw.preprocessMs) || 0,
-    asrMs: optionalNumber(raw.asrMs) || 0,
-  };
-}
-
-function optionalString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value : null;
-}
-
-function optionalNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function isDisplayFailureEvent(kind: string, status: string | null | undefined): boolean {
-  return kind === "transcription.stage" && status === "failed";
-}
-
-function isAsrFailureStage(stage: string | null | undefined): boolean {
-  return stage === "Record" || stage === "Transcribe";
 }
 
 function failureTitleFromStage(stage: string | null | undefined): string {
@@ -377,10 +243,6 @@ function failureTitleFromStage(stage: string | null | undefined): string {
   return "Speech recognition failed";
 }
 
-function commandErrorTitle(command: WorkflowCommand): string {
-  if (command === "rewriteLast") return "Text improvement failed";
-  if (command === "insertLast") return "Text could not be pasted";
-  if (command === "copyLast") return "Copy failed";
-  if (command === "cancel") return "Cancel failed";
-  return "Recording action failed";
+function commandErrorTitle(command: WorkflowCommandRequest["command"]): string {
+  return command === "cancel" ? "Cancel failed" : "Recording action failed";
 }

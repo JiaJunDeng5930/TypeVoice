@@ -1,7 +1,6 @@
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { defaultTauriGateway } from "./infra/runtimePorts";
 import {
   appendTranscript,
   textFromRewriteCompleted,
@@ -9,15 +8,23 @@ import {
   textFromTranscriptionPartial,
 } from "./domain/overlaySession";
 import {
-  canTogglePrimaryFromOverlay,
   EMPTY_WORKFLOW_VIEW,
+  isWorkflowCommandReply,
   overlayViewFromWorkflow,
   shouldAcceptWorkflowProjection,
-  workflowPhaseName,
+  workflowDisplayText,
+  workflowProjectionFromPayload,
   workflowProjectionRevision,
   workflowViewFromPayload,
 } from "./domain/workflowView";
-import type { OverlayConfig, Settings, UiEvent, WorkflowView } from "./types";
+import { defaultTauriGateway } from "./infra/runtimePorts";
+import type {
+  OverlayConfig,
+  Settings,
+  UiEvent,
+  WorkflowCommandReply,
+  WorkflowView,
+} from "./types";
 
 type GlobalHotkeyEvent = {
   action: "primary";
@@ -35,11 +42,12 @@ const DEFAULT_OVERLAY_CONFIG: OverlayConfig = {
 
 export default function OverlayApp() {
   const [workflow, setWorkflow] = useState<WorkflowView>(EMPTY_WORKFLOW_VIEW);
+  const workflowRef = useRef<WorkflowView>(EMPTY_WORKFLOW_VIEW);
   const latestWorkflowRevisionRef = useRef<number | null>(null);
+  const lastDispositionRef = useRef<WorkflowCommandReply["disposition"] | null>(null);
   const [draftText, setDraftText] = useState("");
   const [liveText, setLiveText] = useState("");
   const [config, setConfig] = useState<OverlayConfig>(DEFAULT_OVERLAY_CONFIG);
-  const phaseRef = useRef("idle");
   const draftRef = useRef("");
   const liveRef = useRef("");
   const dragActiveRef = useRef(false);
@@ -58,10 +66,6 @@ export default function OverlayApp() {
     liveRef.current = liveText;
   }, [liveText]);
 
-  useEffect(() => {
-    phaseRef.current = workflowPhaseName(workflow.phase);
-  }, [workflow]);
-
   const displayText = useMemo(
     () => appendTranscript(draftText, liveText),
     [draftText, liveText],
@@ -74,29 +78,38 @@ export default function OverlayApp() {
 
   const subtitleText = displayText.trim() || overlayView.status;
 
-  const acceptWorkflowView = useCallback((next: WorkflowView) => {
-    if (!shouldAcceptWorkflowProjection(latestWorkflowRevisionRef.current, next)) return;
+  const acceptWorkflowView = useCallback((next: WorkflowView): boolean => {
+    if (!shouldAcceptWorkflowProjection(latestWorkflowRevisionRef.current, next)) return false;
     latestWorkflowRevisionRef.current = workflowProjectionRevision(next);
-    const phase = workflowPhaseName(next.phase);
-    const seedText = (next.lastText || next.lastAsrText).trim();
+    workflowRef.current = next;
     setWorkflow(next);
-    if (phase === "recording") {
+
+    if (next.mode === "recording") {
       setDraftText("");
       setLiveText("");
+      return true;
     }
-    if (
-      (phase === "transcribed" || phase === "rewritten")
-      && seedText
-      && !draftRef.current.trim()
-      && !liveRef.current.trim()
-    ) {
-      setDraftText(next.lastText || next.lastAsrText);
+
+    const seedText = workflowDisplayText(next).trim();
+    if (seedText && next.mode === "ready") {
+      setDraftText(seedText);
       setLiveText("");
+    } else if (seedText && !draftRef.current.trim() && !liveRef.current.trim()) {
+      setDraftText(seedText);
     }
+    return true;
   }, []);
 
   const refreshWorkflowSnapshot = useCallback(async () => {
-    acceptWorkflowView(await defaultTauriGateway.invoke<WorkflowView>("workflow_snapshot"));
+    const payload = await defaultTauriGateway.invoke<unknown>("workflow_snapshot");
+    const next = workflowProjectionFromPayload(payload);
+    if (!next) throw new Error("workflow_snapshot returned a malformed projection");
+    acceptWorkflowView(next);
+  }, [acceptWorkflowView]);
+
+  const processCommandReply = useCallback((reply: WorkflowCommandReply) => {
+    lastDispositionRef.current = reply.disposition;
+    acceptWorkflowView(reply.view);
   }, [acceptWorkflowView]);
 
   useEffect(() => {
@@ -166,91 +179,63 @@ export default function OverlayApp() {
   }, [overlayView.detail, overlayView.status, overlayView.visible]);
 
   const runPrimaryFromAlt = useCallback(async () => {
-    const phase = phaseRef.current;
-    if (!canTogglePrimaryFromOverlay(phase)) return;
-
-    if (phase !== "recording") {
-      setLiveText("");
-    }
-
+    if (latestWorkflowRevisionRef.current === null) return;
+    const current = workflowRef.current;
+    if (current.mode === "ready") setLiveText("");
     try {
-      acceptWorkflowView(
-        await defaultTauriGateway.invoke<WorkflowView>("workflow_command", {
-          req: { command: "primary" },
-        }),
-      );
+      const payload = await defaultTauriGateway.invoke<unknown>("workflow_command", {
+        req: { command: "primary", actionKey: current.actionKey },
+      });
+      const parsed = workflowViewFromPayload(payload);
+      if (!parsed || !isWorkflowCommandReply(parsed)) {
+        throw new Error("workflow_command returned a malformed reply");
+      }
+      processCommandReply(parsed);
     } catch {
       await refreshWorkflowSnapshot();
     }
-  }, [acceptWorkflowView, refreshWorkflowSnapshot]);
-
-  useEffect(() => {
-    void refreshWorkflowSnapshot();
-  }, [refreshWorkflowSnapshot]);
+  }, [processCommandReply, refreshWorkflowSnapshot]);
 
   useEffect(() => {
     let cancelled = false;
     const unlistenFns: Array<() => void> = [];
-    const track = (fn: () => void) => {
+    const track = (fn: () => void): boolean => {
       if (cancelled) {
         fn();
-      } else {
-        unlistenFns.push(fn);
+        return false;
       }
+      unlistenFns.push(fn);
+      return true;
     };
 
-    (async () => {
-      track(await defaultTauriGateway.listen<GlobalHotkeyEvent>("tv_global_hotkey", async (event) => {
-        if (!event) return;
-        if (event.action === "primary") {
-          await runPrimaryFromAlt();
-        }
-      }));
-
-      track(await defaultTauriGateway.listen<UiEvent>("ui_event", async (event) => {
-        if (!event || event.kind === "audio.level") return;
+    void (async () => {
+      const stopUiEvents = await defaultTauriGateway.listen<UiEvent>("ui_event", (event) => {
+        if (cancelled || !event || event.kind === "audio.level") return;
 
         if (event.kind === "workflow.state") {
-          const next = workflowViewFromPayload(event.payload);
+          const next = workflowProjectionFromPayload(event.payload);
           if (next) acceptWorkflowView(next);
           return;
         }
 
         if (event.kind === "transcription.partial") {
-          setLiveText(textFromTranscriptionPartial(event));
+          const activeRunId = workflowRef.current.activeRun?.runId ?? null;
+          setLiveText(textFromTranscriptionPartial(event, activeRunId));
           return;
         }
 
+        if (!eventBelongsToCurrentProjection(event, workflowRef.current)) return;
+
         if (event.kind === "transcription.completed") {
           const result = textFromTranscriptionCompleted(event);
-          if (result.transcriptId && result.asrText.trim() && result.metrics) {
-            const next = await defaultTauriGateway.invoke<WorkflowView>("workflow_report_asr_completed", {
-              req: {
-                transcriptId: result.transcriptId,
-                text: result.asrText,
-                metrics: result.metrics,
-              },
-            });
-            acceptWorkflowView(next);
-          } else {
-            await refreshWorkflowSnapshot();
+          if (result.asrText.trim()) {
+            setDraftText((previous) => appendTranscript(previous, result.asrText));
           }
-          setDraftText((prev) => appendTranscript(prev, result.asrText));
           setLiveText("");
           return;
         }
 
         if (event.kind === "transcription.empty") {
-          const transcriptId = optionalString(event.taskId);
-          if (transcriptId) {
-            acceptWorkflowView(
-              await defaultTauriGateway.invoke<WorkflowView>("workflow_report_asr_empty", {
-                req: { transcriptId },
-              }),
-            );
-          } else {
-            await refreshWorkflowSnapshot();
-          }
           setLiveText("");
           return;
         }
@@ -262,29 +247,22 @@ export default function OverlayApp() {
           return;
         }
 
-        if (isDisplayFailureEvent(event.kind, event.status)) return;
-        if (event.kind === "workflow.task.failed" && isAsrFailureStage(event.stage)) {
-          const transcriptId = optionalString(event.taskId);
-          if (transcriptId) {
-            acceptWorkflowView(
-              await defaultTauriGateway.invoke<WorkflowView>("workflow_report_asr_failed", {
-                req: {
-                  transcriptId,
-                  code: optionalString(event.errorCode) || "E_TRANSCRIBE_FAILED",
-                  message: event.message,
-                },
-              }),
-            );
-          } else {
-            await refreshWorkflowSnapshot();
-          }
-          return;
+        if (event.status === "failed" || event.status === "cancelled") {
+          setLiveText("");
         }
+      });
+      if (!track(stopUiEvents)) return;
 
-        if (event.status === "failed") {
-          await refreshWorkflowSnapshot();
-        }
-      }));
+      const stopHotkey = await defaultTauriGateway.listen<GlobalHotkeyEvent>(
+        "tv_global_hotkey",
+        (event) => {
+          if (!event || event.action !== "primary") return;
+          void runPrimaryFromAlt();
+        },
+      );
+      if (!track(stopHotkey)) return;
+
+      await refreshWorkflowSnapshot();
     })();
 
     return () => {
@@ -351,14 +329,14 @@ function SubtitleOverlay({
   );
 }
 
+function eventBelongsToCurrentProjection(event: UiEvent, view: WorkflowView): boolean {
+  const runId = optionalString(event.taskId);
+  return Boolean(
+    runId
+    && (view.activeRun?.runId === runId || view.lastRun?.runId === runId),
+  );
+}
+
 function optionalString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
-}
-
-function isDisplayFailureEvent(kind: string, status: string | null | undefined): boolean {
-  return kind === "transcription.stage" && status === "failed";
-}
-
-function isAsrFailureStage(stage: string | null | undefined): boolean {
-  return stage === "Record" || stage === "Transcribe";
 }

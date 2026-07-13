@@ -24,36 +24,6 @@ export type UiEvent = {
   tsMs: number;
 };
 
-export type WorkflowApplyEventRequest = {
-  eventId: string;
-  kind: string;
-  taskId?: string | null;
-  status?: string | null;
-  message: string;
-  errorCode?: string | null;
-  payload?: unknown;
-};
-
-export type WorkflowAsrCompletedRequest = {
-  transcriptId: string;
-  text: string;
-  metrics: TranscriptionMetrics;
-};
-
-export type WorkflowAsrEmptyRequest = {
-  transcriptId: string;
-};
-
-export type WorkflowTaskFailedRequest = {
-  transcriptId: string;
-  code: string;
-  message: string;
-};
-
-export type WorkflowTextCommandRequest = {
-  text: string;
-};
-
 export type RecordTranscribeStartResult = {
   sessionId: string;
 };
@@ -87,23 +57,35 @@ export type InsertResult = {
   errorMessage?: string | null;
 };
 
-export type WorkflowCommand = "primary" | "rewriteLast" | "insertLast" | "copyLast" | "cancel";
+export type WorkflowMode = "ready" | "recording" | "processing" | "cancelling";
+
+export type WorkflowRunProjection = {
+  runId: string;
+  [key: string]: unknown;
+};
 
 export type WorkflowView = {
-  phase: string;
-  taskId?: string | null;
-  recordingSessionId?: string | null;
-  lastTranscriptId?: string | null;
-  lastAsrText: string;
-  lastText: string;
-  lastCreatedAtMs?: number | null;
-  diagnosticCode?: string | null;
-  diagnosticLine: string;
+  mode: WorkflowMode;
+  revision: number;
+  actionKey: string;
+  activeRun: WorkflowRunProjection | null;
+  lastRun: WorkflowRunProjection | null;
   primaryLabel: string;
   primaryDisabled: boolean;
-  canRewrite: boolean;
-  canInsert: boolean;
-  canCopy: boolean;
+  cancelEnabled: boolean;
+};
+
+export type WorkflowCommand = "primary" | "cancel";
+
+export type WorkflowCommandRequest =
+  | { command: "primary"; actionKey: string }
+  | { command: "cancel"; targetRunId: string };
+
+export type WorkflowCommandDisposition = "applied" | "noOp" | "cancelTooLate";
+
+export type WorkflowCommandReply = {
+  disposition: WorkflowCommandDisposition;
+  view: WorkflowView;
 };
 
 export type TaskDone = {
