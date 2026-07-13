@@ -1,7 +1,10 @@
+use std::future::Future;
+
 use anyhow::{anyhow, Result};
 use base64::Engine;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 
 use crate::context_pack::PreparedContext;
 use crate::obs::debug;
@@ -296,49 +299,6 @@ pub async fn check_api_key_live(cfg: &LlmConfig) -> Result<()> {
     Ok(())
 }
 
-pub async fn rewrite(
-    data_dir: &std::path::Path,
-    task_id: &str,
-    system_prompt: &str,
-    asr_text: &str,
-) -> Result<String> {
-    rewrite_with_context(
-        data_dir,
-        task_id,
-        system_prompt,
-        asr_text,
-        None,
-        &[],
-        &RewriteContextPolicy::default(),
-    )
-    .await
-}
-
-pub async fn rewrite_with_context(
-    data_dir: &std::path::Path,
-    task_id: &str,
-    system_prompt: &str,
-    asr_text: &str,
-    ctx: Option<&PreparedContext>,
-    rewrite_glossary: &[String],
-    policy: &RewriteContextPolicy,
-) -> Result<String> {
-    let cfg = load_config(data_dir)?;
-    rewrite_with_context_config(
-        data_dir,
-        task_id,
-        &cfg,
-        RewriteRequest {
-            system_prompt,
-            asr_text,
-            context: ctx,
-            glossary: rewrite_glossary,
-            policy,
-        },
-    )
-    .await
-}
-
 pub struct RewriteRequest<'a> {
     pub system_prompt: &'a str,
     pub asr_text: &'a str,
@@ -347,12 +307,27 @@ pub struct RewriteRequest<'a> {
     pub policy: &'a RewriteContextPolicy,
 }
 
+async fn await_or_cancel<T, F>(token: &CancellationToken, future: F) -> Result<T>
+where
+    F: Future<Output = T>,
+{
+    tokio::select! {
+        biased;
+        _ = token.cancelled() => Err(anyhow!("E_CANCELLED: run cancelled")),
+        value = future => Ok(value),
+    }
+}
+
 pub async fn rewrite_with_context_config(
     data_dir: &std::path::Path,
     task_id: &str,
     cfg: &LlmConfig,
     request: RewriteRequest<'_>,
+    token: &CancellationToken,
 ) -> Result<String> {
+    if token.is_cancelled() {
+        return Err(anyhow!("E_CANCELLED: run cancelled"));
+    }
     let RewriteRequest {
         system_prompt,
         asr_text,
@@ -456,28 +431,39 @@ pub async fn rewrite_with_context_config(
         }
     }
 
-    let resp = match client
+    let request = client
         .post(url.clone())
         .bearer_auth(key)
         .json(&req_send)
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            let ae = anyhow!("llm http request failed: {e}");
-            span.err_anyhow(
-                "http",
-                "E_LLM_HTTP_SEND",
-                &ae,
-                Some(serde_json::json!({"url": url, "model": cfg.model})),
-            );
-            return Err(ae);
+        .send();
+    let resp = match await_or_cancel(token, request).await {
+        Err(error) => {
+            span.err_anyhow("cancel", "E_CANCELLED", &error, None);
+            return Err(error);
         }
+        Ok(result) => match result {
+            Ok(r) => r,
+            Err(e) => {
+                let ae = anyhow!("llm http request failed: {e}");
+                span.err_anyhow(
+                    "http",
+                    "E_LLM_HTTP_SEND",
+                    &ae,
+                    Some(serde_json::json!({"url": url, "model": cfg.model})),
+                );
+                return Err(ae);
+            }
+        },
     };
 
     let status = resp.status();
-    let body = resp.text().await.unwrap_or_default();
+    let body = match await_or_cancel(token, resp.text()).await {
+        Err(error) => {
+            span.err_anyhow("cancel", "E_CANCELLED", &error, None);
+            return Err(error);
+        }
+        Ok(result) => result.unwrap_or_default(),
+    };
 
     if debug::verbose_enabled() && debug::include_llm() {
         if let Some(info) = debug::write_payload_best_effort(
@@ -689,8 +675,23 @@ fn build_user_content(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
     use super::api_key_status;
+    use super::await_or_cancel;
     use super::normalize_base_url;
+    use tokio_util::sync::CancellationToken;
+
+    struct DropProbe(Arc<AtomicBool>);
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
 
     #[test]
     fn normalize_base_url_handles_empty_and_endpoint_suffix() {
@@ -716,5 +717,31 @@ mod tests {
         assert!(st.configured);
         assert_eq!(st.source, "env");
         std::env::remove_var("TYPEVOICE_LLM_API_KEY");
+    }
+
+    #[tokio::test]
+    async fn in_flight_request_observes_the_supplied_run_token() {
+        let token = CancellationToken::new();
+        let request_token = token.clone();
+        let dropped = Arc::new(AtomicBool::new(false));
+        let request_dropped = dropped.clone();
+        let request = tokio::spawn(async move {
+            await_or_cancel(&request_token, async move {
+                let _probe = DropProbe(request_dropped);
+                std::future::pending::<()>().await;
+            })
+            .await
+        });
+        tokio::task::yield_now().await;
+
+        token.cancel();
+
+        let error = tokio::time::timeout(std::time::Duration::from_secs(1), request)
+            .await
+            .expect("cancelled request settles")
+            .expect("request task joins")
+            .expect_err("request must be cancelled");
+        assert!(error.to_string().starts_with("E_CANCELLED:"));
+        assert!(dropped.load(Ordering::SeqCst));
     }
 }

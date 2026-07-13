@@ -1,10 +1,11 @@
+use std::future::Future;
 use std::path::Path;
 use std::time::Instant;
 
 use anyhow::{anyhow, Result};
+use futures_util::{stream, StreamExt};
 use reqwest::{multipart, Client};
 use serde::Deserialize;
-use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::llm::ApiKeyStatus;
@@ -239,9 +240,12 @@ async fn transcribe_remote_inner(
     }
 
     let key = load_api_key()?;
-    let bytes = tokio::fs::read(wav_path)
-        .await
-        .map_err(|e| err("E_REMOTE_ASR_WAV_READ", format!("read wav failed: {e}")))?;
+    let bytes = tokio::select! {
+        biased;
+        _ = token.cancelled() => return Err(err("E_CANCELLED", "cancelled")),
+        result = tokio::fs::read(wav_path) => result,
+    }
+    .map_err(|e| err("E_REMOTE_ASR_WAV_READ", format!("read wav failed: {e}")))?;
     let wav = parse_wav(&bytes)?;
     let slices = build_slice_requests(&bytes, &wav, DEFAULT_SLICE_SEC, DEFAULT_OVERLAP_SEC)?;
     if slices.is_empty() {
@@ -253,68 +257,24 @@ async fn transcribe_remote_inner(
 
     let client = Client::new();
     let concurrency_used = cfg.concurrency.min(slices.len()).max(1);
-    let mut parts = vec![String::new(); slices.len()];
-    let mut set = JoinSet::new();
-    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency_used));
+    let slice_count = slices.len();
     let started = Instant::now();
 
-    for slice in slices {
+    let requests = slices.into_iter().map(|slice| {
         let client2 = client.clone();
         let key2 = key.clone();
         let model2 = cfg.model.clone();
         let url2 = url.to_string();
         let token2 = token.clone();
-        let semaphore2 = semaphore.clone();
-        set.spawn(async move {
-            let _permit = semaphore2
-                .acquire_owned()
-                .await
-                .map_err(|_| err("E_REMOTE_ASR_INTERNAL", "semaphore closed"))?;
+        async move {
             if token2.is_cancelled() {
                 return Err(err("E_CANCELLED", "cancelled"));
             }
             transcribe_one_slice(&client2, &url2, &key2, model2.as_deref(), slice, &token2).await
-        });
-    }
-
-    let mut completed = 0usize;
-    while completed < parts.len() {
-        let next = tokio::select! {
-            _ = token.cancelled() => {
-                abort_and_drain(&mut set).await;
-                return Err(err("E_CANCELLED", "cancelled"));
-            }
-            v = set.join_next() => v
-        };
-        match next {
-            Some(Ok(Ok((index, text)))) => {
-                parts[index] = text;
-                completed += 1;
-            }
-            Some(Ok(Err(e))) => {
-                abort_and_drain(&mut set).await;
-                return Err(e);
-            }
-            Some(Err(e)) => {
-                abort_and_drain(&mut set).await;
-                return Err(err(
-                    "E_REMOTE_ASR_INTERNAL",
-                    format!("slice task join failed: {e}"),
-                ));
-            }
-            None => break,
         }
-    }
-
-    if completed != parts.len() {
-        return Err(err(
-            "E_REMOTE_ASR_INTERNAL",
-            format!(
-                "slice completion mismatch: expected={}, got={completed}",
-                parts.len()
-            ),
-        ));
-    }
+    });
+    let parts =
+        collect_slice_responses(requests, slice_count, concurrency_used, token.clone()).await?;
 
     let text = merge_slices(&parts);
     let elapsed_ms = started.elapsed().as_millis() as i64;
@@ -326,7 +286,7 @@ async fn transcribe_remote_inner(
             audio_seconds,
             elapsed_ms,
             rtf,
-            slice_count: parts.len(),
+            slice_count,
             concurrency_used,
             model_id: cfg
                 .model
@@ -337,9 +297,48 @@ async fn transcribe_remote_inner(
     })
 }
 
-async fn abort_and_drain<T: 'static>(set: &mut JoinSet<T>) {
-    set.abort_all();
-    while set.join_next().await.is_some() {}
+async fn collect_slice_responses<S, F>(
+    requests: S,
+    expected: usize,
+    concurrency: usize,
+    token: CancellationToken,
+) -> Result<Vec<String>, RemoteAsrError>
+where
+    S: IntoIterator<Item = F>,
+    F: Future<Output = Result<(usize, String), RemoteAsrError>>,
+{
+    let responses = stream::iter(requests).buffer_unordered(concurrency.max(1));
+    tokio::pin!(responses);
+    let mut parts = vec![String::new(); expected];
+    let mut completed = 0usize;
+    while completed < expected {
+        let next = tokio::select! {
+            biased;
+            _ = token.cancelled() => return Err(err("E_CANCELLED", "cancelled")),
+            value = responses.next() => value,
+        };
+        match next {
+            Some(Ok((index, text))) if index < expected => {
+                parts[index] = text;
+                completed += 1;
+            }
+            Some(Ok((index, _))) => {
+                return Err(err(
+                    "E_REMOTE_ASR_INTERNAL",
+                    format!("slice index out of range: index={index}, expected={expected}"),
+                ));
+            }
+            Some(Err(error)) => return Err(error),
+            None => break,
+        }
+    }
+    if completed != expected {
+        return Err(err(
+            "E_REMOTE_ASR_INTERNAL",
+            format!("slice completion mismatch: expected={expected}, got={completed}"),
+        ));
+    }
+    Ok(parts)
 }
 
 async fn transcribe_one_slice(
@@ -374,10 +373,12 @@ async fn transcribe_one_slice(
     .map_err(|e| err("E_REMOTE_ASR_HTTP_SEND", format!("request failed: {e}")))?;
 
     let status = resp.status();
-    let body = resp
-        .text()
-        .await
-        .map_err(|e| err("E_REMOTE_ASR_PARSE", format!("read response failed: {e}")))?;
+    let body = tokio::select! {
+        biased;
+        _ = token.cancelled() => return Err(err("E_CANCELLED", "cancelled")),
+        result = resp.text() => result,
+    }
+    .map_err(|e| err("E_REMOTE_ASR_PARSE", format!("read response failed: {e}")))?;
 
     if !status.is_success() {
         let code = format!("E_REMOTE_ASR_HTTP_STATUS_{}", status.as_u16());
@@ -682,7 +683,21 @@ fn skip_first_chars(s: &str, n: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{merge_slices, parse_wav};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    use super::{collect_slice_responses, merge_slices, parse_wav};
+    use tokio_util::sync::CancellationToken;
+
+    struct DropProbe(Arc<AtomicUsize>);
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
 
     fn build_test_wav(seconds: usize) -> Vec<u8> {
         let sample_rate = 16_000u32;
@@ -730,5 +745,44 @@ mod tests {
             "a test for remote asr".to_string(),
         ]);
         assert_eq!(merged, "hello world this is a test for remote asr");
+    }
+
+    #[tokio::test]
+    async fn cancelling_slice_collection_drops_every_in_flight_request() {
+        let token = CancellationToken::new();
+        let started = Arc::new(AtomicUsize::new(0));
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let request_started = started.clone();
+        let request_dropped = dropped.clone();
+        let requests = (0..2).map(move |index| {
+            let started = request_started.clone();
+            let dropped = request_dropped.clone();
+            async move {
+                let _probe = DropProbe(dropped);
+                started.fetch_add(1, Ordering::SeqCst);
+                std::future::pending::<()>().await;
+                Ok((index, String::new()))
+            }
+        });
+        let task_token = token.clone();
+        let task =
+            tokio::spawn(async move { collect_slice_responses(requests, 2, 2, task_token).await });
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while started.load(Ordering::SeqCst) != 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("both request futures start");
+
+        token.cancel();
+
+        let error = tokio::time::timeout(std::time::Duration::from_secs(1), task)
+            .await
+            .expect("slice collector settles")
+            .expect("slice collector joins")
+            .expect_err("slice collector must cancel");
+        assert_eq!(error.code, "E_CANCELLED");
+        assert_eq!(dropped.load(Ordering::SeqCst), 2);
     }
 }
