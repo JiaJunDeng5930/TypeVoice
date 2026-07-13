@@ -4,12 +4,12 @@
 
 - [base-spec.md](./base-spec.md)：产品目标、范围、性能约束、验收阈值（含自动粘贴约束）。
 - [tech-spec.md](./tech-spec.md)：目标线协议、能力边界、单次运行资源以及数据、错误和观测约束；业务状态以 architecture 为唯一来源。
-- [verification.md](./verification.md)：当前 quick/full 级别、固定样本与已有验收断言；目标状态机与跨平台插入 gate 以 architecture 第 8 节为准，尚未实现。
+- [verification.md](./verification.md)：当前 quick/full 级别、T22 非零合同选择与 T23 隔离的真实 per-platform runner；单平台证据不构成跨平台 `PASS`。
 - [fixtures-sources.md](./fixtures-sources.md)：验证音频样本来源与命名约定。
 
 ## 架构与计划
 
-- [architecture.md](./architecture.md)：当前实现审查，以及唯一状态所有者、四态转移、取消和下一阶段自动化验收合同。
+- [architecture.md](./architecture.md)：已实现的唯一状态所有者、四态转移、取消、自动化验收合同与平台证明边界。
 - [roadmap.md](./roadmap.md)：里程碑与 Gate（含复制+自动粘贴闭环）。
 - [tasks.md](./tasks.md)：按里程碑分解的可执行任务清单。
 - [perf-spike.md](./perf-spike.md)：性能指标、样本策略与优化输出。
