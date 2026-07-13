@@ -18,7 +18,7 @@ test("target_contract_t16_late_partial_is_scoped_to_active_run", () => {
     tsMs: 10,
   };
 
-  const displayed = textFromTranscriptionPartial(latePartial);
+  const displayed = textFromTranscriptionPartial(latePartial, activeRunId);
 
   assert.equal(
     displayed,
@@ -28,6 +28,7 @@ test("target_contract_t16_late_partial_is_scoped_to_active_run", () => {
 });
 
 test("target_contract_t16_matching_partial_remains_visible", () => {
+  const activeRunId = "run-current";
   const matchingPartial = {
     kind: "transcription.partial",
     taskId: "run-current",
@@ -37,7 +38,7 @@ test("target_contract_t16_matching_partial_remains_visible", () => {
   };
 
   assert.equal(
-    textFromTranscriptionPartial(matchingPartial),
+    textFromTranscriptionPartial(matchingPartial, activeRunId),
     "visible text",
     "the run identity boundary must not discard the active run's own partial",
   );
