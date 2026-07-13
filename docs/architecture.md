@@ -1,10 +1,10 @@
 # TypeVoice 目标架构与工作流契约
 
-状态：目标契约，尚未由当前业务代码实现。下一阶段实现和自动化验收以本文为唯一工作流状态来源；`docs/base-spec.md` 仍是产品行为上位约束，`docs/tech-spec.md` 只保留线协议和适配器细节。
+状态：已实现的工作流契约。当前业务代码和自动化验收以本文为唯一工作流状态来源；`docs/base-spec.md` 仍是产品行为上位约束，`docs/tech-spec.md` 只保留线协议和适配器细节。T23 的 Windows/Linux adapter 必须继续由各自平台 gate 分别证明，未执行的平台不能记为 PASS。
 
-本文解决一个具体问题：一次语音输入目前同时由后端 phase、多个全局资源槽、两个前端窗口的本地状态和异步回报命令共同推进，所以维护者无法从一个位置回答“当前业务状态是什么、这个结果还应不应该生效、用户看到的错误属于哪次运行”。目标设计把状态判断收回一个后端所有者，同时把 FFmpeg、ASR、LLM 和插入资源留在单次运行边界内，不把执行细节集中到长期存活的 god actor。
+本文解决一个具体问题：重构前，一次语音输入同时由后端 phase、多个全局资源槽、两个前端窗口的本地状态和异步回报命令共同推进，所以维护者无法从一个位置回答“当前业务状态是什么、这个结果还应不应该生效、用户看到的错误属于哪次运行”。当前设计把状态判断收回一个后端所有者，同时把 FFmpeg、ASR、LLM 和插入资源留在单次运行边界内，不把执行细节集中到长期存活的 god actor。
 
-## 1. 当前实现事实审查
+## 1. 重构前实现事实基线
 
 本节记录 `refactor/architecture-state-machine` 分支、HEAD `3f6bc24` 在 2026-07-13 的直接观察。行号用于复核该基线，不是目标 API。
 
@@ -12,7 +12,7 @@
 
 | 事实 | 当前证据 | 对业务链路的直接影响 |
 | --- | --- | --- |
-| 实时 Git 树仍是 workspace crate 结构 | `git ls-tree -r --name-only HEAD` 将核心文件列在 `crates/typevoice-engine/src/`；`apps/desktop/src-tauri/src/lib.rs:3-5` 只是 re-export 组合层 | AGENTS 自动 project index 所列的 `apps/desktop/src-tauri/src/voice_workflow.rs` 等路径已经陈旧，审查和实现必须以 Git 树为准 |
+| 实时 Git 树仍是 workspace crate 结构 | `git ls-tree -r --name-only HEAD` 将核心文件列在 `crates/typevoice-engine/src/`；`apps/desktop/src-tauri/src/lib.rs:3-5` 只是 re-export 组合层 | 该基线的 AGENTS 自动 project index 所列路径已经陈旧，迁移完成后必须由生成器刷新 |
 | 后端已有一个名义上的状态真相 | `voice_workflow.rs:23-33` 定义九个 phase，`232-287` 用 `Mutex<WorkflowState>` 持有 session、结果、错误和事件缓存 | phase 的写入集中在 `VoiceWorkflow`，但异步结果能否到达它并不由它控制 |
 | ASR 终态由两个前端窗口重复回报 | `MainScreen.tsx:140-223` 与 `OverlayApp.tsx:205-276` 都监听 `ui_event`，并调用 `workflow_report_asr_completed/empty/failed` | Main 或 Overlay 的生命周期、监听顺序和 Promise 处理会决定后端能否离开 `Transcribing`；两个窗口还会竞争提交同一结果 |
 | 文档所写的 `stateChanging -> workflow_apply_event` 链不存在 | `ui_events.rs:78,99,119,137,166,183,209,235,252` 的所有事件都是 `displayOnly`；前端没有 `workflow_apply_event` 调用；`voice_workflow.rs:328-341` 只按 event ID 缓存并原样返回当前 view | `effect` 和 event ID 构成没有状态作用的第二套协议，不能提供文档声称的终态提交或晚到保护 |
@@ -24,7 +24,7 @@
 | 持久化提交点不唯一 | `rewrite.rs:98-104` 已更新 History，随后 `voice_workflow.rs:911-913,1290-1299` 再更新一次；ASR report 在 `742-749` 先改内存状态再写 History | 重复写入没有业务价值；History 失败还会形成“后端已转移、UI 未收到新 snapshot”的部分提交 |
 | `insert_previous_phase` 没有读取者 | 字段定义和写入位于 `voice_workflow.rs:239,1759`，全仓搜索没有读取路径 | 该字段是没有真实职责的状态数据，不应迁移到目标模型 |
 | 当前 trace 有相关字段，但因果链并不连续 | `obs/schema.rs:27-38` 已有 `task_id/stage/step_id`；`commands.rs:338-352` 的 workflow command 错误却记录 `task_id=None`，`audio_capture.rs:322-330` 的 stop span 也不带业务 ID | 用户动作、资源操作和终态无法稳定通过一个 ID 连接，排障仍需按时间猜测 |
-| 现有 verify 可能 0-test 通过 | `xtask/main.rs:506-541,606-623` 在 `apps/desktop/src-tauri` 运行未带 `--workspace/-p` 的过滤测试；现场 `cargo test --locked --workspace` 列出 107 个通过测试，而 quick 的三个过滤器都显示 `running 0 tests` 后退出 0 | 当前 gate 通过不能证明 engine 状态或可调试性契约被执行，下一阶段必须把非零匹配数作为 gate 条件 |
+| 现有 verify 可能 0-test 通过 | `xtask/main.rs:506-541,606-623` 在 `apps/desktop/src-tauri` 运行未带 `--workspace/-p` 的过滤测试；现场 `cargo test --locked --workspace` 列出 107 个通过测试，而 quick 的三个过滤器都显示 `running 0 tests` 后退出 0 | 该基线的 gate 通过不能证明 engine 状态或可调试性契约被执行，迁移必须把非零匹配数作为 gate 条件 |
 
 全仓调用面还证明了命令契约的实际产品语义：Record 页只有单一录音按钮，Overlay 只有 `primary` 热键，History 复制直接读取持久记录；前端没有 `rewriteLast`、`insertLast`、`copyLast` 调用者，也没有 `workflow_report_rewrite_*`、`workflow_report_insert_*` 或 `workflow_apply_event` 调用者。当前 `workflow_rewrite/workflow_insert` 只是 Main 自动计划的两步。因此，`tech-spec` 旧文所称“改写、插入、复制由用户分别触发”被冻结的 `base-spec.md:24-29,50-57` 和实时 UI 同时推翻，不能作为保留无调用入口的理由。
 
@@ -34,11 +34,11 @@
 
 三个全局 active 槽本身不等于错误，它们当前也有 stale ID 防护；问题在于这些槽与 detached task 没有共同的单次运行寿命。只有状态 owner 知道业务 run 是否有效，而只有各资源模块知道进程、token 或 session 是否已经释放，所以取消和替换无法由一个可检查的不变量描述。
 
-### 1.3 尚未证实且不作为设计前提的事项
+### 1.3 设计基线中尚未证实且不作为前提的事项
 
 - 本次没有通过人工操作复现 Overlay 文本重复、窗口关闭后卡在 Transcribing 或 cancel/completion 竞争；源码已证明这些路径存在，但发生频率仍未知。
-- 当前 LLM 请求和平台插入没有 cancellation token。下一阶段需要用受控端口证明目标取消语义，本文不假设现有函数已可取消。
-- 仓库中没有找到 AGENTS project index 的生成命令或配置。由于该块标注为自动生成，本目标不手改它；实现阶段应先确认生成器，再刷新索引。
+- 该基线的 LLM 请求和平台插入没有 cancellation token。迁移必须用受控端口证明取消语义，设计不能假设原函数已可取消。
+- 该基线中没有找到 AGENTS project index 的生成命令或配置，因此设计阶段没有手改自动块；迁移完成时已使用确认过的 project-index 生成器刷新索引。
 
 ## 2. 目标所有权与依赖方向
 
@@ -245,9 +245,9 @@ Cancel 与 resource/stage launch、普通终态、History/插入 finalization �
 
 排障路径因而固定为：用户动作生成/携带 runId -> 查 `workflow.transition` 确认最后 revision 和 cause -> 按同一 runId 查 executor stage/step -> 对照唯一 `Stopped` 与 `lastRun`。不再需要把 UI eventId、两个窗口的本地 ref 或录音 session ID 拼成第二条因果链。
 
-## 8. 下一阶段自动化验收模型
+## 8. 自动化验收模型
 
-本节定义测试，不在本目标中实现。最小测试缝只有四个：可脚本化 dormant `RunHandle`，其中含 resource/stage/cancel/terminal/finalization arbiter、completion guard 和受控 supervisor exit；带调用计数的 ASR/rewrite/insertion/History ports；捕获 snapshot/事件的 sink；确定性的 ID、clock 和 200/300ms deadline。状态测试不需要 Tauri、真实网络或真实硬件；T23 另要求 Windows/Linux 平台 adapter gate，未执行的目标 gate 不能记为 PASS。
+本节定义的测试已经实现为可执行合同。最小测试缝只有四个：可脚本化 dormant `RunHandle`，其中含 resource/stage/cancel/terminal/finalization arbiter、completion guard 和受控 supervisor exit；带调用计数的 ASR/rewrite/insertion/History ports；捕获 snapshot/事件的 sink；确定性的 ID、clock 和 200/300ms deadline。状态测试不需要 Tauri、真实网络或真实硬件；T23 另要求 Windows/Linux 平台 adapter gate，未执行的目标 gate 不能记为 PASS。
 
 ### 8.1 不变量
 
@@ -292,41 +292,41 @@ Cancel 与 resource/stage launch、普通终态、History/插入 finalization �
 | T22 `verify_runs_nonzero_workspace_contracts` | 执行 quick/full test selection，注入 0-match 和 engine sentinel | 0-match 必须失败；full 必须执行 workspace engine 与前端契约 | xtask process harness/sentinel |
 | T23 `insertion_ports_are_cross_platform_and_real` | 对同一文本运行 Windows platform-input 与 Linux AT-SPI adapter；关闭/开启 auto-paste，并注入 copy/paste 失败 | 两端都先 copy 且不用快捷键模拟；关闭时不输入，开启时各调用一次原生能力；各 OS gate 必须实际执行，另一端 Skipped 不等于全局 PASS | shared port contract、Windows/Linux integration runners |
 
-第 4 节每条规则都已映射到 T01-T21；T03 遍历 admission 与全部用户 intent 分支，T05 定义完整 progress 合法域，T06/T07 拒绝 typed terminal 的非法字段与顺序，T08/T21 覆盖异常退出和有界 cleanup，T13-T15 覆盖两态取消与 terminal winner。反向每个状态场景都引用 A/R/G/P/C 规则或本节不变量。T22 防止当前 crate 拆分后的 0-test 假通过，T23 补齐冻结的跨平台插入验收；在它们实现前，现有 quick/full PASS 不能作为本目标契约已验收的证据。
+第 4 节每条规则都已映射到 T01-T21；T03 遍历 admission 与全部用户 intent 分支，T05 定义完整 progress 合法域，T06/T07 拒绝 typed terminal 的非法字段与顺序，T08/T21 覆盖异常退出和有界 cleanup，T13-T15 覆盖两态取消与 terminal winner。反向每个状态场景都引用 A/R/G/P/C 规则或本节不变量。T01-T23 已实现为可执行合同，T22 防止 crate 拆分后的 0-test 假通过；T23 仍要求两个平台 gate 各自实际执行，单个平台的 Skipped/NotRun 不能作为跨平台 PASS。
 
-## 9. 从当前实现到目标的最小迁移
+## 9. 已完成的最小迁移
 
 ```text
-当前：UI primary/report/auto-flow
+重构前：UI primary/report/auto-flow
         -> VoiceWorkflow 九 phase
         -> detached voice_tasks + 三个全局 active 槽
         -> UI terminal event -> UI report -> backend
 
-目标：UI Primary(actionKey)|Cancel(targetRunId) admission / hotkey edge Primary
+当前：UI Primary(actionKey)|Cancel(targetRunId) admission / hotkey edge Primary
         -> WorkflowController 四态 + revision
         -> one RunExecutor(runId) -> typed Progress/Stopped
         -> Controller commit -> full snapshot -> UI projection
 ```
 
-按依赖顺序只需要以下迁移：
+迁移已按以下依赖顺序完成：
 
-1. 先建立纯四态 reducer、Primary/Cancel admission、typed Progress/Stopped 和本文矩阵，用 fake executor 跑 T01-T21；在此之前不移动 capability 代码。
-2. 让 `workflow_command` 和 backend hotkey 只进入 Controller；Ready 的 Primary 从 cached config 创建完整 RunPlanSeed 与 dormant handle，随 Recording 原子提交后按 Begin→snapshot→reply 全序启动。把三个全局 active 槽改为 executor 持有的 run-scoped handle，并由 completion guard/supervisor 把所有可继续运行的退出收敛为恰好一个 Stopped。
+1. 建立纯四态 reducer、Primary/Cancel admission、typed Progress/Stopped 和本文矩阵，用 fake executor 跑 T01-T21，再迁移 capability 代码。
+2. 让 `workflow_command` 和 backend hotkey 只进入 Controller；Ready 的 Primary 从 cached config 创建完整 RunPlanSeed 与 dormant handle，随 Recording 原子提交后按 Begin→snapshot→reply 全序启动。三个全局 active 槽已改为 executor 持有的 run-scoped handle，并由 completion guard/supervisor 把所有可继续运行的退出收敛为恰好一个 Stopped。
 3. 把 context capture、provider、rewrite、InsertPrepare、History 和平台输入组合进一次 run。能力模块不再自行推进 workflow 或写 History；Executor 用同一 arbiter 排序 resource/stage launch、Cancel、ordinary terminal 与 finalization，terminal gate 后只提交一条 History、一次必做 copy 和一次可选 auto-paste。
-4. 后端先处理 typed progress、cancel disposition 和 typed Stopped，再发完整 snapshot。删除 `workflow_apply_event`、`workflow_report_*`、`applied_event_views`、`insert_previous_phase` 和前端 ASR 回报。
-5. 删除没有实时 UI 调用者且与冻结自动流程冲突的 `rewriteLast/insertLast/copyLast`、`record_transcribe_*`、`rewrite_text/insert_text` Tauri 兼容入口；History copy 保持独立。若未来真的增加手动重试，它必须作为新用户 intent 进入同一 Controller，并先扩展完整命令矩阵，不能恢复前端直调 capability。
+4. 后端先处理 typed progress、cancel disposition 和 typed Stopped，再发完整 snapshot；`workflow_apply_event`、`workflow_report_*`、`applied_event_views`、`insert_previous_phase` 和前端 ASR 回报已经删除。
+5. 删除没有实时 UI 调用者且与冻结自动流程冲突的 `rewriteLast/insertLast/copyLast`、`record_transcribe_*`、`rewrite_text/insert_text` Tauri 兼容入口；History copy 保持独立。若未来增加手动重试，它必须作为新用户 intent 进入同一 Controller，并先扩展完整命令矩阵，不能恢复前端直调 capability。
 6. 删除 Main 的 `autoRewriteStartedRef/autoInsertStartedRef` 和 phase 编排，删除 Overlay 的业务回报与 hotkey 转发；窗口 Primary 原样回传 actionKey、显式 Cancel 携带 targetRunId，hotkey adapter 过滤重复边沿后直接进入 Controller，并按 snapshot 渲染 label/disabled；当前 run partial 只作显示。
-7. 将现有 `task_id` 语义统一为 runId，并在每次 reducer commit 写 `workflow.transition`。删除状态型 `effect/eventId` 回流协议；UiEventMailbox 只负责显示传输。
-8. 最后实现有界 cleanup/force/fatal 与 Windows/Linux insertion adapter gate，并修正 xtask 的 workspace/package 选择和 0-match 检查，接入 T21-T23。AGENTS 自动索引只能通过确认过的生成机制刷新，不能手改自动块。
+7. 将原有 `task_id` 语义统一为 runId，并在每次 reducer commit 写 `workflow.transition`；状态型 `effect/eventId` 回流协议已经删除，UiEventMailbox 只负责显示传输。
+8. 实现有界 cleanup/force/fatal 与 Windows/Linux insertion adapter gate，修正 xtask 的 workspace/package 选择和 0-match 检查，接入 T21-T23，并通过 project-index 生成器刷新 AGENTS 自动索引。
 
-这条迁移不引入兼容 shim 或并行状态机。每一步都把一个现有所有者删除后再接入唯一边界，任何阶段都不允许新旧终态通道同时成为业务真相。
+这条迁移没有引入兼容 shim 或并行状态机。每一步都把一个旧所有者删除后再接入唯一边界，没有让新旧终态通道同时成为业务真相。
 
 ## 10. 成本下降的可观察结果
 
-**维护：** 当前修改 ASR 完成需要同时理解 `voice_tasks`、两个前端 listener、三个 report 命令和九 phase；目标把所有终态收敛为 `Stopped` 加一张 reducer 表。维护者新增错误或调整恢复行为时，只修改单次 executor 结果和一条 Controller 规则，T03/T06-T08 会直接证明矩阵仍完整。
+**维护：** 重构前修改 ASR 完成需要同时理解 `voice_tasks`、两个前端 listener、三个 report 命令和九 phase；当前实现把所有终态收敛为 `Stopped` 加一张 reducer 表。维护者新增错误或调整恢复行为时，只修改单次 executor 结果和一条 Controller 规则，T03/T06-T08 会直接证明矩阵仍完整。
 
-**扩展：** 当前新增处理步骤通常需要新增 phase、前端 auto ref、事件 kind 和 report 路径。目标中的新步骤默认只是 RunExecutor stage，只要它服从同一 token 和 `Stopped` 契约，就不改变业务状态或 UI 命令；只有真的产生不同用户动作或资源寿命时才有理由增加状态。
+**扩展：** 重构前新增处理步骤通常需要新增 phase、前端 auto ref、事件 kind 和 report 路径。当前实现中的新步骤默认只是 RunExecutor stage，只要它服从同一 token 和 `Stopped` 契约，就不改变业务状态或 UI 命令；只有真的产生不同用户动作或资源寿命时才有理由增加状态。
 
-**debug：** 当前 task/transcript/session/event ID 和窗口本地状态分散，命令错误甚至缺 task ID。目标使一次录音只有 runId，每次真实转移只有一个 revision；从用户动作、FFmpeg、provider、History 到终态都能用同一查询串联，late signal 还会留下明确的 ignored trace，而不是表现为偶发 UI toast 或卡住。
+**debug：** 重构前 task/transcript/session/event ID 和窗口本地状态分散，命令错误甚至缺 task ID。当前实现使一次录音只有 runId，每次真实转移只有一个 revision；从用户动作、FFmpeg、provider、History 到终态都能用同一查询串联，late signal 会留下明确的 ignored trace，而不是表现为偶发 UI toast 或卡住。
 
-**可靠性：** 当前前端断开会阻止 ASR 落状态，取消后资源释放与新 Start 也没有统一证明。目标先由后端提交、再投影 UI，并用 Cancelling 保持 executor handle 直到 `Stopped`；T13-T16、T20 能观察到“不会因窗口缺席卡住、不会由晚到结果覆盖、Ready 时没有旧资源”这三个直接后果。
+**可靠性：** 重构前前端断开会阻止 ASR 落状态，取消后资源释放与新 Start 也没有统一证明。当前实现先由后端提交、再投影 UI，并用 Cancelling 保持 executor handle 直到 `Stopped`；T13-T16、T20 能观察到“不会因窗口缺席卡住、不会由晚到结果覆盖、Ready 时没有旧资源”这三个直接后果。
