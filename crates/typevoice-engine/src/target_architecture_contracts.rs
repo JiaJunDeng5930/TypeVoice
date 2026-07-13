@@ -876,7 +876,7 @@ fn cancel(
 ) -> typevoice_core::workflow::WorkflowCommandReply {
     controller
         .command(WorkflowIntent::Cancel {
-            target_run_id: Some(target_run_id.to_string()),
+            target_run_id: target_run_id.to_string(),
         })
         .expect("target-contract cancel command must return a protocol reply")
 }
@@ -1367,7 +1367,11 @@ fn target_contract_t03_intent_admission_and_matrix_are_total() {
                     action_key: before.action_key.clone(),
                 }),
                 IntentCase::Cancel => harness.controller.command(WorkflowIntent::Cancel {
-                    target_run_id: before.active_run.as_ref().map(|run| run.run_id.clone()),
+                    target_run_id: before
+                        .active_run
+                        .as_ref()
+                        .map(|run| run.run_id.clone())
+                        .unwrap_or_else(|| format!("no-active-{run_id}")),
                 }),
                 IntentCase::Invalid => {
                     let parsed =
@@ -1386,7 +1390,7 @@ fn target_contract_t03_intent_admission_and_matrix_are_total() {
                 }),
                 IntentCase::MismatchedTargetRunId => {
                     harness.controller.command(WorkflowIntent::Cancel {
-                        target_run_id: Some("another-run".to_string()),
+                        target_run_id: "another-run".to_string(),
                     })
                 }
             };
