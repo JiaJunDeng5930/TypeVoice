@@ -5,7 +5,9 @@ use std::sync::Mutex;
 use std::collections::BTreeSet;
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
+#[cfg(windows)]
+use tauri::Manager;
 
 use crate::obs::Span;
 use crate::settings::Settings;
