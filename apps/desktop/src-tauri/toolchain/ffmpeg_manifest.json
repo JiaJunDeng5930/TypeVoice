@@ -27,6 +27,18 @@
       "ffprobe_file": "ffprobe",
       "ffmpeg_sha256": "e7e7fb30477f717e6f55f9180a70386c62677ef8a4d4d1a5d948f4098aa3eb99",
       "ffprobe_sha256": "4f231a1960d83e403d08f7971e271707bec278a9ae18e21b8b5b03186668450d"
+    },
+    "macos-aarch64": {
+      "archive_url": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1723057355_7.0.2/ffmpeg.zip",
+      "archive_sha256": "a72d4c78ad5fd3497aa6b539ef8b0ed239f9eb59258bf6ce12afed4c203dfc3a",
+      "archive_type": "zip",
+      "archive_root": "",
+      "ffprobe_archive_url": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1723057355_7.0.2/ffprobe.zip",
+      "ffprobe_archive_sha256": "2e5e315574cb430a8d070f4acf81d4812cdbf2b529a1ed7a5a4ba3ff3d06b0d5",
+      "ffmpeg_file": "ffmpeg",
+      "ffprobe_file": "ffprobe",
+      "ffmpeg_sha256": "5d8c9cdbb1f6501dc5e5c18b074d265d26d985eee663c999758cec04039d7f31",
+      "ffprobe_sha256": "0b8b7c4d431e126a026a36d4144f3c608fb7291fad6380ca56f38d705c66fa9c"
     }
   }
 }

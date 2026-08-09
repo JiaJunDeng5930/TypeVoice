@@ -1,6 +1,6 @@
 # TypeVoice 目标架构与工作流契约
 
-状态：已实现的工作流契约。当前业务代码和自动化验收以本文为唯一工作流状态来源；`docs/base-spec.md` 仍是产品行为上位约束，`docs/tech-spec.md` 只保留线协议和适配器细节。T23 的 Windows/Linux adapter 必须继续由各自平台 gate 分别证明，未执行的平台不能记为 PASS。
+状态：已实现的工作流契约。当前业务代码和自动化验收以本文为唯一工作流状态来源；`docs/base-spec.md` 仍是产品行为上位约束，`docs/tech-spec.md` 只保留线协议和适配器细节。T23 的 Windows/Linux/macOS adapter 必须继续由各自平台 gate 分别证明，未执行的平台不能记为 PASS。
 
 本文解决一个具体问题：重构前，一次语音输入同时由后端 phase、多个全局资源槽、两个前端窗口的本地状态和异步回报命令共同推进，所以维护者无法从一个位置回答“当前业务状态是什么、这个结果还应不应该生效、用户看到的错误属于哪次运行”。当前设计把状态判断收回一个后端所有者，同时把 FFmpeg、ASR、LLM 和插入资源留在单次运行边界内，不把执行细节集中到长期存活的 god actor。
 
@@ -247,7 +247,7 @@ Cancel 与 resource/stage launch、普通终态、History/插入 finalization �
 
 ## 8. 自动化验收模型
 
-本节定义的测试已经实现为可执行合同。最小测试缝只有四个：可脚本化 dormant `RunHandle`，其中含 resource/stage/cancel/terminal/finalization arbiter、completion guard 和受控 supervisor exit；带调用计数的 ASR/rewrite/insertion/History ports；捕获 snapshot/事件的 sink；确定性的 ID、clock 和 200/300ms deadline。状态测试不需要 Tauri、真实网络或真实硬件；T23 另要求 Windows/Linux 平台 adapter gate，未执行的目标 gate 不能记为 PASS。
+本节定义的测试已经实现为可执行合同。最小测试缝只有四个：可脚本化 dormant `RunHandle`，其中含 resource/stage/cancel/terminal/finalization arbiter、completion guard 和受控 supervisor exit；带调用计数的 ASR/rewrite/insertion/History ports；捕获 snapshot/事件的 sink；确定性的 ID、clock 和 200/300ms deadline。状态测试不需要 Tauri、真实网络或真实硬件；T23 另要求 Windows/Linux/macOS 平台 adapter gate，未执行的目标 gate 不能记为 PASS。
 
 ### 8.1 不变量
 
@@ -259,7 +259,7 @@ Cancel 与 resource/stage launch、普通终态、History/插入 finalization �
 - I6：状态先原子提交，再发对应 revision 的完整 snapshot；前端没有 report/apply 命令。
 - I7：Begin resource 与每个可取消 stage launch、`begin_terminal`、`begin_finalization`、Cancel 都经同一 arbiter；Accepted 后不再启动新工作或领取 terminal ownership，已经启动的请求响应 token/drop。
 - I8：Cancel、ordinary terminal 与 finalization 只有一个 winner：Cancel winner 只能发 Cancelled，其他 claim winner 使 Cancel TooLate；History/复制已提交的 run 不能终止为 Cancelled。
-- I9：LLM 或后续失败保留 ASR，恢复失败追加 recoveryErrors，音频始终清理；每个非空 Completed 必有一次 copy，只有 auto-paste 可选；Windows platform input 与 Linux AT-SPI 都不得用快捷键模拟。
+- I9：LLM 或后续失败保留 ASR，恢复失败追加 recoveryErrors，音频始终清理；每个非空 Completed 必有一次 copy，只有 auto-paste 可选；Windows platform input、Linux AT-SPI 与 macOS Core Graphics 都不得用快捷键模拟。
 - I10：Progress 和 Stopped 都是 typed union；stage/terminal 顺序非法不能覆盖中间结果，资源已释放的非法 terminal 必须收敛为结构化 Failed，不能被 Controller 改写成另一 variant。
 - I11：每个窗口的 latestRevision 从 None 开始，listener 先于 snapshot；首份 revision 0、重连乱序 snapshot 和相等 command reply 都不会被误丢或回退。
 - I12：窗口 Primary 原样回传派生 actionKey，显式 Cancel 携带 targetRunId，后端热键的一次完整物理手势只发送一个 Controller 内部 Primary；动作映射不读取窗口 phase，同 key 重复 Primary 不跨 stage 生效，普通 progress 不使 key 过期，同一 run 的 Cancel 必须得到 Accepted/TooLate 而不是 stale projection NoOp。
@@ -290,9 +290,9 @@ Cancel 与 resource/stage launch、普通终态、History/插入 finalization �
 | T20 `ready_implies_no_live_run_resources` | 对成功、失败、空结果、取消遍历 terminal | P4/P6/P8/C3 每次进入 Ready 时 FFmpeg/request/token/temp asset/handle 计数均为 0 | resource-owning fake executor |
 | T21 `cleanup_timeout_escalates_or_fails_closed` | cooperative cleanup 卡住；分别让 force kill/abort 成功或仍无法证明释放 | force 成功按 winner 走 G7/P8 或 C3 且资源为 0；无法证明时 fatal，不产生 Ready/新 run/伪 Stopped | hung resource fake、deadline、fatal hook |
 | T22 `verify_runs_nonzero_workspace_contracts` | 执行 quick/full test selection，注入 0-match 和 engine sentinel | 0-match 必须失败；full 必须执行 workspace engine 与前端契约 | xtask process harness/sentinel |
-| T23 `insertion_ports_are_cross_platform_and_real` | 对同一文本运行 Windows platform-input 与 Linux AT-SPI adapter；关闭/开启 auto-paste，并注入 copy/paste 失败 | 两端都先 copy 且不用快捷键模拟；关闭时不输入，开启时各调用一次原生能力；各 OS gate 必须实际执行，另一端 Skipped 不等于全局 PASS | shared port contract、Windows/Linux integration runners |
+| T23 `insertion_ports_are_cross_platform_and_real` | 对同一文本运行 Windows platform-input、Linux AT-SPI 与 macOS Core Graphics adapter；关闭/开启 auto-paste，并注入 copy/paste 失败 | 三端都先 copy 且不用快捷键模拟；关闭时不输入，开启时各调用原生能力；各 OS gate 必须实际执行，未执行的平台不等于全局 PASS | shared port contract、Windows/Linux/macOS integration runners |
 
-第 4 节每条规则都已映射到 T01-T21；T03 遍历 admission 与全部用户 intent 分支，T05 定义完整 progress 合法域，T06/T07 拒绝 typed terminal 的非法字段与顺序，T08/T21 覆盖异常退出和有界 cleanup，T13-T15 覆盖两态取消与 terminal winner。反向每个状态场景都引用 A/R/G/P/C 规则或本节不变量。T01-T23 已实现为可执行合同，T22 防止 crate 拆分后的 0-test 假通过；T23 仍要求两个平台 gate 各自实际执行，单个平台的 Skipped/NotRun 不能作为跨平台 PASS。
+第 4 节每条规则都已映射到 T01-T21；T03 遍历 admission 与全部用户 intent 分支，T05 定义完整 progress 合法域，T06/T07 拒绝 typed terminal 的非法字段与顺序，T08/T21 覆盖异常退出和有界 cleanup，T13-T15 覆盖两态取消与 terminal winner。反向每个状态场景都引用 A/R/G/P/C 规则或本节不变量。T01-T23 已实现为可执行合同，T22 防止 crate 拆分后的 0-test 假通过；T23 仍要求三个平台 gate 各自实际执行，单个平台的 Skipped/NotRun 不能作为跨平台 PASS。
 
 ## 9. 已完成的最小迁移
 
@@ -317,7 +317,7 @@ Cancel 与 resource/stage launch、普通终态、History/插入 finalization �
 5. 删除没有实时 UI 调用者且与冻结自动流程冲突的 `rewriteLast/insertLast/copyLast`、`record_transcribe_*`、`rewrite_text/insert_text` Tauri 兼容入口；History copy 保持独立。若未来增加手动重试，它必须作为新用户 intent 进入同一 Controller，并先扩展完整命令矩阵，不能恢复前端直调 capability。
 6. 删除 Main 的 `autoRewriteStartedRef/autoInsertStartedRef` 和 phase 编排，删除 Overlay 的业务回报与 hotkey 转发；窗口 Primary 原样回传 actionKey、显式 Cancel 携带 targetRunId，hotkey adapter 过滤重复边沿后直接进入 Controller，并按 snapshot 渲染 label/disabled；当前 run partial 只作显示。
 7. 将原有 `task_id` 语义统一为 runId，并在每次 reducer commit 写 `workflow.transition`；状态型 `effect/eventId` 回流协议已经删除，UiEventMailbox 只负责显示传输。
-8. 实现有界 cleanup/force/fatal 与 Windows/Linux insertion adapter gate，修正 xtask 的 workspace/package 选择和 0-match 检查，接入 T21-T23，并通过 project-index 生成器刷新 AGENTS 自动索引。
+8. 实现有界 cleanup/force/fatal 与 Windows/Linux/macOS insertion adapter gate，修正 xtask 的 workspace/package 选择和 0-match 检查，接入 T21-T23，并通过 project-index 生成器刷新 AGENTS 自动索引。
 
 这条迁移没有引入兼容 shim 或并行状态机。每一步都把一个旧所有者删除后再接入唯一边界，没有让新旧终态通道同时成为业务真相。
 

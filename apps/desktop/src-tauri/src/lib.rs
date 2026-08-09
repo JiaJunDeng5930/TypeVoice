@@ -734,7 +734,7 @@ fn set_settings(
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let span = cmd_span(&dir, None, "CMD.set_settings", None);
     let seed = workflow_runtime::run_plan_seed(&s).map_err(|error| error.render())?;
-    let save_result = if cfg!(windows) {
+    let save_result = if cfg!(any(windows, target_os = "macos")) {
         record_input_cache
             .save_validated_settings_blocking(&dir, "set_settings", &s)
             .map(|_| ())
@@ -872,7 +872,7 @@ fn update_settings(
             return Err(rendered);
         }
     };
-    let save_result = if cfg!(windows) && record_input_changed {
+    let save_result = if cfg!(any(windows, target_os = "macos")) && record_input_changed {
         record_input_cache
             .save_validated_settings_blocking(&dir, "settings_changed", &next)
             .map(|_| ())
@@ -996,13 +996,17 @@ pub fn run() {
                 toolchain_ready = st.ready;
                 runtime.set_toolchain(st);
 
-                if cfg!(windows) {
-                    let record_input_cache = app.state::<record_input_cache::RecordInputCacheState>();
+                if cfg!(any(windows, target_os = "macos")) {
+                    let record_input_cache =
+                        app.state::<record_input_cache::RecordInputCacheState>();
                     if toolchain_ready {
                         let _ = record_input_cache.refresh_blocking(&dir, "app_startup");
-                        let listener =
-                            app.state::<audio_device_notifications_windows::AudioDeviceNotificationState>();
-                        listener.start_best_effort(&dir, record_input_cache.inner().clone());
+                        if cfg!(windows) {
+                            let listener = app.state::<
+                                audio_device_notifications_windows::AudioDeviceNotificationState,
+                            >();
+                            listener.start_best_effort(&dir, record_input_cache.inner().clone());
+                        }
                     } else {
                         obs::event(
                             &dir,

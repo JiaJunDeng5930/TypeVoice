@@ -52,9 +52,9 @@
 
 ## 5. T23 平台插入验证
 
-- `cargo xtask verify insertion-contract` 只执行当前 OS 对应的 ignored integration contract，Windows 与 Linux 结果分别记录；普通 workspace 单元测试不会产生原生输入。
-- runner 必须设置 `TYPEVOICE_T23_ISOLATED=1`。Linux CI 还必须使用私有 Xvfb、D-Bus 与 AT-SPI registry；Windows CI 必须对 `windows-latest` 隔离 VM 另设 `TYPEVOICE_T23_WINDOWS_VM=1`，缺少这些条件时必须失败，不能回退到 mock 后记为 `Passed`。
-- 两端都由独立 child 创建受控编辑控件，父测试只调用生产 `capture_insertion_target` 与 `auto_paste_text`，并以控件实际读回完整 Unicode 文本作为通过条件。单平台 `Passed` 与另一平台 `NotRun`/`Skipped` 不构成跨平台 `PASS`。
+- `cargo xtask verify insertion-contract` 只执行当前 OS 对应的 ignored integration contract，Windows、Linux 与 macOS 结果分别记录；普通 workspace 单元测试不会产生原生输入。
+- runner 必须设置 `TYPEVOICE_T23_ISOLATED=1`。Linux CI 还必须使用私有 Xvfb、D-Bus 与 AT-SPI registry；Windows CI 必须对 `windows-latest` 隔离 VM 另设 `TYPEVOICE_T23_WINDOWS_VM=1`；macOS runner 必须在隔离的图形会话中授予测试进程 Accessibility 权限。缺少这些条件时必须失败，不能回退到 mock 后记为 `Passed`。
+- 三个平台都由独立 child 创建受控编辑控件，父测试只调用生产 `capture_insertion_target` 与 `auto_paste_text`，并以控件实际读回完整 Unicode 文本作为通过条件。单平台 `Passed` 与其他平台 `NotRun`/`Skipped` 不构成跨平台 `PASS`。
 
 ## 6. 手工验证
 

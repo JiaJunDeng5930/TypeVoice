@@ -34,7 +34,17 @@ fn platform_data_dir() -> Result<PathBuf> {
     Ok(app_data_dir(home.join(".local").join("share")))
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+#[cfg(target_os = "macos")]
+fn platform_data_dir() -> Result<PathBuf> {
+    let home = std::env::var("HOME")
+        .map(PathBuf::from)
+        .map_err(|_| anyhow!("HOME is not set"))?;
+    Ok(app_data_dir(
+        home.join("Library").join("Application Support"),
+    ))
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 fn platform_data_dir() -> Result<PathBuf> {
     Err(anyhow!("unsupported platform data directory"))
 }

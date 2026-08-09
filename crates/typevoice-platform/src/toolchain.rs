@@ -40,6 +40,15 @@ const LINUX_X86_64_SPEC: PlatformSpec = PlatformSpec {
     ffprobe_sha256: "4f231a1960d83e403d08f7971e271707bec278a9ae18e21b8b5b03186668450d",
 };
 
+const MACOS_AARCH64_SPEC: PlatformSpec = PlatformSpec {
+    id: "macos-aarch64",
+    version: MANIFEST_VERSION,
+    ffmpeg_file: "ffmpeg",
+    ffmpeg_sha256: "5d8c9cdbb1f6501dc5e5c18b074d265d26d985eee663c999758cec04039d7f31",
+    ffprobe_file: "ffprobe",
+    ffprobe_sha256: "0b8b7c4d431e126a026a36d4144f3c608fb7291fad6380ca56f38d705c66fa9c",
+};
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolchainStatus {
     pub ready: bool,
@@ -77,6 +86,9 @@ fn current_spec() -> Result<&'static PlatformSpec> {
     }
     if cfg!(target_os = "linux") && cfg!(target_arch = "x86_64") {
         return Ok(&LINUX_X86_64_SPEC);
+    }
+    if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
+        return Ok(&MACOS_AARCH64_SPEC);
     }
     Err(anyhow!(
         "E_TOOLCHAIN_PLATFORM_UNSUPPORTED: unsupported platform target"

@@ -40,7 +40,15 @@ fn platform_data_dir() -> Option<std::path::PathBuf> {
         .map(|home| app_data_dir(home.join(".local").join("share")))
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+#[cfg(target_os = "macos")]
+fn platform_data_dir() -> Option<std::path::PathBuf> {
+    std::env::var("HOME")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .map(|home| app_data_dir(home.join("Library").join("Application Support")))
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 fn platform_data_dir() -> Option<std::path::PathBuf> {
     None
 }

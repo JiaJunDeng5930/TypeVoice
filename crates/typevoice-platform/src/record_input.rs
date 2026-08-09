@@ -446,6 +446,21 @@ pub(crate) fn resolve_record_input_for_settings(
     ffmpeg_cmd: &str,
     settings: &Settings,
 ) -> Result<ResolvedRecordInput, String> {
+    #[cfg(target_os = "macos")]
+    {
+        resolve_record_input_for_settings_macos(data_dir, ffmpeg_cmd, settings)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        resolve_record_input_for_settings_non_macos(data_dir, ffmpeg_cmd, settings)
+    }
+}
+
+fn resolve_record_input_for_settings_non_macos(
+    data_dir: &Path,
+    ffmpeg_cmd: &str,
+    settings: &Settings,
+) -> Result<ResolvedRecordInput, String> {
     let ffmpeg = Path::new(ffmpeg_cmd);
     let mut decision_logs: Vec<ResolveLogEntry> = Vec::new();
 
@@ -723,6 +738,20 @@ pub(crate) fn resolve_record_input_for_settings(
 }
 
 pub fn list_audio_capture_devices_for_settings() -> Result<Vec<AudioCaptureDeviceView>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let ffmpeg = crate::pipeline::ffmpeg_cmd().map_err(|error| error.to_string())?;
+        return list_macos_audio_capture_devices(Path::new(&ffmpeg));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        list_audio_capture_devices_for_settings_non_macos()
+    }
+}
+
+fn list_audio_capture_devices_for_settings_non_macos() -> Result<Vec<AudioCaptureDeviceView>, String>
+{
     let mut devices = audio_devices_windows::list_active_capture_endpoints()?;
     devices.sort_by(|a, b| a.friendly_name.cmp(&b.friendly_name));
     let default_comm =
@@ -749,6 +778,185 @@ pub fn list_audio_capture_devices_for_settings() -> Result<Vec<AudioCaptureDevic
             friendly_name: item.friendly_name,
         })
         .collect())
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AvFoundationDevice {
+    index: String,
+    name: String,
+}
+
+#[cfg(target_os = "macos")]
+fn parse_avfoundation_audio_devices(stderr: &str) -> Vec<AvFoundationDevice> {
+    let mut in_audio_section = false;
+    let mut devices = Vec::new();
+    for line in stderr.lines() {
+        if line.contains("AVFoundation audio devices:") {
+            in_audio_section = true;
+            continue;
+        }
+        if line.contains("AVFoundation video devices:") {
+            in_audio_section = false;
+            continue;
+        }
+        if !in_audio_section {
+            continue;
+        }
+        let Some(marker) = line.rfind("] [") else {
+            continue;
+        };
+        let entry = &line[marker + 2..];
+        let Some(close) = entry.find(']') else {
+            continue;
+        };
+        let index = entry[1..close].trim();
+        let name = entry[close + 1..].trim();
+        if !index.is_empty()
+            && index.bytes().all(|value| value.is_ascii_digit())
+            && !name.is_empty()
+        {
+            devices.push(AvFoundationDevice {
+                index: index.to_string(),
+                name: name.to_string(),
+            });
+        }
+    }
+    devices
+}
+
+#[cfg(target_os = "macos")]
+fn discover_avfoundation_audio_devices(ffmpeg: &Path) -> Result<Vec<AvFoundationDevice>, String> {
+    let output = std::process::Command::new(ffmpeg)
+        .args([
+            "-hide_banner",
+            "-f",
+            "avfoundation",
+            "-list_devices",
+            "true",
+            "-i",
+            "",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .no_console()
+        .output()
+        .map_err(|error| {
+            format!(
+                "E_RECORD_INPUT_DISCOVERY_FAILED: enumerate AVFoundation devices failed: {error}"
+            )
+        })?;
+    let devices = parse_avfoundation_audio_devices(&String::from_utf8_lossy(&output.stderr));
+    if devices.is_empty() {
+        return Err(
+            "E_RECORD_INPUT_DISCOVERY_FAILED: no AVFoundation audio device found".to_string(),
+        );
+    }
+    Ok(devices)
+}
+
+#[cfg(target_os = "macos")]
+fn resolve_record_input_for_settings_macos(
+    data_dir: &Path,
+    ffmpeg_cmd: &str,
+    settings: &Settings,
+) -> Result<ResolvedRecordInput, String> {
+    let strategy = parse_strategy(settings)?;
+    let role = parse_default_role(settings)?;
+    let mut resolution_log = Vec::new();
+    push_resolution_log(
+        &mut resolution_log,
+        "resolve.start",
+        "ok",
+        format!(
+            "strategy={}, default_role={}, backend=avfoundation",
+            strategy.as_str(),
+            role.as_str()
+        ),
+    );
+
+    let mut resolved = match strategy {
+        InputStrategy::FollowDefault | InputStrategy::AutoSelect => ResolvedRecordInput {
+            spec: ":default".to_string(),
+            strategy_used: strategy.as_str().to_string(),
+            endpoint_id: Some("default".to_string()),
+            friendly_name: Some("System Default".to_string()),
+            resolved_by: "avfoundation_default".to_string(),
+            resolution_log: Vec::new(),
+        },
+        InputStrategy::FixedDevice => {
+            let endpoint_id = settings
+                .record_fixed_endpoint_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    "E_RECORD_INPUT_FIXED_ID_MISSING: fixed_device requires record_fixed_endpoint_id"
+                        .to_string()
+                })?;
+            if endpoint_id == "default" {
+                ResolvedRecordInput {
+                    spec: ":default".to_string(),
+                    strategy_used: strategy.as_str().to_string(),
+                    endpoint_id: Some("default".to_string()),
+                    friendly_name: Some("System Default".to_string()),
+                    resolved_by: "avfoundation_default".to_string(),
+                    resolution_log: Vec::new(),
+                }
+            } else {
+                let device = discover_avfoundation_audio_devices(Path::new(ffmpeg_cmd))?
+                    .into_iter()
+                    .find(|device| device.index == endpoint_id)
+                    .ok_or_else(|| {
+                        format!(
+                            "E_RECORD_INPUT_FIXED_NOT_FOUND: AVFoundation audio device {endpoint_id} is unavailable"
+                        )
+                    })?;
+                ResolvedRecordInput {
+                    spec: format!(":{}", device.index),
+                    strategy_used: strategy.as_str().to_string(),
+                    endpoint_id: Some(device.index),
+                    friendly_name: Some(device.name),
+                    resolved_by: "avfoundation_index".to_string(),
+                    resolution_log: Vec::new(),
+                }
+            }
+        }
+    };
+    push_resolution_log(
+        &mut resolution_log,
+        "resolve.final",
+        "selected",
+        format!(
+            "spec={}, resolved_by={}",
+            resolved.spec, resolved.resolved_by
+        ),
+    );
+    resolved.resolution_log = resolution_log;
+    let _ = save_last_working_cache(data_dir, &resolved);
+    Ok(resolved)
+}
+
+#[cfg(target_os = "macos")]
+fn list_macos_audio_capture_devices(ffmpeg: &Path) -> Result<Vec<AudioCaptureDeviceView>, String> {
+    let mut devices = vec![AudioCaptureDeviceView {
+        endpoint_id: "default".to_string(),
+        friendly_name: "System Default".to_string(),
+        is_default_communications: true,
+        is_default_console: true,
+    }];
+    devices.extend(
+        discover_avfoundation_audio_devices(ffmpeg)?
+            .into_iter()
+            .map(|device| AudioCaptureDeviceView {
+                endpoint_id: device.index,
+                friendly_name: device.name,
+                is_default_communications: false,
+                is_default_console: false,
+            }),
+    );
+    Ok(devices)
 }
 
 pub fn normalize_strategy_for_settings(value: &str) -> Option<&'static str> {
@@ -817,5 +1025,25 @@ mod tests {
         );
         assert_eq!(endpoint_wave_guid_marker(""), None);
         assert_eq!(endpoint_wave_guid_marker("invalid"), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn avfoundation_audio_device_parser_ignores_video_devices() {
+        let stderr = "[AVFoundation indev @ 0x1] AVFoundation video devices:\n[AVFoundation indev @ 0x1] [0] Camera\n[AVFoundation indev @ 0x1] AVFoundation audio devices:\n[AVFoundation indev @ 0x1] [0] MacBook Air Microphone\n[AVFoundation indev @ 0x1] [1] External Mic\n";
+        let devices = super::parse_avfoundation_audio_devices(stderr);
+        assert_eq!(
+            devices,
+            vec![
+                super::AvFoundationDevice {
+                    index: "0".to_string(),
+                    name: "MacBook Air Microphone".to_string(),
+                },
+                super::AvFoundationDevice {
+                    index: "1".to_string(),
+                    name: "External Mic".to_string(),
+                },
+            ]
+        );
     }
 }

@@ -1,18 +1,18 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 use std::collections::BTreeSet;
 
 use serde::Serialize;
 use tauri::AppHandle;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use tauri::Manager;
 
 use crate::obs::Span;
 use crate::settings::Settings;
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 const ALT_TAP_MAX_MS: i64 = 350;
 
 #[derive(Debug, Clone)]
@@ -36,7 +36,7 @@ pub struct HotkeyAvailability {
     pub reason_code: Option<String>,
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HotkeyAction {
     Primary,
@@ -49,7 +49,7 @@ enum KeyKind {
     Ctrl,
     Shift,
     Function(u8),
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, target_os = "macos", test))]
     Other,
 }
 
@@ -76,14 +76,14 @@ impl KeyKind {
     }
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum KeyState {
     Down,
     Up,
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct KeySignal {
     key: KeyKind,
@@ -92,7 +92,7 @@ struct KeySignal {
     ts_ms: i64,
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 #[derive(Debug, Default)]
 struct HotkeyDetector {
     primary: KeyKind,
@@ -103,7 +103,7 @@ struct HotkeyDetector {
     held_non_primary: BTreeSet<u32>,
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 impl HotkeyDetector {
     fn new(primary: KeyKind) -> Self {
         Self {
@@ -272,7 +272,12 @@ struct PlatformKeyboardListener {
     event_thread: Option<std::thread::JoinHandle<()>>,
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+struct PlatformKeyboardListener {
+    subscription_id: u64,
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 struct PlatformKeyboardListener;
 
 impl PlatformKeyboardListener {
@@ -438,7 +443,28 @@ impl PlatformKeyboardListener {
         }
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    fn start(app: AppHandle, primary: KeyKind) -> anyhow::Result<Self> {
+        if !macos_accessibility_client::accessibility::application_is_trusted_with_prompt() {
+            return Err(anyhow::anyhow!(
+                "macOS Accessibility permission is required for global hotkeys"
+            ));
+        }
+        start_macos_event_listener()?;
+        let subscription_id =
+            MAC_SUBSCRIPTION_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        *MAC_HOTKEY_SUBSCRIPTION
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap() = Some(MacHotkeySubscription {
+            id: subscription_id,
+            app,
+            detector: HotkeyDetector::new(primary),
+        });
+        Ok(Self { subscription_id })
+    }
+
+    #[cfg(not(any(windows, target_os = "macos")))]
     fn start(_app: AppHandle, _primary: KeyKind) -> anyhow::Result<Self> {
         Ok(Self)
     }
@@ -460,7 +486,17 @@ impl PlatformKeyboardListener {
         }
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    fn stop(&mut self) {
+        if let Some(slot) = MAC_HOTKEY_SUBSCRIPTION.get() {
+            let mut subscription = slot.lock().unwrap();
+            if subscription.as_ref().map(|value| value.id) == Some(self.subscription_id) {
+                *subscription = None;
+            }
+        }
+    }
+
+    #[cfg(not(any(windows, target_os = "macos")))]
     fn stop(&mut self) {}
 }
 
@@ -468,12 +504,109 @@ impl PlatformKeyboardListener {
 static KEY_SIGNAL_SLOT: std::sync::OnceLock<Mutex<Option<std::sync::mpsc::Sender<KeySignal>>>> =
     std::sync::OnceLock::new();
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn now_ms() -> i64 {
     match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
         Ok(dur) => dur.as_millis() as i64,
         Err(_) => 0,
     }
+}
+
+#[cfg(target_os = "macos")]
+struct MacHotkeySubscription {
+    id: u64,
+    app: AppHandle,
+    detector: HotkeyDetector,
+}
+
+#[cfg(target_os = "macos")]
+static MAC_HOTKEY_SUBSCRIPTION: std::sync::OnceLock<Mutex<Option<MacHotkeySubscription>>> =
+    std::sync::OnceLock::new();
+#[cfg(target_os = "macos")]
+static MAC_EVENT_LISTENER_STARTED: std::sync::OnceLock<Result<(), String>> =
+    std::sync::OnceLock::new();
+#[cfg(target_os = "macos")]
+static MAC_SUBSCRIPTION_SEQUENCE: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(1);
+
+#[cfg(target_os = "macos")]
+fn start_macos_event_listener() -> anyhow::Result<()> {
+    MAC_EVENT_LISTENER_STARTED
+        .get_or_init(|| {
+            std::thread::Builder::new()
+                .name("typevoice_hotkey_events".to_string())
+                .spawn(|| {
+                    if let Err(error) = rdev::listen(handle_macos_event) {
+                        eprintln!("TypeVoice macOS hotkey listener stopped: {error:?}");
+                    }
+                })
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        })
+        .clone()
+        .map_err(anyhow::Error::msg)
+}
+
+#[cfg(target_os = "macos")]
+fn handle_macos_event(event: rdev::Event) {
+    let Some(signal) = macos_key_signal(event.event_type) else {
+        return;
+    };
+    let app = {
+        let mut subscription = MAC_HOTKEY_SUBSCRIPTION
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap();
+        let Some(subscription) = subscription.as_mut() else {
+            return;
+        };
+        subscription
+            .detector
+            .apply(signal)
+            .map(|_| subscription.app.clone())
+    };
+    if let Some(app) = app {
+        let controller = app
+            .state::<std::sync::Arc<typevoice_engine::workflow_controller::WorkflowController>>();
+        let _ = controller.inner().command_from_hotkey();
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_key_signal(event_type: rdev::EventType) -> Option<KeySignal> {
+    use std::hash::{Hash, Hasher};
+
+    let (key, state) = match event_type {
+        rdev::EventType::KeyPress(key) => (key, KeyState::Down),
+        rdev::EventType::KeyRelease(key) => (key, KeyState::Up),
+        _ => return None,
+    };
+    let kind = match key {
+        rdev::Key::Alt | rdev::Key::AltGr => KeyKind::Alt,
+        rdev::Key::ControlLeft | rdev::Key::ControlRight => KeyKind::Ctrl,
+        rdev::Key::ShiftLeft | rdev::Key::ShiftRight => KeyKind::Shift,
+        rdev::Key::F1 => KeyKind::Function(1),
+        rdev::Key::F2 => KeyKind::Function(2),
+        rdev::Key::F3 => KeyKind::Function(3),
+        rdev::Key::F4 => KeyKind::Function(4),
+        rdev::Key::F5 => KeyKind::Function(5),
+        rdev::Key::F6 => KeyKind::Function(6),
+        rdev::Key::F7 => KeyKind::Function(7),
+        rdev::Key::F8 => KeyKind::Function(8),
+        rdev::Key::F9 => KeyKind::Function(9),
+        rdev::Key::F10 => KeyKind::Function(10),
+        rdev::Key::F11 => KeyKind::Function(11),
+        rdev::Key::F12 => KeyKind::Function(12),
+        _ => KeyKind::Other,
+    };
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    Some(KeySignal {
+        key: kind,
+        key_code: hasher.finish() as u32,
+        state,
+        ts_ms: now_ms(),
+    })
 }
 
 #[cfg(test)]
