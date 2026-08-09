@@ -1,14 +1,14 @@
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use std::collections::HashMap;
 use std::path::Path;
 
 use crate::context_pack::{ContextBudget, ContextSnapshot, HistorySnippet};
 use crate::{history, settings};
 use crate::{obs, obs::Span};
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use anyhow::{anyhow, Result};
 use tokio_util::sync::CancellationToken;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use uuid::Uuid;
 
 #[cfg(windows)]
@@ -92,17 +92,18 @@ fn env_u32(key: &str, default: u32) -> u32 {
 
 #[derive(Clone)]
 pub struct ContextService {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     inner: std::sync::Arc<std::sync::Mutex<Inner>>,
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 struct Inner {
+    #[cfg(windows)]
     win: crate::context_capture_windows::WindowsContext,
     hotkey_capture_registry: HashMap<String, StoredHotkeyCapture>,
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 #[derive(Clone)]
 struct StoredHotkeyCapture {
     snapshot: ContextSnapshot,
@@ -120,7 +121,16 @@ impl ContextService {
                 inner: std::sync::Arc::new(std::sync::Mutex::new(inner)),
             }
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        {
+            let inner = Inner {
+                hotkey_capture_registry: HashMap::new(),
+            };
+            Self {
+                inner: std::sync::Arc::new(std::sync::Mutex::new(inner)),
+            }
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
         {
             Self {}
         }
@@ -268,7 +278,59 @@ impl ContextService {
         Ok(capture_id)
     }
 
-    #[cfg(windows)]
+    #[cfg(target_os = "macos")]
+    pub fn capture_hotkey_context_now(
+        &self,
+        data_dir: &Path,
+        cfg: &ContextConfig,
+        cancellation: &CancellationToken,
+    ) -> Result<String> {
+        if cancellation.is_cancelled() {
+            return Err(anyhow!("E_CANCELLED: context capture cancelled"));
+        }
+        let span = Span::start(
+            data_dir,
+            None,
+            "ContextCapture",
+            "CTX.hotkey_capture_now",
+            Some(serde_json::json!({
+                "include_prev_window_meta": cfg.include_prev_window_meta,
+                "include_prev_window_screenshot": cfg.include_prev_window_screenshot,
+                "platform": "macos",
+            })),
+        );
+        let previous_application = cfg
+            .include_prev_window_meta
+            .then(crate::macos_app::frontmost_application)
+            .flatten()
+            .filter(|application| application.pid != std::process::id() as i32);
+        let snapshot = ContextSnapshot {
+            recent_history: vec![],
+            clipboard_text: None,
+            prev_window: previous_application.map(|application| {
+                crate::context_pack::PrevWindowInfo {
+                    title: application.name,
+                    process_image: application.bundle_identifier,
+                }
+            }),
+            screenshot: None,
+        };
+        let capture_id = Uuid::new_v4().to_string();
+        let has_previous_application = snapshot.prev_window.is_some();
+        self.inner
+            .lock()
+            .unwrap()
+            .hotkey_capture_registry
+            .insert(capture_id.clone(), StoredHotkeyCapture { snapshot });
+        span.ok(Some(serde_json::json!({
+            "capture_id": capture_id,
+            "has_prev_window": has_previous_application,
+            "has_screenshot": false,
+        })));
+        Ok(capture_id)
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
     pub fn take_hotkey_context_once(&self, capture_id: &str) -> Option<ContextSnapshot> {
         let mut g = self.inner.lock().unwrap();
         g.hotkey_capture_registry
@@ -282,7 +344,7 @@ impl ContextService {
         g.win.last_external_hwnd_best_effort()
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     pub fn capture_hotkey_context_now(
         &self,
         _data_dir: &Path,
@@ -290,11 +352,11 @@ impl ContextService {
         _cancellation: &CancellationToken,
     ) -> anyhow::Result<String> {
         Err(anyhow::anyhow!(
-            "E_HOTKEY_CAPTURE_UNSUPPORTED: hotkey capture is only supported on Windows"
+            "E_HOTKEY_CAPTURE_UNSUPPORTED: hotkey capture is unsupported on this platform"
         ))
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     pub fn take_hotkey_context_once(&self, _capture_id: &str) -> Option<ContextSnapshot> {
         None
     }

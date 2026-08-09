@@ -21,13 +21,18 @@ use crate::{data_dir, obs, pipeline};
 const STREAMING_FIRST_AUDIO_SEQUENCE: u64 = 2;
 
 fn ffmpeg_record_args(input_spec: &str, output_path: &Path) -> Vec<std::ffi::OsString> {
+    let input_backend = if cfg!(target_os = "macos") {
+        "avfoundation"
+    } else {
+        "dshow"
+    };
     [
         "-y",
         "-hide_banner",
         "-loglevel",
         "error",
         "-f",
-        "dshow",
+        input_backend,
         "-i",
         input_spec,
         "-ac",
@@ -197,10 +202,10 @@ impl RecordingRegistry {
             "run.recording_begin",
             None,
         );
-        if !cfg!(windows) {
+        if !cfg!(any(windows, target_os = "macos")) {
             let err = CaptureError::new(
                 "E_RECORD_UNSUPPORTED",
-                "backend recording is only supported on Windows",
+                "backend recording is unsupported on this platform",
             );
             span.err("config", &err.code, &err.render(), None);
             return Err(err);
@@ -1020,6 +1025,19 @@ mod tests {
             .iter()
             .position(|v| v == "sample.wav")
             .expect("wav output path exists");
+        assert_eq!(
+            &args[4..8],
+            [
+                "-f",
+                if cfg!(target_os = "macos") {
+                    "avfoundation"
+                } else {
+                    "dshow"
+                },
+                "-i",
+                "audio=@device_cm_{33D9A762-90C8-11D0-BD43-00A0C911CE86}\\wave_{52B28A7E-31C7-4BB2-AFB4-1529B7F2C7CD}",
+            ]
+        );
         assert_eq!(
             &args[output_idx - 6..output_idx],
             ["-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le"]

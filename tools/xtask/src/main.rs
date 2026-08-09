@@ -83,6 +83,8 @@ enum ToolchainPlatform {
     WindowsX86_64,
     #[value(name = "linux-x86_64")]
     LinuxX86_64,
+    #[value(name = "macos-aarch64")]
+    MacosAarch64,
 }
 
 #[derive(Subcommand)]
@@ -183,6 +185,10 @@ struct FfmpegPlatformSpec {
     archive_sha256: String,
     archive_type: String,
     archive_root: String,
+    #[serde(default)]
+    ffprobe_archive_url: Option<String>,
+    #[serde(default)]
+    ffprobe_archive_sha256: Option<String>,
     ffmpeg_file: String,
     ffprobe_file: String,
     ffmpeg_sha256: String,
@@ -396,6 +402,7 @@ fn verify_contract_plan(level: VerifyLevel) -> Vec<ContractStep> {
 enum InsertionContractPlatform {
     Windows,
     Linux,
+    Macos,
 }
 
 impl InsertionContractPlatform {
@@ -403,6 +410,7 @@ impl InsertionContractPlatform {
         match self {
             Self::Windows => "windows",
             Self::Linux => "linux",
+            Self::Macos => "macos",
         }
     }
 }
@@ -414,7 +422,7 @@ struct InsertionContractSpec {
     filter: &'static str,
 }
 
-const INSERTION_CONTRACTS: [InsertionContractSpec; 2] = [
+const INSERTION_CONTRACTS: [InsertionContractSpec; 3] = [
     InsertionContractSpec {
         platform: InsertionContractPlatform::Windows,
         package: "typevoice-platform",
@@ -424,6 +432,11 @@ const INSERTION_CONTRACTS: [InsertionContractSpec; 2] = [
         platform: InsertionContractPlatform::Linux,
         package: "typevoice-platform",
         filter: "target_contract_t23_insertion_port_contract_linux",
+    },
+    InsertionContractSpec {
+        platform: InsertionContractPlatform::Macos,
+        package: "typevoice-platform",
+        filter: "target_contract_t23_insertion_port_contract_macos",
     },
 ];
 
@@ -878,8 +891,10 @@ fn current_insertion_contract_platform() -> Result<InsertionContractPlatform> {
         Ok(InsertionContractPlatform::Windows)
     } else if cfg!(target_os = "linux") {
         Ok(InsertionContractPlatform::Linux)
+    } else if cfg!(target_os = "macos") {
+        Ok(InsertionContractPlatform::Macos)
     } else {
-        bail!("insertion contract gate is only defined for Windows and Linux")
+        bail!("insertion contract gate is only defined for Linux, macOS, and Windows")
     }
 }
 
@@ -1126,15 +1141,20 @@ fn resolve_toolchain_targets(selection: ToolchainPlatform) -> Result<Vec<String>
         ToolchainPlatform::All => Ok(vec![
             "windows-x86_64".to_string(),
             "linux-x86_64".to_string(),
+            "macos-aarch64".to_string(),
         ]),
         ToolchainPlatform::WindowsX86_64 => Ok(vec!["windows-x86_64".to_string()]),
         ToolchainPlatform::LinuxX86_64 => Ok(vec!["linux-x86_64".to_string()]),
+        ToolchainPlatform::MacosAarch64 => Ok(vec!["macos-aarch64".to_string()]),
         ToolchainPlatform::Auto => {
             if cfg!(target_os = "windows") && cfg!(target_arch = "x86_64") {
                 return Ok(vec!["windows-x86_64".to_string()]);
             }
             if cfg!(target_os = "linux") && cfg!(target_arch = "x86_64") {
                 return Ok(vec!["linux-x86_64".to_string()]);
+            }
+            if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
+                return Ok(vec!["macos-aarch64".to_string()]);
             }
             bail!("unsupported host platform for auto mode")
         }
@@ -1285,6 +1305,26 @@ fn install_ffmpeg_platform(
 
     extract_archive(&archive_path, &unpack_dir, &spec.archive_type)?;
 
+    if let Some(ffprobe_archive_url) = spec.ffprobe_archive_url.as_deref() {
+        let expected_sha = spec.ffprobe_archive_sha256.as_deref().ok_or_else(|| {
+            anyhow!("ffprobe_archive_sha256 is required when ffprobe_archive_url is set")
+        })?;
+        let ffprobe_archive_path = work_dir.join(match spec.archive_type.as_str() {
+            "zip" => "ffprobe_archive.zip",
+            "tar.xz" => "ffprobe_archive.tar.xz",
+            other => bail!("unsupported archive_type for {target}: {other}"),
+        });
+        download_file(client, ffprobe_archive_url, &ffprobe_archive_path)
+            .with_context(|| format!("download ffprobe archive failed for {target}"))?;
+        let actual_sha = sha256_file(&ffprobe_archive_path)?;
+        if !actual_sha.eq_ignore_ascii_case(expected_sha) {
+            bail!(
+                "ffprobe archive sha256 mismatch for {target} expected={expected_sha} actual={actual_sha}"
+            );
+        }
+        extract_archive(&ffprobe_archive_path, &unpack_dir, &spec.archive_type)?;
+    }
+
     let src_ffmpeg = source_binary_path(&unpack_dir, spec, &spec.ffmpeg_file);
     let src_ffprobe = source_binary_path(&unpack_dir, spec, &spec.ffprobe_file);
     if !src_ffmpeg.is_file() {
@@ -1342,6 +1382,9 @@ fn install_ffmpeg_platform(
 }
 
 fn source_binary_path(unpack_dir: &Path, spec: &FfmpegPlatformSpec, file_name: &str) -> PathBuf {
+    if spec.archive_root.is_empty() {
+        return unpack_dir.join(file_name);
+    }
     let base = unpack_dir.join(&spec.archive_root);
     if spec.archive_type == "zip" {
         base.join("bin").join(file_name)
@@ -1392,7 +1435,7 @@ fn extract_archive(archive_path: &Path, unpack_dir: &Path, archive_type: &str) -
 #[cfg(unix)]
 fn make_executable_if_needed(target: &str, path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    if target == "linux-x86_64" {
+    if target != "windows-x86_64" {
         let mut perms = fs::metadata(path)?.permissions();
         perms.set_mode(perms.mode() | 0o755);
         fs::set_permissions(path, perms)?;
@@ -1820,6 +1863,8 @@ fn resolve_tool_binary(env_key: &str, file_name: &str) -> Result<PathBuf> {
 fn default_toolchain_dir() -> Result<PathBuf> {
     let platform = if cfg!(windows) {
         "windows-x86_64"
+    } else if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
+        "macos-aarch64"
     } else {
         "linux-x86_64"
     };
@@ -2446,7 +2491,7 @@ mod tests {
 
     #[test]
     fn insertion_contract_registry_is_platform_exact() {
-        assert_eq!(INSERTION_CONTRACTS.len(), 2);
+        assert_eq!(INSERTION_CONTRACTS.len(), 3);
         assert_eq!(
             INSERTION_CONTRACTS[0].filter,
             "target_contract_t23_insertion_port_contract_windows"
@@ -2454,6 +2499,10 @@ mod tests {
         assert_eq!(
             INSERTION_CONTRACTS[1].filter,
             "target_contract_t23_insertion_port_contract_linux"
+        );
+        assert_eq!(
+            INSERTION_CONTRACTS[2].filter,
+            "target_contract_t23_insertion_port_contract_macos"
         );
         assert!(INSERTION_CONTRACTS
             .iter()

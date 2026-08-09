@@ -85,7 +85,9 @@ struct RuntimePortState {
     asset: Option<RecordedAsset>,
     context: Option<ContextSnapshot>,
     prepared: Option<PreparedTranscription>,
-    insertion_target: Option<export::InsertionTarget>,
+    // None means auto-paste was disabled; Some(Err) preserves an optional paste failure without
+    // blocking recording, transcription, history, or clipboard export.
+    insertion_target: Option<Result<export::InsertionTarget, WorkflowError>>,
     cancellation: Option<CancellationToken>,
     cleanup_in_progress: bool,
     shutdown_complete: bool,
@@ -364,22 +366,19 @@ impl RunPorts for RuntimeRunPorts {
         let insertion_target = match target_rx {
             Some(target_rx) => {
                 let remaining = begin_deadline.saturating_sub(begin_started.elapsed());
-                match target_rx.recv_timeout(remaining) {
-                    Ok(result) => Some(result?),
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                        start_token.cancel();
-                        return Err(WorkflowError::new(
-                            "E_EXECUTOR_BEGIN_TIMEOUT",
-                            "insertion target was not captured within the Begin deadline",
-                        ));
-                    }
+                Some(match target_rx.recv_timeout(remaining) {
+                    Ok(result) => result,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(WorkflowError::new(
+                        "E_EXPORT_TARGET_TIMEOUT",
+                        "insertion target was not captured within the Begin deadline",
+                    )),
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                        return Err(WorkflowError::new(
+                        Err(WorkflowError::new(
                             "E_EXPORT_TARGET_WORKER",
                             "insertion target worker exited without a result",
-                        ));
+                        ))
                     }
-                }
+                })
             }
             None => None,
         };
@@ -589,7 +588,14 @@ impl RunPorts for RuntimeRunPorts {
     }
 
     fn prepare_insertion(&self, text: String) -> PortFuture<InsertPrepareResult> {
-        let target = if self.state.lock().unwrap().insertion_target.is_some() {
+        let target = if self
+            .state
+            .lock()
+            .unwrap()
+            .insertion_target
+            .as_ref()
+            .is_some_and(Result::is_ok)
+        {
             "externalWindow"
         } else {
             "currentFocus"
@@ -663,12 +669,7 @@ impl RunPorts for RuntimeRunPorts {
         let effects = self.effects.clone();
         Box::pin(async move {
             let _lease = operations.begin();
-            let target = target.ok_or_else(|| {
-                WorkflowError::new(
-                    "E_EXPORT_TARGET_MISSING",
-                    "no frozen insertion target is available for this run",
-                )
-            })?;
+            let target = resolve_insertion_target_for_paste(target)?;
             let result = export::auto_paste_text(&target, &text)
                 .await
                 .map_err(|error| WorkflowError::new(&error.code, error.message));
@@ -690,6 +691,17 @@ impl RunPorts for RuntimeRunPorts {
     fn force_shutdown(&self) -> PortFuture<bool> {
         self.cleanup(ShutdownMode::Force)
     }
+}
+
+fn resolve_insertion_target_for_paste(
+    target: Option<Result<export::InsertionTarget, WorkflowError>>,
+) -> Result<export::InsertionTarget, WorkflowError> {
+    target.ok_or_else(|| {
+        WorkflowError::new(
+            "E_EXPORT_TARGET_MISSING",
+            "no frozen insertion target is available for this run",
+        )
+    })?
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -909,6 +921,20 @@ fn fnv1a_digest(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn insertion_target_capture_failure_is_deferred_to_paste() {
+        let error = WorkflowError::new(
+            "E_EXPORT_TARGET_UNAVAILABLE",
+            "no external insertion target is available",
+        );
+
+        assert_eq!(
+            resolve_insertion_target_for_paste(Some(Err(error.clone())))
+                .expect_err("capture failure must remain the paste warning"),
+            error
+        );
+    }
 
     #[test]
     fn operation_tracker_waits_until_the_last_lease_is_released() {

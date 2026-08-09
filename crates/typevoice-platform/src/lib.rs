@@ -8,6 +8,8 @@ pub mod context_capture;
 pub mod context_capture_windows;
 pub mod export;
 pub mod insertion;
+#[cfg(target_os = "macos")]
+mod macos_app;
 pub mod overlay_layout;
 pub mod pipeline;
 pub mod record_input;

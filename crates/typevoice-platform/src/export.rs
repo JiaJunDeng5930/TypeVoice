@@ -15,10 +15,12 @@ impl ExportError {
 
 #[cfg(target_os = "linux")]
 pub use linux::InsertionTarget;
+#[cfg(target_os = "macos")]
+pub use macos::InsertionTarget;
 #[cfg(windows)]
 pub use windows::InsertionTarget;
 
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 #[derive(Debug, Clone)]
 pub struct InsertionTarget;
 
@@ -56,11 +58,16 @@ pub async fn capture_insertion_target() -> Result<InsertionTarget, ExportError> 
         linux::capture_insertion_target().await
     }
 
-    #[cfg(not(any(windows, target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    {
+        macos::capture_insertion_target()
+    }
+
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     {
         Err(ExportError::new(
             "E_EXPORT_TARGET_UNSUPPORTED",
-            "insertion target capture is only supported on Linux and Windows",
+            "insertion target capture is unsupported on this platform",
         ))
     }
 }
@@ -83,11 +90,16 @@ pub async fn auto_paste_text(target: &InsertionTarget, text: &str) -> Result<(),
         linux::auto_input_text(target, text).await
     }
 
-    #[cfg(not(any(windows, target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    {
+        macos::auto_input_text(target, text)
+    }
+
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     {
         Err(ExportError::new(
             "E_EXPORT_PASTE_UNSUPPORTED",
-            "auto input is only supported on Linux and Windows",
+            "auto input is unsupported on this platform",
         ))
     }
 }
@@ -102,13 +114,135 @@ pub(crate) async fn native_input_contract_probe(text: &str) -> Result<(), Export
     {
         linux::native_input_contract_probe(text).await
     }
-    #[cfg(not(any(windows, target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    {
+        macos::native_input_contract_probe(text).await
+    }
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     {
         let _ = text;
         Err(ExportError::new(
             "E_EXPORT_NATIVE_CONTRACT_UNSUPPORTED",
-            "native input contract is only supported on Linux and Windows",
+            "native input contract is only supported on Linux, macOS, and Windows",
         ))
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use core_graphics::event::CGEvent;
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+    use macos_accessibility_client::accessibility::application_is_trusted_with_prompt;
+
+    #[cfg(test)]
+    use super::NativeContractChild;
+
+    use super::ExportError;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct InsertionTarget {
+        pid: i32,
+    }
+
+    pub fn capture_insertion_target() -> Result<InsertionTarget, ExportError> {
+        if !application_is_trusted_with_prompt() {
+            return Err(ExportError::new(
+                "E_EXPORT_ACCESSIBILITY_PERMISSION",
+                "macOS Accessibility permission is required for automatic paste",
+            ));
+        }
+        let application = crate::macos_app::frontmost_application().ok_or_else(|| {
+            ExportError::new(
+                "E_EXPORT_TARGET_UNAVAILABLE",
+                "no frontmost macOS application is available for automatic paste",
+            )
+        })?;
+        if application.pid == std::process::id() as i32 {
+            return Err(ExportError::new(
+                "E_EXPORT_TARGET_UNAVAILABLE",
+                "the frontmost application is TypeVoice",
+            ));
+        }
+        Ok(InsertionTarget {
+            pid: application.pid,
+        })
+    }
+
+    pub fn auto_input_text(target: &InsertionTarget, text: &str) -> Result<(), ExportError> {
+        let current = crate::macos_app::frontmost_application();
+        if current.as_ref().map(|application| application.pid) != Some(target.pid) {
+            if !crate::macos_app::activate_application(target.pid) {
+                return Err(ExportError::new(
+                    "E_EXPORT_TARGET_UNAVAILABLE",
+                    "the frozen macOS insertion target no longer exists",
+                ));
+            }
+            let activated = crate::macos_app::frontmost_application();
+            if activated.as_ref().map(|application| application.pid) != Some(target.pid) {
+                return Err(ExportError::new(
+                    "E_EXPORT_TARGET_MISMATCH",
+                    "macOS did not activate the frozen insertion target",
+                ));
+            }
+        }
+
+        dispatch_unicode_text(target.pid, text)
+    }
+
+    fn dispatch_unicode_text(pid: i32, text: &str) -> Result<(), ExportError> {
+        for character in text.chars() {
+            let unicode = character.to_string();
+            post_unicode_keyboard_event(pid, &unicode, true)?;
+            post_unicode_keyboard_event(pid, &unicode, false)?;
+        }
+        Ok(())
+    }
+
+    fn post_unicode_keyboard_event(
+        pid: i32,
+        unicode: &str,
+        key_down: bool,
+    ) -> Result<(), ExportError> {
+        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState).map_err(|_| {
+            ExportError::new(
+                "E_EXPORT_PASTE_FAILED",
+                "failed to create a macOS keyboard event source",
+            )
+        })?;
+        let event = CGEvent::new_keyboard_event(source, 0, key_down).map_err(|_| {
+            ExportError::new(
+                "E_EXPORT_PASTE_FAILED",
+                "failed to create a macOS Unicode keyboard event",
+            )
+        })?;
+        event.set_string(unicode);
+        event.post_to_pid(pid);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) async fn native_input_contract_probe(text: &str) -> Result<(), ExportError> {
+        let mut child =
+            NativeContractChild::spawn("export::macos::t23_native_input_target_helper", text)?;
+        child.wait_ready().await?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let target = loop {
+            match capture_insertion_target() {
+                Ok(target) if target.pid == child.id() as i32 => break target,
+                Ok(_) | Err(_) if std::time::Instant::now() < deadline => {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                Ok(_) => {
+                    return Err(ExportError::new(
+                        "E_EXPORT_NATIVE_CONTRACT_TIMEOUT",
+                        "isolated AppKit target did not become the insertion target",
+                    ));
+                }
+                Err(error) => return Err(error),
+            }
+        };
+        super::auto_paste_text(&target, text).await?;
+        child.wait_success().await
     }
 }
 
@@ -161,31 +295,76 @@ impl NativeContractChild {
         })?;
         let ready_path = temp.path().join("ready");
         let success_path = temp.path().join("success");
-        let executable = std::env::current_exe().map_err(|error| {
-            ExportError::new(
-                "E_EXPORT_NATIVE_CONTRACT_SETUP",
-                format!("resolve current test executable failed: {error}"),
-            )
-        })?;
-        let child = std::process::Command::new(executable)
-            .args([
-                "--ignored",
-                "--exact",
-                test_name,
-                "--nocapture",
-                "--test-threads=1",
-            ])
-            .env(NATIVE_CONTRACT_HELPER_ENV, "1")
-            .env(NATIVE_CONTRACT_TEXT_ENV, text)
-            .env(NATIVE_CONTRACT_READY_ENV, &ready_path)
-            .env(NATIVE_CONTRACT_SUCCESS_ENV, &success_path)
-            .spawn()
-            .map_err(|error| {
+
+        #[cfg(target_os = "macos")]
+        let child = {
+            let _ = test_name;
+            let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/macos_insertion_target.swift");
+            let executable = temp.path().join("macos-insertion-target");
+            let output = std::process::Command::new("xcrun")
+                .arg("swiftc")
+                .arg(&source)
+                .arg("-o")
+                .arg(&executable)
+                .output()
+                .map_err(|error| {
+                    ExportError::new(
+                        "E_EXPORT_NATIVE_CONTRACT_SETUP",
+                        format!("launch Swift compiler for AppKit target failed: {error}"),
+                    )
+                })?;
+            if !output.status.success() {
+                return Err(ExportError::new(
+                    "E_EXPORT_NATIVE_CONTRACT_SETUP",
+                    format!(
+                        "compile AppKit target failed: {}",
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    ),
+                ));
+            }
+            std::process::Command::new(executable)
+                .env(NATIVE_CONTRACT_HELPER_ENV, "1")
+                .env(NATIVE_CONTRACT_TEXT_ENV, text)
+                .env(NATIVE_CONTRACT_READY_ENV, &ready_path)
+                .env(NATIVE_CONTRACT_SUCCESS_ENV, &success_path)
+                .spawn()
+                .map_err(|error| {
+                    ExportError::new(
+                        "E_EXPORT_NATIVE_CONTRACT_SETUP",
+                        format!("spawn AppKit input target failed: {error}"),
+                    )
+                })?
+        };
+
+        #[cfg(not(target_os = "macos"))]
+        let child = {
+            let executable = std::env::current_exe().map_err(|error| {
                 ExportError::new(
                     "E_EXPORT_NATIVE_CONTRACT_SETUP",
-                    format!("spawn native input target failed: {error}"),
+                    format!("resolve current test executable failed: {error}"),
                 )
             })?;
+            std::process::Command::new(executable)
+                .args([
+                    "--ignored",
+                    "--exact",
+                    test_name,
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(NATIVE_CONTRACT_HELPER_ENV, "1")
+                .env(NATIVE_CONTRACT_TEXT_ENV, text)
+                .env(NATIVE_CONTRACT_READY_ENV, &ready_path)
+                .env(NATIVE_CONTRACT_SUCCESS_ENV, &success_path)
+                .spawn()
+                .map_err(|error| {
+                    ExportError::new(
+                        "E_EXPORT_NATIVE_CONTRACT_SETUP",
+                        format!("spawn native input target failed: {error}"),
+                    )
+                })?
+        };
         Ok(Self {
             child,
             ready_path,
@@ -194,7 +373,6 @@ impl NativeContractChild {
         })
     }
 
-    #[cfg(windows)]
     fn id(&self) -> u32 {
         self.child.id()
     }
@@ -276,7 +454,7 @@ impl Drop for NativeContractChild {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(windows, target_os = "linux")))]
 fn native_contract_helper_config() -> (String, std::path::PathBuf, std::path::PathBuf) {
     assert_eq!(
         std::env::var(NATIVE_CONTRACT_HELPER_ENV).as_deref(),

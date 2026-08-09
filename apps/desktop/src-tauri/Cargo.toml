@@ -21,7 +21,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # Required for production builds to load the bundled frontend (tauri://localhost)
-tauri = { version = "2", features = ["custom-protocol"] }
+tauri = { version = "2", features = ["custom-protocol", "macos-private-api"] }
 tauri-plugin-single-instance = "2"
 typevoice-core = { path = "../../../crates/typevoice-core" }
 typevoice-engine = { path = "../../../crates/typevoice-engine" }
@@ -39,3 +39,7 @@ windows-sys = { version = "0.61", features = [
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_WindowsAndMessaging",
 ] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+macos-accessibility-client = "0.0.2"
+rdev = "0.5.3"
