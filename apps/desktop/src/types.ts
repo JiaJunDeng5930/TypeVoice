@@ -256,3 +256,8 @@ export type HistoryItem = {
   preprocess_ms: number;
   asr_ms: number;
 };
+
+export type HistoryCursor = {
+  created_at_ms: number;
+  task_id: string;
+};

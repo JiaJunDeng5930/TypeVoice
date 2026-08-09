@@ -85,6 +85,10 @@ fn truncate_with_suffix(mut b: Vec<u8>, max_bytes: usize, suffix: &[u8]) -> (Vec
     if b.len() <= max_bytes {
         return (b, false);
     }
+    if max_bytes < suffix.len() {
+        b.truncate(max_bytes);
+        return (b, true);
+    }
     let keep = max_bytes.saturating_sub(suffix.len());
     b.truncate(keep);
     b.extend_from_slice(suffix);
@@ -265,5 +269,16 @@ mod tests {
         std::env::set_var("TYPEVOICE_DEBUG_INCLUDE_LLM", "false");
         assert!(!include_llm());
         std::env::remove_var("TYPEVOICE_DEBUG_INCLUDE_LLM");
+    }
+
+    #[test]
+    fn payload_truncation_never_exceeds_the_configured_limit() {
+        let (small, small_truncated) = truncate_with_suffix(vec![1; 32], 4, b"...(truncated)");
+        assert!(small_truncated);
+        assert_eq!(small.len(), 4);
+
+        let (zero, zero_truncated) = truncate_with_suffix(vec![1], 0, b"...(truncated)");
+        assert!(zero_truncated);
+        assert!(zero.is_empty());
     }
 }

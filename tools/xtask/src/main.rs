@@ -551,6 +551,10 @@ fn ensure_fixtures_ready(required_files: &[&str]) -> Result<()> {
                 spec.sha256
             );
         }
+        if cfg!(windows) && target.exists() {
+            fs::remove_file(&target)
+                .with_context(|| format!("replace stale fixture: {}", target.display()))?;
+        }
         fs::rename(&tmp, &target)
             .with_context(|| format!("install fixture: {}", target.display()))?;
         println!("INFO: fixture ready: {}", target.display());
@@ -716,11 +720,16 @@ fn now_ms() -> i64 {
 fn run_verify(level: VerifyLevel) -> Result<()> {
     let root = repo_root()?;
     let started = Instant::now();
+    let budget = match level {
+        VerifyLevel::Quick => Duration::from_secs(60),
+        VerifyLevel::Full => Duration::from_secs(10 * 60),
+    };
     ensure_dirs()?;
     match level {
         VerifyLevel::Quick => ensure_fixtures_ready(&["zh_5m.ogg"])?,
         VerifyLevel::Full => ensure_fixtures_ready(&["zh_10s.ogg", "zh_60s.ogg", "zh_5m.ogg"])?,
     }
+    let fixtures_root = fixtures_dir()?;
 
     let desktop_dir = root.join("apps").join("desktop");
     let metrics_path = root.join("metrics").join("verify.jsonl");
@@ -757,7 +766,7 @@ fn run_verify(level: VerifyLevel) -> Result<()> {
             ("zh_60s.ogg", "60s_ms"),
             ("zh_5m.ogg", "5m_ms"),
         ] {
-            let input = root.join("fixtures").join(name);
+            let input = fixtures_root.join(name);
             let output = tmp_dir.join(name.replace(".ogg", ".wav"));
             match ffmpeg_preprocess_to_wav(&input, &output) {
                 Ok(ms) => {
@@ -772,21 +781,26 @@ fn run_verify(level: VerifyLevel) -> Result<()> {
         VerifyLevel::Quick => root.join("tmp").join("quick_cancel.wav"),
         VerifyLevel::Full => root.join("tmp").join("preprocessed").join("cancel.wav"),
     };
-    let cancel_ffmpeg_ms = cancel_ffmpeg_preprocess(
-        &root.join("fixtures").join("zh_5m.ogg"),
-        &cancel_output,
-        100,
-    )?;
+    let cancel_ffmpeg_ms =
+        cancel_ffmpeg_preprocess(&fixtures_root.join("zh_5m.ogg"), &cancel_output, 100)?;
     if cancel_ffmpeg_ms > 300 {
         fail_reasons.push(format!("cancel_ffmpeg_slow:{cancel_ffmpeg_ms}ms"));
     }
 
+    let elapsed = started.elapsed();
+    if elapsed > budget {
+        fail_reasons.push(format!(
+            "verify_budget_exceeded:{}ms>{}ms",
+            elapsed.as_millis(),
+            budget.as_millis()
+        ));
+    }
     let status = if fail_reasons.is_empty() {
         "PASS"
     } else {
         "FAIL"
     };
-    let total_ms = started.elapsed().as_millis() as i64;
+    let total_ms = elapsed.as_millis() as i64;
     println!("{status}: cancel_ffmpeg_ms={cancel_ffmpeg_ms} total_ms={total_ms}");
 
     let mut record = json!({
@@ -1597,12 +1611,37 @@ fn run_latest() -> Result<()> {
     ensure_windows_runtime("run latest")?;
     let root = repo_root()?;
     let desktop_dir = root.join("apps").join("desktop");
-    kill_stale_windows_processes(&root)?;
-    println!("INFO: installing desktop npm deps");
-    run_command(&desktop_dir, "npm", &["ci"], &[])?;
-    println!("INFO: building frontend bundle (npm run build)");
-    run_command(&desktop_dir, "npm", &["run", "build"], &[])?;
-    start_tauri_dev_and_wait(&root, &desktop_dir, "run-latest")
+    let log_dir = root.join("tmp").join("typevoice-logs");
+    let log_file = log_dir.join("tauri-latest-run.txt");
+    fs::create_dir_all(&log_dir)
+        .with_context(|| format!("create log dir: {}", log_dir.display()))?;
+    fs::write(
+        &log_file,
+        format!(
+            "\r\n=== cargo xtask run-latest preflight {} ===\r\n",
+            Utc::now().to_rfc3339()
+        ),
+    )
+    .with_context(|| format!("write log header: {}", log_file.display()))?;
+
+    let result = (|| {
+        kill_stale_windows_processes(&root)?;
+        println!("INFO: installing desktop npm deps");
+        run_command(&desktop_dir, "npm", &["ci"], &[])?;
+        println!("INFO: building frontend bundle (npm run build)");
+        run_command(&desktop_dir, "npm", &["run", "build"], &[])?;
+        start_tauri_dev_and_wait(&root, &desktop_dir, "run-latest")
+    })();
+    if let Err(error) = &result {
+        if let Ok(mut file) = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_file)
+        {
+            let _ = writeln!(file, "FAIL: {error:#}");
+        }
+    }
+    result
 }
 
 fn start_tauri_dev_and_wait(root: &Path, desktop_dir: &Path, label: &str) -> Result<()> {
@@ -1780,6 +1819,8 @@ fn kill_stale_windows_processes(repo_root: &Path) -> Result<()> {
         r#"$ErrorActionPreference='Stop';
 $root='{root}';
 Get-CimInstance Win32_Process -Filter "Name='typevoice-desktop.exe'" | ForEach-Object {{
+  if ((-not $_.ExecutablePath -or -not $_.ExecutablePath.ToLowerInvariant().Contains($root)) -and
+      (-not $_.CommandLine -or -not $_.CommandLine.ToLowerInvariant().Contains($root))) {{ return }}
   Write-Host ('killing typevoice-desktop.exe: pid=' + $_.ProcessId);
   Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
 }};
@@ -1790,7 +1831,11 @@ Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object {{
   Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
 }};
 Start-Sleep -Seconds 1;
-if (Get-Process -Name typevoice-desktop -ErrorAction SilentlyContinue) {{
+$remaining = Get-CimInstance Win32_Process -Filter "Name='typevoice-desktop.exe'" | Where-Object {{
+  ($_.ExecutablePath -and $_.ExecutablePath.ToLowerInvariant().Contains($root)) -or
+  ($_.CommandLine -and $_.CommandLine.ToLowerInvariant().Contains($root))
+}};
+if ($remaining) {{
   Write-Error 'failed to stop stale typevoice-desktop.exe';
   exit 1;
 }}"#
@@ -2147,8 +2192,10 @@ fn run_llm_prompt_lab(args: LlmPromptLabArgs) -> Result<()> {
         return Ok(());
     }
 
+    let timeout = Duration::try_from_secs_f64(args.timeout_s)
+        .map_err(|_| anyhow!("--timeout-s must be a finite, non-negative number"))?;
     let client = Client::builder()
-        .timeout(Duration::from_secs_f64(args.timeout_s))
+        .timeout(timeout)
         .build()
         .context("create http client")?;
     let mut request = client

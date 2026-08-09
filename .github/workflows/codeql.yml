@@ -32,6 +32,36 @@ jobs:
         with:
           languages: ${{ matrix.language }}
 
+      - name: Set up Node.js for Rust build
+        if: matrix.language == 'rust'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install desktop dependencies for Rust build
+        if: matrix.language == 'rust'
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Build desktop frontend for Rust build
+        if: matrix.language == 'rust'
+        working-directory: apps/desktop
+        run: npm run build
+
+      - name: Install Linux system dependencies for Rust build
+        if: matrix.language == 'rust'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libglib2.0-dev \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
       - name: Autobuild
         uses: github/codeql-action/autobuild@820e3160e279568db735cee8ed8f8e77a6da7818
 

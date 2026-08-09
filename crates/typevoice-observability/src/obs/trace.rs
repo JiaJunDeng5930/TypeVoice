@@ -82,6 +82,56 @@ pub fn redact_user_paths(s: &str) -> String {
     t
 }
 
+pub(crate) fn redact_json_value(value: Value) -> Value {
+    match value {
+        Value::String(text) => Value::String(redact_user_paths(&text)),
+        Value::Array(values) => Value::Array(values.into_iter().map(redact_json_value).collect()),
+        Value::Object(mut object) => {
+            for (key, value) in &mut object {
+                if key.to_ascii_lowercase().contains("path") && value.is_string() {
+                    let path = value.as_str().unwrap_or_default();
+                    *value = if is_absolute_path_like(path) {
+                        Value::String("<redacted-path>".to_string())
+                    } else {
+                        Value::String(redact_user_paths(path))
+                    };
+                    continue;
+                }
+                let current = std::mem::replace(value, Value::Null);
+                *value = redact_json_value(current);
+            }
+            Value::Object(object)
+        }
+        other => other,
+    }
+}
+
+fn is_absolute_path_like(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    Path::new(value).is_absolute()
+        || value.starts_with("\\\\")
+        || (bytes.len() >= 3 && bytes[1] == b':' && (bytes[2] == b'\\' || bytes[2] == b'/'))
+}
+
+fn redact_trace_error(mut error: TraceError) -> TraceError {
+    error.message = redact_user_paths(&error.message);
+    error.raw = error.raw.map(|value| redact_user_paths(&value));
+    error.debug = error.debug.map(|value| redact_user_paths(&value));
+    error.chain = error.chain.map(|values| {
+        values
+            .into_iter()
+            .map(|value| redact_user_paths(&value))
+            .collect()
+    });
+    error
+}
+
+fn redact_trace_event(mut event: TraceEvent) -> TraceEvent {
+    event.error = event.error.map(redact_trace_error);
+    event.ctx = event.ctx.map(redact_json_value);
+    event
+}
+
 fn anyhow_chain(err: &AnyhowError) -> Vec<String> {
     err.chain().map(|e| e.to_string()).collect()
 }
@@ -168,7 +218,8 @@ fn emit_event(data_dir: &Path, ev: &TraceEvent) {
     if !enabled() {
         return;
     }
-    if let Err(e) = writer::emit_trace_event(data_dir, ev) {
+    let ev = redact_trace_event(ev.clone());
+    if let Err(e) = writer::emit_trace_event(data_dir, &ev) {
         crate::safe_eprintln!("trace: emit failed: {e:#}");
     }
 }
@@ -247,7 +298,7 @@ pub fn event_err_durable(
         code,
         ctx,
     } = event;
-    let trace = TraceEvent {
+    let trace = redact_trace_event(TraceEvent {
         ts_ms: now_ms(),
         task_id: task_id.map(|value| value.to_string()),
         stage: stage.to_string(),
@@ -257,7 +308,7 @@ pub fn event_err_durable(
         duration_ms: None,
         error: Some(message_trace_error(kind, code, message)),
         ctx,
-    };
+    });
     match writer::emit_trace_event_durable(data_dir, &trace, deadline) {
         Ok(persisted) => persisted,
         Err(error) => {
@@ -527,6 +578,72 @@ mod tests {
             error.get("source_type").and_then(|v| v.as_str()),
             Some("message")
         );
+    }
+
+    #[test]
+    fn trace_redacts_paths_in_errors_and_context() {
+        let _writer_guard = writer::test_writer_lock().lock().unwrap();
+        let td = tempfile::tempdir().expect("tempdir");
+        let dir = td.path().to_path_buf();
+
+        event(
+            &dir,
+            Some("task-redaction"),
+            "TraceTest",
+            "TRACE.redaction",
+            "ok",
+            Some(serde_json::json!({
+                "output_path": "/home/alice/recording.wav",
+                "nested": ["/Users/alice/notes.txt"],
+            })),
+        );
+        event_err(
+            &dir,
+            ErrorEvent {
+                task_id: Some("task-redaction"),
+                stage: "TraceTest",
+                step_id: "TRACE.redaction_error",
+                kind: "io",
+                code: "E_TRACE_TEST",
+                ctx: None,
+            },
+            "open /home/alice/recording.wav failed",
+        );
+
+        assert!(writer::flush(2_000), "trace writer flush timeout");
+        let raw = fs::read_to_string(trace_path(&dir)).expect("read trace");
+        assert!(!raw.contains("/home/alice/recording.wav"));
+        assert!(!raw.contains("/Users/alice/notes.txt"));
+        assert!(raw.contains("<redacted-path>"));
+        assert!(raw.contains("/home/<redacted>/recording.wav"));
+    }
+
+    #[test]
+    fn durable_trace_redacts_paths_before_persisting() {
+        let _writer_guard = writer::test_writer_lock().lock().unwrap();
+        let td = tempfile::tempdir().expect("tempdir");
+        let dir = td.path().to_path_buf();
+
+        assert!(event_err_durable(
+            &dir,
+            ErrorEvent {
+                task_id: Some("task-durable-redaction"),
+                stage: "TraceTest",
+                step_id: "TRACE.durable_redaction",
+                kind: "io",
+                code: "E_TRACE_TEST",
+                ctx: Some(serde_json::json!({
+                    "output_path": "/home/alice/recording.wav",
+                })),
+            },
+            "open /home/alice/recording.wav failed",
+            std::time::Instant::now() + std::time::Duration::from_secs(1),
+        ));
+
+        let raw = fs::read_to_string(trace_path(&dir)).expect("read durable trace");
+        assert!(!raw.contains("/home/alice/recording.wav"));
+        assert!(raw.contains("<redacted-path>"));
+        assert!(raw.contains("/home/<redacted>/recording.wav"));
     }
 
     #[test]

@@ -148,9 +148,9 @@ Local-only artifacts (gitignored): `fixtures/` (audio), `models/` (downloaded mo
 |apps/desktop/src/styles:{app.css}
 |apps/desktop/src/ui:{icons.tsx,PixelButton.tsx,PixelDialog.tsx,PixelInput.tsx,PixelSelect.tsx,PixelTabs.tsx,PixelToast.tsx,PixelToggle.tsx}
 |crates/typevoice-observability/src/obs:{debug.rs,metrics.rs,mod.rs,panic.rs,schema.rs,startup.rs,trace.rs,writer.rs}
-|apps/desktop/src-tauri/gen/schemas:{acl-manifests.json,capabilities.json,desktop-schema.json,linux-schema.json,windows-schema.json}
+|apps/desktop/src-tauri/gen/schemas:{acl-manifests.json,capabilities.json,desktop-schema.json}
 |apps/desktop/src-tauri/toolchain/bin:{linux-x86_64/,windows-x86_64/}
-|apps/desktop/src-tauri/toolchain/bin/linux-x86_64:{.gitkeep,ffmpeg,ffprobe}
-|apps/desktop/src-tauri/toolchain/bin/windows-x86_64:{.gitkeep,ffmpeg.exe,ffprobe.exe}
+|apps/desktop/src-tauri/toolchain/bin/linux-x86_64:{.gitkeep}
+|apps/desktop/src-tauri/toolchain/bin/windows-x86_64:{.gitkeep}
 ```
 <!-- END AGENTS_MD_PROJECT_INDEX -->

@@ -193,9 +193,9 @@ pub fn clear_api_key() -> Result<()> {
         .map_err(|e| anyhow!("keyring entry init failed: {e:?}"))?;
     // keyring v3 does not expose a cross-platform delete API. We overwrite with
     // an empty password and treat empty as "not configured".
-    let _ = entry
+    entry
         .set_password("")
-        .map_err(|e| anyhow!("keyring set failed: {e:?}"));
+        .map_err(|e| anyhow!("keyring set failed: {e:?}"))?;
     Ok(())
 }
 
@@ -279,15 +279,11 @@ pub async fn check_api_key_live(cfg: &LlmConfig) -> Result<()> {
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     if !status.is_success() {
-        return Err(anyhow!(
-            "E_LLM_CHECK_HTTP_STATUS_{}: {}",
-            status.as_u16(),
-            body
-        ));
+        return Err(anyhow!("E_LLM_CHECK_HTTP_STATUS_{}", status.as_u16()));
     }
 
     let r: ChatResp = serde_json::from_str(&body)
-        .map_err(|e| anyhow!("E_LLM_CHECK_PARSE: response parse failed: {e}; body={body}"))?;
+        .map_err(|e| anyhow!("E_LLM_CHECK_PARSE: response parse failed: {e}"))?;
     let content = r
         .choices
         .first()
@@ -483,12 +479,15 @@ pub async fn rewrite_with_context_config(
     }
 
     if !status.is_success() {
-        let ae = anyhow!("llm http {status}: {body}");
+        let ae = anyhow!("llm http {status}");
         span.err_anyhow(
             "http",
             &format!("HTTP_{}", status.as_u16()),
             &ae,
-            Some(serde_json::json!({"status": status.as_u16()})),
+            Some(serde_json::json!({
+                "status": status.as_u16(),
+                "body_len": body.len(),
+            })),
         );
         return Err(ae);
     }
@@ -496,12 +495,12 @@ pub async fn rewrite_with_context_config(
     let r: ChatResp = match serde_json::from_str(&body) {
         Ok(v) => v,
         Err(e) => {
-            let ae = anyhow!("llm response parse failed: {e}; body={body}");
+            let ae = anyhow!("llm response parse failed: {e}");
             span.err_anyhow(
                 "parse",
                 "E_LLM_PARSE",
                 &ae,
-                Some(serde_json::json!({"body_len": body.len(), "body": body})),
+                Some(serde_json::json!({"body_len": body.len()})),
             );
             return Err(ae);
         }

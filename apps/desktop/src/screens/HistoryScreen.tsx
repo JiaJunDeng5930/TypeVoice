@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { defaultTauriGateway } from "../infra/runtimePorts";
-import type { HistoryItem } from "../types";
+import type { HistoryCursor, HistoryItem } from "../types";
 import { IconBookOpen } from "../ui/icons";
 import { PixelButton } from "../ui/PixelButton";
 
@@ -20,13 +20,21 @@ export function HistoryScreen({
   const [loadError, setLoadError] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const loadingRef = useRef(false);
+  const requestGenerationRef = useRef(0);
 
-  const oldestMs = useMemo(() => {
+  const cursor = useMemo<HistoryCursor | null>(() => {
     if (!items.length) return null;
-    return items[items.length - 1]!.created_at_ms;
+    const oldest = items[items.length - 1]!;
+    return {
+      created_at_ms: oldest.created_at_ms,
+      task_id: oldest.task_id,
+    };
   }, [items]);
 
   async function loadFirst() {
+    const generation = ++requestGenerationRef.current;
+    loadingRef.current = true;
     setLoading(true);
     setLoadError(false);
     setHasMore(true);
@@ -34,40 +42,56 @@ export function HistoryScreen({
     try {
       const rows = (await defaultTauriGateway.invoke("history_list", {
         limit: PAGE,
-        beforeMs: null,
+        cursor: null,
       })) as HistoryItem[];
+      if (generation !== requestGenerationRef.current) return;
       setItems(rows);
       setHasMore(rows.length === PAGE);
       // reset scroll to top when reloading
       scrollerRef.current?.scrollTo({ top: 0 });
     } catch {
-      setLoadError(true);
+      if (generation === requestGenerationRef.current) setLoadError(true);
     } finally {
-      setLoading(false);
+      if (generation === requestGenerationRef.current) {
+        loadingRef.current = false;
+        setLoading(false);
+      }
     }
   }
 
   async function loadMore() {
-    if (loading) return;
+    if (loadingRef.current || loading) return;
     if (!hasMore) return;
-    if (oldestMs == null) return;
+    if (cursor == null) return;
+    const generation = requestGenerationRef.current;
+    loadingRef.current = true;
     setLoading(true);
     try {
       const rows = (await defaultTauriGateway.invoke("history_list", {
         limit: PAGE,
-        beforeMs: oldestMs,
+        cursor,
       })) as HistoryItem[];
+      if (generation !== requestGenerationRef.current) return;
       setItems((prev) => [...prev, ...rows]);
       setHasMore(rows.length === PAGE);
     } catch {
-      pushToast("Couldn't load more history.", "danger");
+      if (generation === requestGenerationRef.current) {
+        pushToast("Couldn't load more history.", "danger");
+      }
     } finally {
-      setLoading(false);
+      if (generation === requestGenerationRef.current) {
+        loadingRef.current = false;
+        setLoading(false);
+      }
     }
   }
 
   useEffect(() => {
-    loadFirst();
+    void loadFirst();
+    return () => {
+      requestGenerationRef.current += 1;
+      loadingRef.current = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [epoch]);
 

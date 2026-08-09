@@ -188,7 +188,7 @@ fn parse_dshow_audio_devices(stderr: &str) -> Vec<DshowDevice> {
     for line in stderr.lines() {
         let text = line.trim();
         if text.contains("Alternative name") {
-            if let (Some(idx), Some(alt)) = (pending_idx, first_quoted_token(text)) {
+            if let (Some(idx), Some(alt)) = (pending_idx.take(), first_quoted_token(text)) {
                 if let Some(slot) = devices.get_mut(idx) {
                     slot.alternative_name = Some(alt);
                 }
@@ -988,7 +988,7 @@ pub fn default_role() -> &'static str {
 mod tests {
     use super::{
         endpoint_wave_guid_marker, normalize_default_role_for_settings,
-        normalize_strategy_for_settings,
+        normalize_strategy_for_settings, parse_dshow_audio_devices,
     };
 
     #[test]
@@ -1045,5 +1045,24 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn dshow_alternative_name_is_attached_to_its_audio_device_only() {
+        let stderr = r#"
+            [dshow @ 1] "Microphone" (audio)
+            [dshow @ 1]     Alternative name "@device_cm_{microphone}"
+            [dshow @ 1] "Camera" (video)
+            [dshow @ 1]     Alternative name "@device_pnp_{camera}"
+            [dshow @ 1] "Headset" (audio)
+        "#;
+
+        let devices = parse_dshow_audio_devices(stderr);
+        assert_eq!(devices.len(), 2);
+        assert_eq!(
+            devices[0].alternative_name.as_deref(),
+            Some("@device_cm_{microphone}")
+        );
+        assert_eq!(devices[1].alternative_name, None);
     }
 }

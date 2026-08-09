@@ -13,6 +13,7 @@ use std::{
 use anyhow::{anyhow, Context, Result};
 
 use super::schema::{now_ms, MetricsRecord, TraceEvent};
+use super::trace::redact_json_value;
 
 const DEFAULT_QUEUE_CAPACITY: usize = 8192;
 const DEFAULT_TRACE_MAX_BYTES: u64 = 10_000_000;
@@ -308,7 +309,9 @@ pub fn emit_trace_event_durable(
 }
 
 pub fn emit_metrics_record(data_dir: &Path, rec: &MetricsRecord) -> Result<()> {
-    let line = serde_json::to_string(rec).context("serialize metrics record failed")?;
+    let value = serde_json::to_value(rec).context("serialize metrics record failed")?;
+    let line = serde_json::to_string(&redact_json_value(value))
+        .context("serialize metrics record failed")?;
     emit_record_line(data_dir, StreamKind::Metrics, line)
 }
 
@@ -414,6 +417,48 @@ mod tests {
             lines <= threads * per_thread,
             "metrics lines should not exceed emitted count"
         );
+    }
+
+    #[test]
+    fn metrics_redact_paths_in_messages_and_artifacts() {
+        let _writer_guard = test_writer_lock().lock().unwrap();
+        let td = tempfile::tempdir().expect("tempdir");
+        let data_dir = td.path().to_path_buf();
+
+        emit_metrics_record(
+            &data_dir,
+            &MetricsRecord::TaskEvent {
+                ts_ms: now_ms(),
+                task_id: "task-redaction".to_string(),
+                stage: "TraceTest".to_string(),
+                status: "err".to_string(),
+                elapsed_ms: None,
+                error_code: Some("E_TRACE_TEST".to_string()),
+                message: "read /home/alice/recording.wav failed".to_string(),
+            },
+        )
+        .expect("emit metrics event");
+        emit_metrics_record(
+            &data_dir,
+            &MetricsRecord::DebugArtifact {
+                ts_ms: now_ms(),
+                task_id: "task-redaction".to_string(),
+                artifact_type: "debug".to_string(),
+                payload_path: "/Users/alice/debug/payload".to_string(),
+                payload_bytes: 1,
+                truncated: false,
+                sha256: "hash".to_string(),
+                note: None,
+            },
+        )
+        .expect("emit metrics artifact");
+
+        assert!(flush(2_000), "metrics writer flush timeout");
+        let raw = fs::read_to_string(data_dir.join("metrics.jsonl")).expect("read metrics");
+        assert!(!raw.contains("/home/alice/recording.wav"));
+        assert!(!raw.contains("/Users/alice/debug/payload"));
+        assert!(raw.contains("<redacted-path>"));
+        assert!(raw.contains("/home/<redacted>/recording.wav"));
     }
 
     #[test]

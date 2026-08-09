@@ -405,7 +405,7 @@ impl ContextService {
                     "before_ms": before,
                 })),
             );
-            match history::list(&db, (cfg.budget.max_history_items as i64).max(1), before) {
+            match history::list_before(&db, (cfg.budget.max_history_items as i64).max(1), before) {
                 Ok(mut rows) => {
                     let min_ms = captured_at_ms.saturating_sub(cfg.budget.history_window_ms);
                     rows.retain(|h| h.created_at_ms >= min_ms);
