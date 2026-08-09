@@ -13,7 +13,7 @@ pub use typevoice_providers::{doubao_asr, llm, remote_asr};
 pub use typevoice_storage::{data_dir, history, settings};
 mod hotkeys;
 
-use history::HistoryItem;
+use history::{HistoryCursor, HistoryItem};
 use llm::ApiKeyStatus;
 use obs::Span;
 use settings::Settings;
@@ -619,16 +619,16 @@ fn history_db_path() -> Result<std::path::PathBuf, String> {
 }
 
 #[tauri::command]
-fn history_list(limit: i64, before_ms: Option<i64>) -> Result<Vec<HistoryItem>, String> {
+fn history_list(limit: i64, cursor: Option<HistoryCursor>) -> Result<Vec<HistoryItem>, String> {
     let db = history_db_path()?;
     let dir = data_dir::data_dir().map_err(|e| e.to_string())?;
     let span = cmd_span(
         &dir,
         None,
         "CMD.history_list",
-        Some(serde_json::json!({"limit": limit, "before_ms": before_ms})),
+        Some(serde_json::json!({"limit": limit, "cursor": cursor})),
     );
-    match history::list(&db, limit, before_ms) {
+    match history::list_page(&db, limit, cursor.as_ref()) {
         Ok(v) => {
             span.ok(Some(serde_json::json!({"count": v.len()})));
             Ok(v)
@@ -686,16 +686,16 @@ fn effective_settings_values() -> Result<EffectiveSettingsValues, String> {
             return Err(e.to_string());
         }
     };
-    let llm_base_url = settings
-        .llm_base_url
-        .or_else(|| std::env::var("TYPEVOICE_LLM_BASE_URL").ok())
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty());
-    let llm_model = settings
-        .llm_model
-        .or_else(|| std::env::var("TYPEVOICE_LLM_MODEL").ok())
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty());
+    let llm_base_url = Some(workflow_runtime::resolve_value_or_env(
+        settings.llm_base_url.as_deref(),
+        "TYPEVOICE_LLM_BASE_URL",
+    ))
+    .filter(|value| !value.is_empty());
+    let llm_model = Some(workflow_runtime::resolve_value_or_env(
+        settings.llm_model.as_deref(),
+        "TYPEVOICE_LLM_MODEL",
+    ))
+    .filter(|value| !value.is_empty());
     span.ok(Some(serde_json::json!({
         "has_llm_base_url": llm_base_url.is_some(),
         "has_llm_model": llm_model.is_some(),

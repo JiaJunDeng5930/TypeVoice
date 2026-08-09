@@ -11,11 +11,17 @@ pub use trace::{event, event_err, event_err_anyhow, event_err_durable, ErrorEven
 const APP_DATA_DIR: &str = "com.typevoice.typevoice";
 const APP_DATA_SUBDIR: &str = "data";
 
-pub(crate) fn runtime_data_dir() -> Option<std::path::PathBuf> {
-    if let Ok(p) = std::env::var("TYPEVOICE_DATA_DIR") {
-        return Some(std::path::PathBuf::from(p));
+pub fn runtime_data_dir() -> Option<std::path::PathBuf> {
+    if let Some(path) = configured_data_dir(std::env::var("TYPEVOICE_DATA_DIR").ok()) {
+        return Some(path);
     }
     platform_data_dir()
+}
+
+fn configured_data_dir(raw: Option<String>) -> Option<std::path::PathBuf> {
+    raw.map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
 }
 
 #[cfg(target_os = "windows")]
@@ -73,6 +79,15 @@ mod tests {
             std::path::PathBuf::from("base")
                 .join("com.typevoice.typevoice")
                 .join("data")
+        );
+    }
+
+    #[test]
+    fn configured_data_dir_ignores_blank_values() {
+        assert_eq!(configured_data_dir(Some("   ".to_string())), None);
+        assert_eq!(
+            configured_data_dir(Some(" custom-data ".to_string())),
+            Some(std::path::PathBuf::from("custom-data"))
         );
     }
 }

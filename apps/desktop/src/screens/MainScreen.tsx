@@ -232,10 +232,12 @@ function notifyLastRun(
 ) {
   if ("completed" in lastRun.outcome) {
     const completed = lastRun.outcome.completed;
-    if (
-      completed.warning
-      || (completed.insertResult.autoPasteAttempted && !completed.insertResult.autoPasteOk)
-    ) {
+    if (completed.warning) {
+      pushToast(
+        userMessageFromDiagnostic(completed.warning.code, completed.warning.message),
+        "danger",
+      );
+    } else if (completed.insertResult.autoPasteAttempted && !completed.insertResult.autoPasteOk) {
       pushToast("Text copied, but it could not be pasted", "danger");
     } else {
       pushToast(completed.insertResult.autoPasteAttempted ? "Text pasted" : "Text copied", "ok");

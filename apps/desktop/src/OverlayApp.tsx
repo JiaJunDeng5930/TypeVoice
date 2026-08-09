@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   appendTranscript,
+  isTranscriptionPartialForRun,
   textFromTranscriptionPartial,
 } from "./domain/overlaySession";
 import {
@@ -38,7 +39,6 @@ export default function OverlayApp() {
   const [liveText, setLiveText] = useState("");
   const [config, setConfig] = useState<OverlayConfig>(DEFAULT_OVERLAY_CONFIG);
   const draftRef = useRef("");
-  const liveRef = useRef("");
   const dragActiveRef = useRef(false);
   const savePositionTimerRef = useRef<number | null>(null);
 
@@ -50,10 +50,6 @@ export default function OverlayApp() {
   useEffect(() => {
     draftRef.current = draftText;
   }, [draftText]);
-
-  useEffect(() => {
-    liveRef.current = liveText;
-  }, [liveText]);
 
   const displayText = useMemo(
     () => appendTranscript(draftText, liveText),
@@ -80,10 +76,10 @@ export default function OverlayApp() {
     }
 
     const seedText = workflowDisplayText(next).trim();
-    if (seedText && next.mode === "ready") {
+    setLiveText("");
+    if (next.mode === "ready") {
       setDraftText(seedText);
-      setLiveText("");
-    } else if (seedText && !draftRef.current.trim() && !liveRef.current.trim()) {
+    } else if (seedText && !draftRef.current.trim()) {
       setDraftText(seedText);
     }
     return true;
@@ -186,11 +182,13 @@ export default function OverlayApp() {
 
         if (event.kind === "transcription.partial") {
           const activeRunId = workflowRef.current.activeRun?.runId ?? null;
+          if (!isTranscriptionPartialForRun(event, activeRunId)) return;
           setLiveText(textFromTranscriptionPartial(event, activeRunId));
           return;
         }
 
-        if (!eventBelongsToCurrentProjection(event, workflowRef.current)) return;
+        const activeRunId = workflowRef.current.activeRun?.runId ?? null;
+        if (!isTranscriptionPartialForRun(event, activeRunId)) return;
 
         if (event.status === "failed" || event.status === "cancelled") {
           setLiveText("");
@@ -263,16 +261,4 @@ function SubtitleOverlay({
       </div>
     </div>
   );
-}
-
-function eventBelongsToCurrentProjection(event: UiEvent, view: WorkflowView): boolean {
-  const runId = optionalString(event.taskId);
-  return Boolean(
-    runId
-    && (view.activeRun?.runId === runId || view.lastRun?.runId === runId),
-  );
-}
-
-function optionalString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value : null;
 }

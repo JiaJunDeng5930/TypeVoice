@@ -288,25 +288,34 @@ fn env_credentials() -> Option<DoubaoCredentials> {
 }
 
 fn keyring_credentials() -> Result<Option<DoubaoCredentials>> {
-    let app_key = keyring::Entry::new(KEYRING_SERVICE, APP_KEY_USER)
-        .map_err(|e| anyhow!("{e:?}"))?
-        .get_password()
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    let access_key = keyring::Entry::new(KEYRING_SERVICE, ACCESS_KEY_USER)
-        .map_err(|e| anyhow!("{e:?}"))?
-        .get_password()
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    if app_key.is_empty() || access_key.is_empty() {
+    let Some(app_key) = optional_keyring_password(
+        keyring::Entry::new(KEYRING_SERVICE, APP_KEY_USER)
+            .map_err(|e| anyhow!("{e:?}"))?
+            .get_password(),
+    )?
+    else {
         return Ok(None);
-    }
+    };
+    let Some(access_key) = optional_keyring_password(
+        keyring::Entry::new(KEYRING_SERVICE, ACCESS_KEY_USER)
+            .map_err(|e| anyhow!("{e:?}"))?
+            .get_password(),
+    )?
+    else {
+        return Ok(None);
+    };
     Ok(Some(DoubaoCredentials {
         app_key,
         access_key,
     }))
+}
+
+fn optional_keyring_password(password: keyring::Result<String>) -> Result<Option<String>> {
+    match password {
+        Ok(password) => Ok(Some(password.trim().to_string()).filter(|value| !value.is_empty())),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(anyhow!("{error:?}")),
+    }
 }
 
 fn gzip(bytes: &[u8]) -> Result<Vec<u8>> {
@@ -325,6 +334,13 @@ fn gunzip(bytes: &[u8]) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_keyring_password_is_not_a_storage_failure() {
+        assert!(optional_keyring_password(Err(keyring::Error::NoEntry))
+            .expect("missing entry is optional")
+            .is_none());
+    }
 
     #[test]
     fn audio_frame_marks_last_sequence_negative() {

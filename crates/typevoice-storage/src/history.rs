@@ -21,6 +21,12 @@ pub struct HistoryItem {
     pub asr_ms: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryCursor {
+    pub created_at_ms: i64,
+    pub task_id: String,
+}
+
 fn conn(db_path: &Path) -> Result<Connection> {
     let c = Connection::open(db_path).context("open sqlite failed")?;
     c.execute_batch(
@@ -123,85 +129,60 @@ pub fn append(db_path: &Path, item: &HistoryItem) -> Result<()> {
     }
 }
 
-pub fn list(db_path: &Path, limit: i64, before_ms: Option<i64>) -> Result<Vec<HistoryItem>> {
+pub fn list_page(
+    db_path: &Path,
+    limit: i64,
+    cursor: Option<&HistoryCursor>,
+) -> Result<Vec<HistoryItem>> {
     let data_dir = db_path.parent().unwrap_or_else(|| Path::new("."));
     let span = Span::start(
         data_dir,
         None,
         "History",
-        "HISTORY.list",
-        Some(serde_json::json!({"limit": limit, "before_ms": before_ms})),
+        "HISTORY.list_page",
+        Some(serde_json::json!({"limit": limit, "cursor": cursor})),
     );
 
     let result: Result<Vec<HistoryItem>> = (|| {
         let c = conn(db_path)?;
         let mut out = Vec::new();
-        match before_ms {
-            Some(ms) => {
-                let mut stmt = c
-                    .prepare(
-                        r#"
-                        SELECT task_id, created_at_ms, asr_text, rewritten_text, inserted_text, final_text, template_id, rtf, device_used, preprocess_ms, asr_ms
-                        FROM history
-                        WHERE created_at_ms < ?1
-                        ORDER BY created_at_ms DESC
-                        LIMIT ?2
-                        "#,
-                    )
-                    .context("prepare history list failed")?;
-                let rows = stmt
-                    .query_map(params![ms, limit], |row| {
-                        Ok(HistoryItem {
-                            task_id: row.get(0)?,
-                            created_at_ms: row.get(1)?,
-                            asr_text: row.get(2)?,
-                            rewritten_text: row.get(3)?,
-                            inserted_text: row.get(4)?,
-                            final_text: row.get(5)?,
-                            template_id: row.get(6)?,
-                            rtf: row.get(7)?,
-                            device_used: row.get(8)?,
-                            preprocess_ms: row.get(9)?,
-                            asr_ms: row.get(10)?,
-                        })
-                    })
-                    .context("query history list failed")?;
-                for r in rows {
-                    out.push(r?);
-                }
-            }
-            None => {
-                let mut stmt = c
-                    .prepare(
-                        r#"
-                        SELECT task_id, created_at_ms, asr_text, rewritten_text, inserted_text, final_text, template_id, rtf, device_used, preprocess_ms, asr_ms
-                        FROM history
-                        ORDER BY created_at_ms DESC
-                        LIMIT ?1
-                        "#,
-                    )
-                    .context("prepare history list failed")?;
-                let rows = stmt
-                    .query_map(params![limit], |row| {
-                        Ok(HistoryItem {
-                            task_id: row.get(0)?,
-                            created_at_ms: row.get(1)?,
-                            asr_text: row.get(2)?,
-                            rewritten_text: row.get(3)?,
-                            inserted_text: row.get(4)?,
-                            final_text: row.get(5)?,
-                            template_id: row.get(6)?,
-                            rtf: row.get(7)?,
-                            device_used: row.get(8)?,
-                            preprocess_ms: row.get(9)?,
-                            asr_ms: row.get(10)?,
-                        })
-                    })
-                    .context("query history list failed")?;
-                for r in rows {
-                    out.push(r?);
-                }
-            }
+        let mut stmt = match cursor {
+            Some(_) => c
+                .prepare(
+                    r#"
+                    SELECT task_id, created_at_ms, asr_text, rewritten_text, inserted_text, final_text, template_id, rtf, device_used, preprocess_ms, asr_ms
+                    FROM history
+                    WHERE created_at_ms < ?1
+                       OR (created_at_ms = ?1 AND task_id < ?2)
+                    ORDER BY created_at_ms DESC, task_id DESC
+                    LIMIT ?3
+                    "#,
+                )
+                .context("prepare history page failed")?,
+            None => c
+                .prepare(
+                    r#"
+                    SELECT task_id, created_at_ms, asr_text, rewritten_text, inserted_text, final_text, template_id, rtf, device_used, preprocess_ms, asr_ms
+                    FROM history
+                    ORDER BY created_at_ms DESC, task_id DESC
+                    LIMIT ?1
+                    "#,
+                )
+                .context("prepare history page failed")?,
+        };
+        let rows = match cursor {
+            Some(cursor) => stmt
+                .query_map(
+                    params![cursor.created_at_ms, cursor.task_id, limit],
+                    history_item_from_row,
+                )
+                .context("query history page failed")?,
+            None => stmt
+                .query_map(params![limit], history_item_from_row)
+                .context("query history page failed")?,
+        };
+        for row in rows {
+            out.push(row?);
         }
         Ok(out)
     })();
@@ -216,6 +197,84 @@ pub fn list(db_path: &Path, limit: i64, before_ms: Option<i64>) -> Result<Vec<Hi
             Err(e)
         }
     }
+}
+
+pub fn list_before(db_path: &Path, limit: i64, before_ms: Option<i64>) -> Result<Vec<HistoryItem>> {
+    let data_dir = db_path.parent().unwrap_or_else(|| Path::new("."));
+    let span = Span::start(
+        data_dir,
+        None,
+        "History",
+        "HISTORY.list_before",
+        Some(serde_json::json!({"limit": limit, "before_ms": before_ms})),
+    );
+
+    let result: Result<Vec<HistoryItem>> = (|| {
+        let c = conn(db_path)?;
+        let mut out = Vec::new();
+        let mut stmt = match before_ms {
+            Some(_) => c
+                .prepare(
+                    r#"
+                    SELECT task_id, created_at_ms, asr_text, rewritten_text, inserted_text, final_text, template_id, rtf, device_used, preprocess_ms, asr_ms
+                    FROM history
+                    WHERE created_at_ms < ?1
+                    ORDER BY created_at_ms DESC, task_id DESC
+                    LIMIT ?2
+                    "#,
+                )
+                .context("prepare history list_before failed")?,
+            None => c
+                .prepare(
+                    r#"
+                    SELECT task_id, created_at_ms, asr_text, rewritten_text, inserted_text, final_text, template_id, rtf, device_used, preprocess_ms, asr_ms
+                    FROM history
+                    ORDER BY created_at_ms DESC, task_id DESC
+                    LIMIT ?1
+                    "#,
+                )
+                .context("prepare history list_before failed")?,
+        };
+        let rows = match before_ms {
+            Some(ms) => stmt
+                .query_map(params![ms, limit], history_item_from_row)
+                .context("query history list_before failed")?,
+            None => stmt
+                .query_map(params![limit], history_item_from_row)
+                .context("query history list_before failed")?,
+        };
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    })();
+
+    match result {
+        Ok(out) => {
+            span.ok(Some(serde_json::json!({"items": out.len()})));
+            Ok(out)
+        }
+        Err(e) => {
+            span.err_anyhow("db", "E_HISTORY_LIST_BEFORE", &e, None);
+            Err(e)
+        }
+    }
+}
+
+fn history_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryItem> {
+    Ok(HistoryItem {
+        task_id: row.get(0)?,
+        created_at_ms: row.get(1)?,
+        asr_text: row.get(2)?,
+        rewritten_text: row.get(3)?,
+        inserted_text: row.get(4)?,
+        final_text: row.get(5)?,
+        template_id: row.get(6)?,
+        rtf: row.get(7)?,
+        device_used: row.get(8)?,
+        preprocess_ms: row.get(9)?,
+        asr_ms: row.get(10)?,
+    })
 }
 
 pub fn update_final_text(
@@ -363,7 +422,7 @@ mod tests {
 
         update_final_text(&db, "task-1", "rewritten", Some("template-1")).expect("update");
 
-        let rows = list(&db, 10, None).expect("list");
+        let rows = list_page(&db, 10, None).expect("list page");
         assert_eq!(rows[0].final_text, "rewritten");
         assert_eq!(rows[0].rewritten_text, "rewritten");
         assert_eq!(rows[0].template_id.as_deref(), Some("template-1"));
@@ -394,11 +453,61 @@ mod tests {
 
         update_inserted_text(&db, "task-1", "inserted").expect("update");
 
-        let rows = list(&db, 10, None).expect("list");
+        let rows = list_page(&db, 10, None).expect("list page");
         assert_eq!(rows[0].inserted_text, "inserted");
         assert_eq!(rows[0].final_text, "inserted");
         assert_eq!(rows[0].rewritten_text, "rewritten");
         assert!(crate::obs::flush(2_000), "history trace flush timeout");
+    }
+
+    #[test]
+    fn list_page_uses_task_id_to_resume_same_timestamp() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let db = tmp.path().join("history.sqlite3");
+        for task_id in ["task-a", "task-b", "task-c"] {
+            append(
+                &db,
+                &HistoryItem {
+                    task_id: task_id.to_string(),
+                    created_at_ms: if task_id == "task-c" { 0 } else { 1 },
+                    asr_text: task_id.to_string(),
+                    rewritten_text: String::new(),
+                    inserted_text: String::new(),
+                    final_text: task_id.to_string(),
+                    template_id: None,
+                    rtf: 0.4,
+                    device_used: "default".to_string(),
+                    preprocess_ms: 0,
+                    asr_ms: 0,
+                },
+            )
+            .expect("append");
+        }
+
+        let first = list_page(&db, 1, None).expect("first page");
+        assert_eq!(first[0].task_id, "task-b");
+        let cursor = HistoryCursor {
+            created_at_ms: first[0].created_at_ms,
+            task_id: first[0].task_id.clone(),
+        };
+        let second = list_page(&db, 1, Some(&cursor)).expect("second page");
+        assert_eq!(second[0].task_id, "task-a");
+        let cursor = HistoryCursor {
+            created_at_ms: second[0].created_at_ms,
+            task_id: second[0].task_id.clone(),
+        };
+        let third = list_page(&db, 1, Some(&cursor)).expect("third page");
+        assert_eq!(third[0].task_id, "task-c");
+        assert!(list_page(
+            &db,
+            1,
+            Some(&HistoryCursor {
+                created_at_ms: third[0].created_at_ms,
+                task_id: third[0].task_id.clone(),
+            })
+        )
+        .expect("end page")
+        .is_empty());
     }
 
     #[test]
@@ -428,7 +537,7 @@ mod tests {
             .expect("seed");
         }
 
-        let rows = list(&db, 10, None).expect("list");
+        let rows = list_page(&db, 10, None).expect("list page");
         assert_eq!(rows[0].asr_text, "raw");
         assert_eq!(rows[0].rewritten_text, "");
         assert_eq!(rows[0].inserted_text, "");

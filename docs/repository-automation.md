@@ -12,6 +12,7 @@
   - `patchelf`
 - `rust` job 还必须先在 `apps/desktop` 执行 `npm ci` 和 `npm run build`，确保 Tauri 配置中的 `build.frontendDist=../dist` 已生成；否则 `tauri::generate_context!()` 会在编译期因找不到前端产物而失败。
 - 原因：Tauri 的 Linux 依赖通过 `pkg-config` 解析；若缺失这些系统包，CI 会在 `glib-sys` / `gio-sys` / `gobject-sys` 等 crate 的 build script 阶段失败，而不是进入业务代码编译。
+- `.github/workflows/codeql.yml` 的 Rust 分支使用同一套 Node、前端构建和 Linux 原生依赖前置条件，再运行 CodeQL `autobuild`；JavaScript/TypeScript 分支不执行这些 Rust 前置步骤。
 
 ## Dependabot
 

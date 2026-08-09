@@ -1,4 +1,4 @@
-import { userMessageFromDiagnosticLine } from "./diagnostic.ts";
+import { userMessageFromDiagnostic } from "./diagnostic.ts";
 import type {
   ActiveRunProjection,
   LastRunProjection,
@@ -97,7 +97,7 @@ export function overlayViewFromWorkflow(view: WorkflowView): OverlayViewState {
     visible: view.mode !== "ready" || Boolean(text) || outcome === "failed",
     status,
     detail: diagnostic.message
-      ? userMessageFromDiagnosticLine(diagnostic.message)
+      ? userMessageFromDiagnostic(diagnostic.code, diagnostic.message)
       : null,
     tone: outcome === "failed" ? "danger" : outcome === "completed" ? "ok" : "default",
   };
@@ -123,12 +123,17 @@ export function workflowDisplayText(view: WorkflowView): string {
 }
 
 export function workflowDiagnostic(view: WorkflowView): WorkflowDiagnostic {
-  const error = valueAt(view.lastRun, "outcome", "failed", "primaryError");
-  if (!isRecord(error)) return { code: null, message: null };
-  return {
-    code: optionalString(error.code),
-    message: optionalString(error.message) || optionalString(error.summary),
-  };
+  const candidates = [
+    valueAt(view.lastRun, "outcome", "failed", "primaryError"),
+    valueAt(view.lastRun, "outcome", "completed", "warning"),
+  ];
+  for (const candidate of candidates) {
+    if (!isRecord(candidate)) continue;
+    const code = optionalString(candidate.code);
+    const message = optionalString(candidate.message) || optionalString(candidate.summary);
+    if (code || message) return { code, message };
+  }
+  return { code: null, message: null };
 }
 
 export function primaryActionLabel(raw: string): string {

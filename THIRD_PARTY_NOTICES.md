@@ -28,7 +28,6 @@ This project redistributes and/or integrates third-party components.
 
 This repository also uses third-party dependencies from:
 - npm (`apps/desktop/package-lock.json`)
-- Cargo (`apps/desktop/src-tauri/Cargo.lock`)
 - Cargo (`Cargo.lock`)
 
 Their licenses are governed by each upstream package.

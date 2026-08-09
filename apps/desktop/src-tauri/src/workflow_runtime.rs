@@ -347,7 +347,7 @@ pub fn run_plan_seed(settings_value: &Settings) -> Result<RunPlanSeed, WorkflowE
     Ok(seed)
 }
 
-fn resolve_value_or_env(value: Option<&str>, env_name: &str) -> String {
+pub(crate) fn resolve_value_or_env(value: Option<&str>, env_name: &str) -> String {
     value
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -359,4 +359,25 @@ fn resolve_value_or_env(value: Option<&str>, env_name: &str) -> String {
                 .filter(|value| !value.is_empty())
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_value_or_env;
+
+    #[test]
+    fn resolve_value_or_env_uses_environment_for_blank_setting() {
+        let env_name = "TYPEVOICE_TEST_WORKFLOW_RUNTIME_ENV_FALLBACK";
+        let previous = std::env::var(env_name).ok();
+        std::env::set_var(env_name, " env-value ");
+
+        let resolved = resolve_value_or_env(Some("   "), env_name);
+
+        match previous {
+            Some(value) => std::env::set_var(env_name, value),
+            None => std::env::remove_var(env_name),
+        }
+
+        assert_eq!(resolved, "env-value");
+    }
 }

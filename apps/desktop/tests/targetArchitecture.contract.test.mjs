@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { textFromTranscriptionPartial } from "../src/domain/overlaySession.ts";
+import {
+  isTranscriptionPartialForRun,
+  textFromTranscriptionPartial,
+} from "../src/domain/overlaySession.ts";
 import { buildDiagnostic } from "../src/domain/diagnostic.ts";
 import {
+  overlayViewFromWorkflow,
   shouldAcceptWorkflowProjection,
+  workflowDiagnostic,
   workflowProjectionRevision,
   workflowViewFromPayload,
 } from "../src/domain/workflowView.ts";
@@ -42,6 +47,75 @@ test("target_contract_t16_matching_partial_remains_visible", () => {
     textFromTranscriptionPartial(matchingPartial, activeRunId),
     "visible text",
     "the run identity boundary must not discard the active run's own partial",
+  );
+});
+
+test("target_contract_t16_late_partial_cannot_mutate_active_overlay", () => {
+  assert.equal(
+    isTranscriptionPartialForRun(
+      { taskId: "run-old", payload: { text: "stale" } },
+      "run-current",
+    ),
+    false,
+    "the overlay must ignore a late partial before it can clear or replace current live text",
+  );
+  assert.equal(
+    isTranscriptionPartialForRun(
+      { taskId: "run-current", payload: { text: "current" } },
+      "run-current",
+    ),
+    true,
+    "the active run partial must remain eligible for display",
+  );
+});
+
+test("target_contract_t16_malformed_partial_payload_is_ignored", () => {
+  assert.equal(
+    textFromTranscriptionPartial(
+      { taskId: "run-current", payload: { text: { unexpected: true } } },
+      "run-current",
+    ),
+    "",
+    "partial display must fail closed when the typed text payload is malformed",
+  );
+});
+
+test("target_contract_t12_completed_warning_is_a_user_diagnostic", () => {
+  const parsed = workflowViewFromPayload(targetSnapshot(4, {
+    lastRun: {
+      runId: "run-12",
+      outcome: {
+        completed: {
+          asrText: "spoken",
+          finalText: "spoken",
+          timings: { totalMs: 12 },
+          insertResult: {
+            copied: true,
+            autoPasteAttempted: true,
+            autoPasteOk: false,
+            errorCode: "E_INSERT_PASTE_FAILED",
+            errorMessage: "paste failed",
+          },
+          warning: {
+            code: "E_INSERT_PASTE_FAILED",
+            message: "paste failed",
+          },
+        },
+      },
+      stoppedCount: 1,
+      effects: { historyCommitCount: 1, copyCount: 1, pasteCount: 1 },
+      finalization: { commitCount: 1 },
+    },
+  }));
+  assert.ok(parsed, "completed warning projection must parse");
+  assert.deepEqual(workflowDiagnostic(parsed), {
+    code: "E_INSERT_PASTE_FAILED",
+    message: "paste failed",
+  });
+  assert.match(
+    overlayViewFromWorkflow(parsed).detail,
+    /Text could not be pasted/,
+    "overlay diagnostics must use the structured warning code for its user-facing hint",
   );
 });
 

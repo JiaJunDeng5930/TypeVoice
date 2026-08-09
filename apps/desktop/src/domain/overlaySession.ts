@@ -8,12 +8,19 @@ export function appendTranscript(base: string, next: string): string {
   return `${cleanBase}\n${cleanNext}`;
 }
 
+export function isTranscriptionPartialForRun(
+  event: UiEvent,
+  activeRunId: string | null,
+): boolean {
+  return Boolean(activeRunId && event.taskId === activeRunId);
+}
+
 export function textFromTranscriptionPartial(
   event: UiEvent,
   activeRunId: string | null,
 ): string {
-  if (!activeRunId || event.taskId !== activeRunId) return "";
+  if (!isTranscriptionPartialForRun(event, activeRunId)) return "";
   if (!event.payload || typeof event.payload !== "object") return "";
   const payload = event.payload as Record<string, unknown>;
-  return String(payload.text || "");
+  return typeof payload.text === "string" ? payload.text : "";
 }

@@ -93,7 +93,7 @@ pub fn set_api_key(key: &str) -> Result<()> {
 
 pub fn clear_api_key() -> Result<()> {
     let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).map_err(|e| anyhow!("{e:?}"))?;
-    let _ = entry.set_password("").map_err(|e| anyhow!("{e:?}"));
+    entry.set_password("").map_err(|e| anyhow!("{e:?}"))?;
     Ok(())
 }
 
@@ -310,6 +310,7 @@ where
     let responses = stream::iter(requests).buffer_unordered(concurrency.max(1));
     tokio::pin!(responses);
     let mut parts = vec![String::new(); expected];
+    let mut seen = vec![false; expected];
     let mut completed = 0usize;
     while completed < expected {
         let next = tokio::select! {
@@ -319,6 +320,13 @@ where
         };
         match next {
             Some(Ok((index, text))) if index < expected => {
+                if seen[index] {
+                    return Err(err(
+                        "E_REMOTE_ASR_INTERNAL",
+                        format!("duplicate slice index: index={index}"),
+                    ));
+                }
+                seen[index] = true;
                 parts[index] = text;
                 completed += 1;
             }
@@ -382,15 +390,17 @@ async fn transcribe_one_slice(
 
     if !status.is_success() {
         let code = format!("E_REMOTE_ASR_HTTP_STATUS_{}", status.as_u16());
-        return Err(err(&code, body));
+        return Err(err(
+            &code,
+            format!(
+                "remote ASR request failed with HTTP status {}",
+                status.as_u16()
+            ),
+        ));
     }
 
-    let parsed: RemoteResp = serde_json::from_str(&body).map_err(|e| {
-        err(
-            "E_REMOTE_ASR_PARSE",
-            format!("invalid json response: {e}; body={body}"),
-        )
-    })?;
+    let parsed: RemoteResp = serde_json::from_str(&body)
+        .map_err(|e| err("E_REMOTE_ASR_PARSE", format!("invalid json response: {e}")))?;
     let text = parsed.text.unwrap_or_default().trim().to_string();
     Ok((slice.index, text))
 }
@@ -784,5 +794,15 @@ mod tests {
             .expect_err("slice collector must cancel");
         assert_eq!(error.code, "E_CANCELLED");
         assert_eq!(dropped.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn duplicate_slice_index_is_rejected() {
+        let requests = (0..2).map(|_| async { Ok((0, "duplicate".to_string())) });
+        let error = collect_slice_responses(requests, 2, 2, CancellationToken::new())
+            .await
+            .expect_err("duplicate slice indexes must be rejected");
+        assert_eq!(error.code, "E_REMOTE_ASR_INTERNAL");
+        assert!(error.message.contains("duplicate slice index"));
     }
 }
