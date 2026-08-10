@@ -1175,9 +1175,19 @@ fn verify_ffmpeg_upstream_release(
 
     println!("INFO: verify FFmpeg upstream release signature");
     let verify_dir = work_root.join("upstream_verify");
-    let gnupg_home = verify_dir.join("gnupg");
-    fs::create_dir_all(&gnupg_home)
-        .with_context(|| format!("create gpg home: {}", gnupg_home.display()))?;
+    fs::create_dir_all(&verify_dir).with_context(|| {
+        format!(
+            "create FFmpeg upstream verification dir: {}",
+            verify_dir.display()
+        )
+    })?;
+    let gnupg_home = create_short_gpg_home()?;
+    let gnupg_home_arg = gnupg_home.path().to_str().ok_or_else(|| {
+        anyhow!(
+            "short GnuPG home path is not valid UTF-8: {}",
+            gnupg_home.path().display()
+        )
+    })?;
     let key_path = verify_dir.join("ffmpeg-devel.asc");
     let source_path = verify_dir.join("ffmpeg-release.tar.xz");
     let source_sig_path = verify_dir.join("ffmpeg-release.tar.xz.asc");
@@ -1203,7 +1213,7 @@ fn verify_ffmpeg_upstream_release(
         &gpg,
         &[
             "--homedir",
-            "gnupg",
+            gnupg_home_arg,
             "--batch",
             "--import",
             "ffmpeg-devel.asc",
@@ -1217,7 +1227,7 @@ fn verify_ffmpeg_upstream_release(
         &gpg,
         &[
             "--homedir",
-            "gnupg",
+            gnupg_home_arg,
             "--status-fd=1",
             "--batch",
             "--verify",
@@ -1253,6 +1263,16 @@ fn verify_ffmpeg_upstream_release(
     }
     println!("INFO: PASS: ffmpeg upstream signature verified ({actual_fpr})");
     Ok(())
+}
+
+fn create_short_gpg_home() -> Result<tempfile::TempDir> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("typevoice-ffmpeg-gpg-");
+    #[cfg(unix)]
+    let home = builder.tempdir_in("/tmp");
+    #[cfg(not(unix))]
+    let home = builder.tempdir();
+    home.context("create short GnuPG home for FFmpeg signature verification")
 }
 
 fn require_non_empty(value: &str, field: &str) -> Result<()> {
