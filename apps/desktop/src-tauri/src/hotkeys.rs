@@ -4,6 +4,14 @@ use std::sync::Mutex;
 #[cfg(any(windows, target_os = "macos", test))]
 use std::collections::BTreeSet;
 
+#[cfg(target_os = "macos")]
+use core_foundation::runloop::CFRunLoop;
+#[cfg(target_os = "macos")]
+use core_graphics::event::{
+    CGEvent, CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
+    CGEventType, CallbackResult, EventField, KeyCode,
+};
+
 use serde::Serialize;
 use tauri::AppHandle;
 #[cfg(any(windows, target_os = "macos"))]
@@ -536,8 +544,25 @@ fn start_macos_event_listener() -> anyhow::Result<()> {
             std::thread::Builder::new()
                 .name("typevoice_hotkey_events".to_string())
                 .spawn(|| {
-                    if let Err(error) = rdev::listen(handle_macos_event) {
-                        eprintln!("TypeVoice macOS hotkey listener stopped: {error:?}");
+                    let result = CGEventTap::with_enabled(
+                        CGEventTapLocation::HID,
+                        CGEventTapPlacement::HeadInsertEventTap,
+                        CGEventTapOptions::ListenOnly,
+                        vec![
+                            CGEventType::KeyDown,
+                            CGEventType::KeyUp,
+                            CGEventType::FlagsChanged,
+                        ],
+                        |_proxy, event_type, event| {
+                            handle_macos_event(event_type, event);
+                            CallbackResult::Keep
+                        },
+                        CFRunLoop::run_current,
+                    );
+                    if result.is_err() {
+                        eprintln!(
+                            "TypeVoice macOS Core Graphics hotkey listener stopped: event tap unavailable"
+                        );
                     }
                 })
                 .map(|_| ())
@@ -548,8 +573,12 @@ fn start_macos_event_listener() -> anyhow::Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-fn handle_macos_event(event: rdev::Event) {
-    let Some(signal) = macos_key_signal(event.event_type) else {
+fn handle_macos_event(event_type: CGEventType, event: &CGEvent) {
+    let key_code = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE);
+    let Ok(key_code) = u16::try_from(key_code) else {
+        return;
+    };
+    let Some(signal) = macos_key_signal(event_type, key_code, event.get_flags()) else {
         return;
     };
     let app = {
@@ -573,37 +602,53 @@ fn handle_macos_event(event: rdev::Event) {
 }
 
 #[cfg(target_os = "macos")]
-fn macos_key_signal(event_type: rdev::EventType) -> Option<KeySignal> {
-    use std::hash::{Hash, Hasher};
-
-    let (key, state) = match event_type {
-        rdev::EventType::KeyPress(key) => (key, KeyState::Down),
-        rdev::EventType::KeyRelease(key) => (key, KeyState::Up),
+fn macos_key_signal(
+    event_type: CGEventType,
+    key_code: u16,
+    flags: CGEventFlags,
+) -> Option<KeySignal> {
+    let state = match event_type {
+        CGEventType::KeyDown => KeyState::Down,
+        CGEventType::KeyUp => KeyState::Up,
+        CGEventType::FlagsChanged => {
+            let modifier_flag = match key_code {
+                KeyCode::OPTION | KeyCode::RIGHT_OPTION => CGEventFlags::CGEventFlagAlternate,
+                KeyCode::CONTROL | KeyCode::RIGHT_CONTROL => CGEventFlags::CGEventFlagControl,
+                KeyCode::SHIFT | KeyCode::RIGHT_SHIFT => CGEventFlags::CGEventFlagShift,
+                KeyCode::COMMAND | KeyCode::RIGHT_COMMAND => CGEventFlags::CGEventFlagCommand,
+                KeyCode::CAPS_LOCK => CGEventFlags::CGEventFlagAlphaShift,
+                KeyCode::FUNCTION => CGEventFlags::CGEventFlagSecondaryFn,
+                _ => return None,
+            };
+            if flags.contains(modifier_flag) {
+                KeyState::Down
+            } else {
+                KeyState::Up
+            }
+        }
         _ => return None,
     };
-    let kind = match key {
-        rdev::Key::Alt | rdev::Key::AltGr => KeyKind::Alt,
-        rdev::Key::ControlLeft | rdev::Key::ControlRight => KeyKind::Ctrl,
-        rdev::Key::ShiftLeft | rdev::Key::ShiftRight => KeyKind::Shift,
-        rdev::Key::F1 => KeyKind::Function(1),
-        rdev::Key::F2 => KeyKind::Function(2),
-        rdev::Key::F3 => KeyKind::Function(3),
-        rdev::Key::F4 => KeyKind::Function(4),
-        rdev::Key::F5 => KeyKind::Function(5),
-        rdev::Key::F6 => KeyKind::Function(6),
-        rdev::Key::F7 => KeyKind::Function(7),
-        rdev::Key::F8 => KeyKind::Function(8),
-        rdev::Key::F9 => KeyKind::Function(9),
-        rdev::Key::F10 => KeyKind::Function(10),
-        rdev::Key::F11 => KeyKind::Function(11),
-        rdev::Key::F12 => KeyKind::Function(12),
+    let kind = match key_code {
+        KeyCode::OPTION | KeyCode::RIGHT_OPTION => KeyKind::Alt,
+        KeyCode::CONTROL | KeyCode::RIGHT_CONTROL => KeyKind::Ctrl,
+        KeyCode::SHIFT | KeyCode::RIGHT_SHIFT => KeyKind::Shift,
+        KeyCode::F1 => KeyKind::Function(1),
+        KeyCode::F2 => KeyKind::Function(2),
+        KeyCode::F3 => KeyKind::Function(3),
+        KeyCode::F4 => KeyKind::Function(4),
+        KeyCode::F5 => KeyKind::Function(5),
+        KeyCode::F6 => KeyKind::Function(6),
+        KeyCode::F7 => KeyKind::Function(7),
+        KeyCode::F8 => KeyKind::Function(8),
+        KeyCode::F9 => KeyKind::Function(9),
+        KeyCode::F10 => KeyKind::Function(10),
+        KeyCode::F11 => KeyKind::Function(11),
+        KeyCode::F12 => KeyKind::Function(12),
         _ => KeyKind::Other,
     };
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    key.hash(&mut hasher);
     Some(KeySignal {
         key: kind,
-        key_code: hasher.finish() as u32,
+        key_code: u32::from(key_code),
         state,
         ts_ms: now_ms(),
     })
@@ -611,10 +656,42 @@ fn macos_key_signal(event_type: rdev::EventType) -> Option<KeySignal> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
+    use super::macos_key_signal;
     use super::{
         hotkey_config_from_settings, HotkeyAction, HotkeyDetector, KeyKind, KeySignal, KeyState,
     };
     use crate::settings::Settings;
+    #[cfg(target_os = "macos")]
+    use core_graphics::event::{CGEventFlags, CGEventType, KeyCode};
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_hotkey_signal_uses_physical_key_codes_without_layout_conversion() {
+        let option_down = macos_key_signal(
+            CGEventType::FlagsChanged,
+            KeyCode::OPTION,
+            CGEventFlags::CGEventFlagAlternate,
+        )
+        .expect("option down");
+        assert_eq!(option_down.key, KeyKind::Alt);
+        assert_eq!(option_down.key_code, u32::from(KeyCode::OPTION));
+        assert_eq!(option_down.state, KeyState::Down);
+
+        let option_up = macos_key_signal(
+            CGEventType::FlagsChanged,
+            KeyCode::OPTION,
+            CGEventFlags::empty(),
+        )
+        .expect("option up");
+        assert_eq!(option_up.state, KeyState::Up);
+
+        let f1_down = macos_key_signal(CGEventType::KeyDown, KeyCode::F1, CGEventFlags::empty())
+            .expect("F1 down");
+        assert_eq!(f1_down.key, KeyKind::Function(1));
+        assert_eq!(f1_down.key_code, u32::from(KeyCode::F1));
+        assert_eq!(f1_down.state, KeyState::Down);
+    }
 
     fn signal(key: KeyKind, state: KeyState, ts_ms: i64) -> KeySignal {
         let key_code = match key {
