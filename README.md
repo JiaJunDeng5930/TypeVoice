@@ -2,7 +2,7 @@
 
 <p><small>Speak. Don't type.</small></p>
 
-[![Platform](https://img.shields.io/badge/platform-Windows-blue)](#安装)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-blue)](#安装)
 [![GitHub Release](https://img.shields.io/github/v/release/JiaJunDeng5930/TypeVoice?include_prereleases&label=release)](https://github.com/JiaJunDeng5930/TypeVoice/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
@@ -29,7 +29,11 @@ Record 页负责录音控制与状态反馈，字幕悬浮窗显示当前会话�
 3. 运行安装包。
 4. 启动 TypeVoice。
 
-### 从源码打包安装包
+### macOS Apple Silicon
+
+macOS 当前支持从源码构建。工具链准备、系统权限、开发启动与应用打包步骤见 [macOS 开发说明](./docs/macos-dev.md)。
+
+### Windows 源码打包
 
 在 Windows PowerShell 中执行：
 
