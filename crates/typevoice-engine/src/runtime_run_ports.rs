@@ -11,6 +11,7 @@ use futures_util::FutureExt;
 use tokio_util::sync::CancellationToken;
 use typevoice_core::{
     context_pack::{ContextBudget, ContextSnapshot},
+    ports::parse_error_code,
     workflow::{
         ContextPlan, EffectCounts, InsertPrepareResult, RecoveredRunResult, RunPlanSeed,
         TranscriptionResult, WorkflowError,
@@ -897,8 +898,10 @@ fn context_config(plan: &ContextPlan, supports_vision: bool) -> context_capture:
     }
 }
 
-fn workflow_error(code: &str, error: impl std::fmt::Display) -> WorkflowError {
-    WorkflowError::new(code, error.to_string())
+fn workflow_error(default_code: &str, error: impl std::fmt::Display) -> WorkflowError {
+    let message = error.to_string();
+    let code = parse_error_code(&message).unwrap_or_else(|| default_code.to_string());
+    WorkflowError::new(&code, message)
 }
 
 fn now_ms() -> u64 {
@@ -921,6 +924,23 @@ fn fnv1a_digest(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workflow_error_preserves_specific_error_code_and_falls_back() {
+        let specific = workflow_error(
+            "E_STREAMING_START",
+            "E_DOUBAO_ASR_CREDENTIALS_MISSING: credentials are not configured",
+        );
+        assert_eq!(specific.code, "E_DOUBAO_ASR_CREDENTIALS_MISSING");
+        assert_eq!(
+            specific.message,
+            "E_DOUBAO_ASR_CREDENTIALS_MISSING: credentials are not configured"
+        );
+
+        let fallback = workflow_error("E_STREAMING_START", "session start failed");
+        assert_eq!(fallback.code, "E_STREAMING_START");
+        assert_eq!(fallback.message, "session start failed");
+    }
 
     #[test]
     fn insertion_target_capture_failure_is_deferred_to_paste() {
