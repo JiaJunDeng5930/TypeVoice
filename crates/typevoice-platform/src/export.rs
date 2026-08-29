@@ -114,16 +114,12 @@ pub(crate) async fn native_input_contract_probe(text: &str) -> Result<(), Export
     {
         linux::native_input_contract_probe(text).await
     }
-    #[cfg(target_os = "macos")]
-    {
-        macos::native_input_contract_probe(text).await
-    }
-    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = text;
         Err(ExportError::new(
             "E_EXPORT_NATIVE_CONTRACT_UNSUPPORTED",
-            "native input contract is only supported on Linux, macOS, and Windows",
+            "native input contract is only supported on Linux and Windows",
         ))
     }
 }
@@ -133,9 +129,6 @@ mod macos {
     use core_graphics::event::CGEvent;
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
     use macos_accessibility_client::accessibility::application_is_trusted_with_prompt;
-
-    #[cfg(test)]
-    use super::NativeContractChild;
 
     use super::ExportError;
 
@@ -219,31 +212,6 @@ mod macos {
         event.post_to_pid(pid);
         Ok(())
     }
-
-    #[cfg(test)]
-    pub(super) async fn native_input_contract_probe(text: &str) -> Result<(), ExportError> {
-        let mut child =
-            NativeContractChild::spawn("export::macos::t23_native_input_target_helper", text)?;
-        child.wait_ready().await?;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        let target = loop {
-            match capture_insertion_target() {
-                Ok(target) if target.pid == child.id() as i32 => break target,
-                Ok(_) | Err(_) if std::time::Instant::now() < deadline => {
-                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-                }
-                Ok(_) => {
-                    return Err(ExportError::new(
-                        "E_EXPORT_NATIVE_CONTRACT_TIMEOUT",
-                        "isolated AppKit target did not become the insertion target",
-                    ));
-                }
-                Err(error) => return Err(error),
-            }
-        };
-        super::auto_paste_text(&target, text).await?;
-        child.wait_success().await
-    }
 }
 
 #[cfg(test)]
@@ -296,48 +264,6 @@ impl NativeContractChild {
         let ready_path = temp.path().join("ready");
         let success_path = temp.path().join("success");
 
-        #[cfg(target_os = "macos")]
-        let child = {
-            let _ = test_name;
-            let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/macos_insertion_target.swift");
-            let executable = temp.path().join("macos-insertion-target");
-            let output = std::process::Command::new("xcrun")
-                .arg("swiftc")
-                .arg(&source)
-                .arg("-o")
-                .arg(&executable)
-                .output()
-                .map_err(|error| {
-                    ExportError::new(
-                        "E_EXPORT_NATIVE_CONTRACT_SETUP",
-                        format!("launch Swift compiler for AppKit target failed: {error}"),
-                    )
-                })?;
-            if !output.status.success() {
-                return Err(ExportError::new(
-                    "E_EXPORT_NATIVE_CONTRACT_SETUP",
-                    format!(
-                        "compile AppKit target failed: {}",
-                        String::from_utf8_lossy(&output.stderr).trim()
-                    ),
-                ));
-            }
-            std::process::Command::new(executable)
-                .env(NATIVE_CONTRACT_HELPER_ENV, "1")
-                .env(NATIVE_CONTRACT_TEXT_ENV, text)
-                .env(NATIVE_CONTRACT_READY_ENV, &ready_path)
-                .env(NATIVE_CONTRACT_SUCCESS_ENV, &success_path)
-                .spawn()
-                .map_err(|error| {
-                    ExportError::new(
-                        "E_EXPORT_NATIVE_CONTRACT_SETUP",
-                        format!("spawn AppKit input target failed: {error}"),
-                    )
-                })?
-        };
-
-        #[cfg(not(target_os = "macos"))]
         let child = {
             let executable = std::env::current_exe().map_err(|error| {
                 ExportError::new(
