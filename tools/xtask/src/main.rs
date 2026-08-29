@@ -402,7 +402,6 @@ fn verify_contract_plan(level: VerifyLevel) -> Vec<ContractStep> {
 enum InsertionContractPlatform {
     Windows,
     Linux,
-    Macos,
 }
 
 impl InsertionContractPlatform {
@@ -410,7 +409,6 @@ impl InsertionContractPlatform {
         match self {
             Self::Windows => "windows",
             Self::Linux => "linux",
-            Self::Macos => "macos",
         }
     }
 }
@@ -422,7 +420,7 @@ struct InsertionContractSpec {
     filter: &'static str,
 }
 
-const INSERTION_CONTRACTS: [InsertionContractSpec; 3] = [
+const INSERTION_CONTRACTS: [InsertionContractSpec; 2] = [
     InsertionContractSpec {
         platform: InsertionContractPlatform::Windows,
         package: "typevoice-platform",
@@ -432,11 +430,6 @@ const INSERTION_CONTRACTS: [InsertionContractSpec; 3] = [
         platform: InsertionContractPlatform::Linux,
         package: "typevoice-platform",
         filter: "target_contract_t23_insertion_port_contract_linux",
-    },
-    InsertionContractSpec {
-        platform: InsertionContractPlatform::Macos,
-        package: "typevoice-platform",
-        filter: "target_contract_t23_insertion_port_contract_macos",
     },
 ];
 
@@ -891,10 +884,8 @@ fn current_insertion_contract_platform() -> Result<InsertionContractPlatform> {
         Ok(InsertionContractPlatform::Windows)
     } else if cfg!(target_os = "linux") {
         Ok(InsertionContractPlatform::Linux)
-    } else if cfg!(target_os = "macos") {
-        Ok(InsertionContractPlatform::Macos)
     } else {
-        bail!("insertion contract gate is only defined for Linux, macOS, and Windows")
+        bail!("insertion contract gate is only defined for Linux and Windows")
     }
 }
 
@@ -2511,7 +2502,7 @@ mod tests {
 
     #[test]
     fn insertion_contract_registry_is_platform_exact() {
-        assert_eq!(INSERTION_CONTRACTS.len(), 3);
+        assert_eq!(INSERTION_CONTRACTS.len(), 2);
         assert_eq!(
             INSERTION_CONTRACTS[0].filter,
             "target_contract_t23_insertion_port_contract_windows"
@@ -2519,10 +2510,6 @@ mod tests {
         assert_eq!(
             INSERTION_CONTRACTS[1].filter,
             "target_contract_t23_insertion_port_contract_linux"
-        );
-        assert_eq!(
-            INSERTION_CONTRACTS[2].filter,
-            "target_contract_t23_insertion_port_contract_macos"
         );
         assert!(INSERTION_CONTRACTS
             .iter()

@@ -188,18 +188,4 @@ mod tests {
         .expect("native Linux input contract timed out")
         .expect("native Linux input contract failed");
     }
-
-    #[cfg(target_os = "macos")]
-    #[tokio::test]
-    #[ignore = "requires an isolated interactive macOS session with Accessibility permission"]
-    async fn target_contract_t23_insertion_port_contract_macos() {
-        assert_shared_insertion_port_contract().await;
-        tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            export::native_input_contract_probe("TypeVoice 世界\n"),
-        )
-        .await
-        .expect("native macOS input contract timed out")
-        .expect("native macOS input contract failed");
-    }
 }

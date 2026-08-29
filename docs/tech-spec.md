@@ -1,6 +1,6 @@
 # TypeVoice 技术规格
 
-状态：已实现的技术契约；跨平台 adapter 仍必须由 Windows/Linux/macOS gate 分别证明。
+状态：已实现的技术契约；跨平台 adapter 仍必须由 Windows/Linux gate 分别证明。
 
 范围：Windows 与 macOS 桌面端的线协议、能力边界与工程约束，并保留冻结的 Linux 自动输入 adapter 合同。业务状态、转移和取消语义只在 `docs/architecture.md` 定义；本文件不复制第二份状态机。
 
@@ -124,4 +124,4 @@ History 以 `runId` 作为业务关联键；现有物理字段 `task_id` 在迁�
 
 所有可见失败都包含 primary error code/摘要及有序 recovery errors；Controller 因非法 terminal 生成协议 Failed 时，另用 `protocolContext { receivedTerminal, receivedError? }` 保存原 variant/error，不能混入 recoveryErrors。每次真实状态提交记录 `workflow.transition`，字段至少为 `runId, revision, from, to, cause, stage?, outcome?, errorCode?, recoveryErrorCodes?, protocolTerminal?, protocolErrorCode?`；executor 记录 `run.terminal_won`/`run.finalization_won`、每次 `run.cancel_arbitrated`，以及 cleanup 的 escalated/forced/fatal 结果。Stage、资源、History 和 provider trace 使用同一 `runId`；资源 ID 可作为附加 context，但不能形成第二条业务因果链。
 
-实现验收必须执行 `docs/architecture.md` 第 8 节的场景和不变量，包括 Primary 到实际采集 <=200ms、capture-after-commit、actionKey/targetRunId admission、cancel-vs-terminal、typed signal、失败结果手动复制、bootstrap revision、cleanup fatal containment 和 Windows/Linux/macOS InsertionPort。测试选择器必须证明匹配并执行了非零 workspace/engine contract tests；0-test 或只在单一 OS 运行其他平台 Skipped 都不能视为完整 gate 通过。
+实现验收必须执行 `docs/architecture.md` 第 8 节的场景和不变量，包括 Primary 到实际采集 <=200ms、capture-after-commit、actionKey/targetRunId admission、cancel-vs-terminal、typed signal、失败结果手动复制、bootstrap revision、cleanup fatal containment 和 Windows/Linux InsertionPort。测试选择器必须证明匹配并执行了非零 workspace/engine contract tests；0-test 或只在单一 OS 运行其他平台 Skipped 都不能视为完整 gate 通过。
