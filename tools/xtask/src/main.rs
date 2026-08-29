@@ -559,10 +559,31 @@ fn ensure_fixtures_ready(required_files: &[&str]) -> Result<()> {
 }
 
 fn download_file(client: &Client, url: &str, target: &Path) -> Result<()> {
+    download_file_validated(client, url, target, |_| Ok(()))
+}
+
+fn download_file_with_sha256(
+    client: &Client,
+    url: &str,
+    target: &Path,
+    expected_sha256: &str,
+    artifact: &str,
+) -> Result<()> {
+    download_file_validated(client, url, target, |downloaded| {
+        verify_download_sha256(downloaded, expected_sha256, artifact)
+    })
+}
+
+fn download_file_validated(
+    client: &Client,
+    url: &str,
+    target: &Path,
+    validate: impl Fn(&Path) -> std::result::Result<(), DownloadAttemptError>,
+) -> Result<()> {
     const MAX_ATTEMPTS: usize = 3;
 
     for attempt in 1..=MAX_ATTEMPTS {
-        match download_file_once(client, url, target) {
+        match download_file_once(client, url, target).and_then(|_| validate(target)) {
             Ok(()) => return Ok(()),
             Err(DownloadAttemptError::Fatal(error)) => {
                 let _ = fs::remove_file(target);
@@ -586,6 +607,22 @@ fn download_file(client: &Client, url: &str, target: &Path) -> Result<()> {
     }
 
     unreachable!("download retry loop always returns")
+}
+
+fn verify_download_sha256(
+    target: &Path,
+    expected_sha256: &str,
+    artifact: &str,
+) -> std::result::Result<(), DownloadAttemptError> {
+    let actual_sha256 =
+        sha256_file(target).map_err(|error| DownloadAttemptError::Fatal(error.into()))?;
+    if actual_sha256.eq_ignore_ascii_case(expected_sha256) {
+        Ok(())
+    } else {
+        Err(DownloadAttemptError::Retryable(anyhow!(
+            "{artifact} sha256 mismatch expected={expected_sha256} actual={actual_sha256}"
+        )))
+    }
 }
 
 enum DownloadAttemptError {
@@ -1185,18 +1222,16 @@ fn verify_ffmpeg_upstream_release(
 
     download_file(client, &upstream.signing_key_url, &key_path)
         .context("download FFmpeg signing key")?;
-    download_file(client, &upstream.source_url, &source_path)
-        .context("download FFmpeg source archive")?;
+    download_file_with_sha256(
+        client,
+        &upstream.source_url,
+        &source_path,
+        &upstream.source_sha256,
+        "FFmpeg upstream source archive",
+    )
+    .context("download FFmpeg source archive")?;
     download_file(client, &upstream.source_sig_url, &source_sig_path)
         .context("download FFmpeg source signature")?;
-
-    let source_sha = sha256_file(&source_path)?;
-    if !source_sha.eq_ignore_ascii_case(&upstream.source_sha256) {
-        bail!(
-            "ffmpeg upstream source sha256 mismatch expected={} actual={source_sha}",
-            upstream.source_sha256
-        );
-    }
 
     let gpg = resolve_gpg_command();
     run_command(
@@ -1304,15 +1339,14 @@ fn install_ffmpeg_platform(
         other => bail!("unsupported archive_type for {target}: {other}"),
     });
 
-    download_file(client, &spec.archive_url, &archive_path)
-        .with_context(|| format!("download failed for {target} url={}", spec.archive_url))?;
-    let archive_sha = sha256_file(&archive_path)?;
-    if !archive_sha.eq_ignore_ascii_case(&spec.archive_sha256) {
-        bail!(
-            "archive sha256 mismatch for {target} expected={} actual={archive_sha}",
-            spec.archive_sha256
-        );
-    }
+    download_file_with_sha256(
+        client,
+        &spec.archive_url,
+        &archive_path,
+        &spec.archive_sha256,
+        &format!("archive for {target}"),
+    )
+    .with_context(|| format!("download failed for {target} url={}", spec.archive_url))?;
 
     extract_archive(&archive_path, &unpack_dir, &spec.archive_type)?;
 
@@ -1325,14 +1359,14 @@ fn install_ffmpeg_platform(
             "tar.xz" => "ffprobe_archive.tar.xz",
             other => bail!("unsupported archive_type for {target}: {other}"),
         });
-        download_file(client, ffprobe_archive_url, &ffprobe_archive_path)
-            .with_context(|| format!("download ffprobe archive failed for {target}"))?;
-        let actual_sha = sha256_file(&ffprobe_archive_path)?;
-        if !actual_sha.eq_ignore_ascii_case(expected_sha) {
-            bail!(
-                "ffprobe archive sha256 mismatch for {target} expected={expected_sha} actual={actual_sha}"
-            );
-        }
+        download_file_with_sha256(
+            client,
+            ffprobe_archive_url,
+            &ffprobe_archive_path,
+            expected_sha,
+            &format!("ffprobe archive for {target}"),
+        )
+        .with_context(|| format!("download ffprobe archive failed for {target}"))?;
         extract_archive(&ffprobe_archive_path, &unpack_dir, &spec.archive_type)?;
     }
 
@@ -2552,6 +2586,33 @@ mod tests {
         }
         for status in [400, 401, 403, 404, 422] {
             assert!(!is_retryable_download_status(status), "status {status}");
+        }
+    }
+
+    #[test]
+    fn download_sha256_mismatch_is_retryable() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let archive = temp.path().join("archive");
+        fs::write(&archive, b"expected archive").expect("write archive");
+        let actual_sha256 = sha256_file(&archive).expect("archive sha256");
+
+        match verify_download_sha256(&archive, &actual_sha256, "test archive") {
+            Ok(()) => {}
+            Err(DownloadAttemptError::Retryable(error)) => {
+                panic!("matching sha256 was retryable: {error}");
+            }
+            Err(DownloadAttemptError::Fatal(error)) => {
+                panic!("matching sha256 was fatal: {error}");
+            }
+        }
+        match verify_download_sha256(&archive, "unexpected-sha256", "test archive") {
+            Err(DownloadAttemptError::Retryable(error)) => {
+                assert!(error.to_string().contains("test archive sha256 mismatch"));
+            }
+            Err(DownloadAttemptError::Fatal(error)) => {
+                panic!("sha256 mismatch was fatal: {error}");
+            }
+            Ok(()) => panic!("sha256 mismatch was accepted"),
         }
     }
 
