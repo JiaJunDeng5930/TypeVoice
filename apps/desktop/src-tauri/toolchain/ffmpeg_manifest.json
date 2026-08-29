@@ -19,14 +19,14 @@
       "ffprobe_sha256": "af3c38d4a25acf3bf0f16c3e36b7f0700bbf8fc1159057186a6f3f1fe7cd1611"
     },
     "linux-x86_64": {
-      "archive_url": "https://johnvansickle.com/ffmpeg/releases/ffmpeg-7.0.2-amd64-static.tar.xz",
-      "archive_sha256": "abda8d77ce8309141f83ab8edf0596834087c52467f6badf376a6a2a4c87cf67",
+      "archive_url": "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/autobuild-2024-09-30-14-42/ffmpeg-n7.0.2-19-g45ecf80f0e-linux64-gpl-7.0.tar.xz",
+      "archive_sha256": "51c6fc3ac219b9dd3e7f297f7879b1a8ab3b185471c12fdf9e8eda2009212ce1",
       "archive_type": "tar.xz",
-      "archive_root": "ffmpeg-7.0.2-amd64-static",
+      "archive_root": "ffmpeg-n7.0.2-19-g45ecf80f0e-linux64-gpl-7.0/bin",
       "ffmpeg_file": "ffmpeg",
       "ffprobe_file": "ffprobe",
-      "ffmpeg_sha256": "e7e7fb30477f717e6f55f9180a70386c62677ef8a4d4d1a5d948f4098aa3eb99",
-      "ffprobe_sha256": "4f231a1960d83e403d08f7971e271707bec278a9ae18e21b8b5b03186668450d"
+      "ffmpeg_sha256": "0e6f995e84c947a6f905de2f907b57e3d3ddbea46de709ee07957f0611f037c9",
+      "ffprobe_sha256": "d86e9ea070f8b9e59ffaec83c779307555dd654f4616b1e95c844241fa71f4b7"
     },
     "macos-aarch64": {
       "archive_url": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1723057355_7.0.2/ffmpeg.zip",
