@@ -949,11 +949,11 @@ mod tests {
             "no external insertion target is available",
         );
 
-        assert_eq!(
-            resolve_insertion_target_for_paste(Some(Err(error.clone())))
-                .expect_err("capture failure must remain the paste warning"),
-            error
-        );
+        let resolved = resolve_insertion_target_for_paste(Some(Err(error.clone())));
+        match resolved {
+            Err(actual) => assert_eq!(actual, error),
+            Ok(_) => panic!("capture failure must remain the paste warning"),
+        }
     }
 
     #[test]

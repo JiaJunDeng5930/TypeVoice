@@ -235,7 +235,7 @@ pub fn prune_debug_dir_best_effort(data_dir: &Path) {
         return;
     }
 
-    dirs.sort_by(|a, b| b.0.cmp(&a.0));
+    dirs.sort_by_key(|entry| std::cmp::Reverse(entry.0));
     for (_modified, p) in dirs.into_iter().skip(max_keep) {
         if let Err(e) = fs::remove_dir_all(&p) {
             crate::safe_eprintln!("debug_log: remove_dir_all failed: {}: {e}", p.display());

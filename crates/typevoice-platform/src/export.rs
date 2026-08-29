@@ -299,6 +299,7 @@ impl NativeContractChild {
         })
     }
 
+    #[cfg(windows)]
     fn id(&self) -> u32 {
         self.child.id()
     }
