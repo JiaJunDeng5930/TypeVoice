@@ -11,7 +11,7 @@ This project redistributes and/or integrates third-party components.
   - `apps/desktop/src-tauri/toolchain/bin/linux-x86_64/`
 - Binary sources:
   - Windows: `https://github.com/GyanD/codexffmpeg/releases/download/7.0.2/ffmpeg-7.0.2-essentials_build.zip`
-  - Linux: `https://johnvansickle.com/ffmpeg/releases/ffmpeg-7.0.2-amd64-static.tar.xz`
+  - Linux: `https://github.com/yt-dlp/FFmpeg-Builds/releases/download/autobuild-2024-09-30-14-42/ffmpeg-n7.0.2-19-g45ecf80f0e-linux64-gpl-7.0.tar.xz`
 - License notice:
   - Current bundled builds are GPL route builds (`--enable-gpl` with `libx264/libx265`), therefore distributed under GPLv3-or-later terms for those binaries.
 - Supply-chain verification:
@@ -21,7 +21,7 @@ This project redistributes and/or integrates third-party components.
   - Verification metadata is pinned in `apps/desktop/src-tauri/toolchain/ffmpeg_manifest.json`.
 - Corresponding source references:
   - `https://github.com/GyanD/codexffmpeg/tree/7.0.2`
-  - `https://johnvansickle.com/ffmpeg/release-source/`
+  - `https://github.com/yt-dlp/FFmpeg-Builds/releases/tag/autobuild-2024-09-30-14-42`
   - Upstream FFmpeg legal page: `https://ffmpeg.org/legal.html`
 
 ## npm/cargo dependencies
